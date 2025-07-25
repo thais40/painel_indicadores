@@ -1,6 +1,3 @@
-        if sla_field.get("completedCycles"):
-    except Exception:
-
 import streamlit as st
 from sla_utils import extrair_sla_millis
 import pandas as pd
