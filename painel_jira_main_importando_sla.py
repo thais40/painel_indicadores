@@ -48,9 +48,6 @@ def buscar_issues():
                     "resolved": f.get("resolutiondate"),
                     "sla_millis": sla_millis
                 })
-                    "projeto": projeto,
-                    "created": f["created"],
-                    "resolved": f.get("resolutiondate")
             start_at += 100
     return pd.DataFrame(all_issues)
 
