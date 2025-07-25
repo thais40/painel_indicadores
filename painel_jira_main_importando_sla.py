@@ -42,6 +42,7 @@ def buscar_issues():
                 break
             for issue in issues:
                 f = issue["fields"]
+                sla_millis = extrair_sla_millis(f.get("customfield_13686", {}))
                 all_issues.append({
                     "projeto": projeto,
                     "created": f["created"],
