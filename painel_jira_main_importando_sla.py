@@ -6,10 +6,6 @@ import requests
 from requests.auth import HTTPBasicAuth
 from datetime import datetime
 
-# Função para extrair SLA (mantida)
-        if sla_field.get("completedCycles"):
-    except Exception:
-
 # Configurações iniciais
 st.set_page_config(layout='wide')
 st.title('Painel de Indicadores - Criados | Resolvidos')
