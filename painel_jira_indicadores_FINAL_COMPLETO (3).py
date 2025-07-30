@@ -1,0 +1,2 @@
+# Aqui estará o painel final consolidado com todas as abas: Visão Geral, Área Solicitante, Assunto Relacionado, Encaminhamentos.
+# Este conteúdo será reconstruído na próxima célula para escrita completa.
