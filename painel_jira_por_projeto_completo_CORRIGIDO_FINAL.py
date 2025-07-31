@@ -68,13 +68,15 @@ abas = st.tabs(PROJETOS)
 for projeto, aba in zip(PROJETOS, abas):
     with aba:
         st.header(f'📊 Projeto: {projeto}')
-        df_proj = df[df['projeto'] == projeto]
-        meses = sorted(df_proj['mes_str'].unique(), key=lambda x: pd.to_datetime(x, format='%Y-%m'))
+        df_proj = df[df['projeto'] == projeto].copy()
+        df_proj['mes_str'] = pd.to_datetime(df_proj['created']).dt.to_period("M").dt.to_timestamp().dt.strftime("%Y-%m")
+        meses = sorted(df['mes_str'].unique(), key=lambda x: pd.to_datetime(x, format='%Y-%m'))
 
         st.subheader("📈 Criados vs Resolvidos")
         criados = df_proj.groupby('mes_str')['created'].count().reset_index(name='Criados')
         resolvidos = df_proj[df_proj['resolved'].notna()].groupby('mes_str')['resolved'].count().reset_index(name='Resolvidos')
-        grafico = pd.merge(criados, resolvidos, how="outer", on="mes_str").fillna(0).sort_values("mes_str")
+        base_meses = pd.DataFrame({'mes_str': meses})
+        grafico = pd.merge(base_meses, criados, on='mes_str', how='left').merge(resolvidos, on='mes_str', how='left').fillna(0)
         fig = go.Figure()
         fig.add_bar(x=grafico['mes_str'], y=grafico['Criados'], name='Criados', text=grafico['Criados'], textposition='outside')
         fig.add_bar(x=grafico['mes_str'], y=grafico['Resolvidos'], name='Resolvidos', text=grafico['Resolvidos'], textposition='outside')
@@ -83,27 +85,32 @@ for projeto, aba in zip(PROJETOS, abas):
 
         st.subheader("⏱️ SLA por Mês")
         df_sla = df_proj.dropna(subset=['sla_millis']).copy()
-        df_sla['mes_str'] = df_sla['created'].dt.to_period("M").dt.to_timestamp().dt.strftime("%Y-%m")
         df_sla['sla_horas'] = df_sla['sla_millis'] / (1000 * 60 * 60)
+        df_sla['mes_str'] = df_sla['created'].dt.to_period("M").dt.to_timestamp().dt.strftime("%Y-%m")
         sla_meta = SLA_METAS[projeto]
         df_sla['dentro_sla'] = df_sla['sla_horas'] <= 40
         sla_mensal = df_sla.groupby('mes_str')['dentro_sla'].agg(['mean', 'count']).reset_index()
         sla_mensal['percentual'] = (sla_mensal['mean'] * 100).round(1)
         sla_mensal['fora'] = 100 - sla_mensal['percentual']
+        base_sla = pd.DataFrame({'mes_str': meses})
+        sla_merge = pd.merge(base_sla, sla_mensal[['mes_str', 'percentual', 'fora']], on='mes_str', how='left').fillna(0)
         fig_sla = go.Figure(data=[
-            go.Bar(name='Dentro SLA', x=sla_mensal['mes_str'], y=sla_mensal['percentual'], text=sla_mensal['percentual'], textposition='outside', marker_color='green'),
-            go.Bar(name='Fora SLA', x=sla_mensal['mes_str'], y=sla_mensal['fora'], text=sla_mensal['fora'], textposition='outside', marker_color='red')
+            go.Bar(name='Dentro SLA', x=sla_merge['mes_str'], y=sla_merge['percentual'], text=sla_merge['percentual'], textposition='outside', marker_color='green'),
+            go.Bar(name='Fora SLA', x=sla_merge['mes_str'], y=sla_merge['fora'], text=sla_merge['fora'], textposition='outside', marker_color='red')
         ])
         fig_sla.update_layout(barmode='group', yaxis_title='%', xaxis_title='Mês', title=f'SLA Mensal ({sla_meta}%)')
         st.plotly_chart(fig_sla, use_container_width=True)
 
         st.subheader("📦 Área Solicitante")
-        if 'customfield_13719' in df_proj.columns:
-            df_area = df_proj.dropna(subset=['customfield_13719']).copy()
-            df_area['area'] = df_area['customfield_13719'].apply(lambda x: x.get('value') if isinstance(x, dict) else str(x))
-            dados_area = df_area['area'].value_counts().reset_index()
-            dados_area.columns = ['Área', 'Qtd. Chamados']
-            st.dataframe(dados_area)
+        df_area = df_proj.dropna(subset=['customfield_13719']).copy()
+        df_area['area'] = df_area['customfield_13719'].apply(lambda x: x.get('value') if isinstance(x, dict) else str(x))
+        opcoes_filtro_mes = ['Todos'] + meses
+        filtro_mes_area = st.selectbox(f"Selecione o mês - Área Solicitante ({projeto})", opcoes_filtro_mes, key=f"area_{projeto}")
+        if filtro_mes_area != 'Todos':
+            df_area = df_area[df_area['mes_str'] == filtro_mes_area]
+        dados_area = df_area['area'].value_counts().reset_index()
+        dados_area.columns = ['Área', 'Qtd. Chamados']
+        st.dataframe(dados_area)
 
         st.subheader("🧠 Assunto Relacionado")
         campos_assunto = {
@@ -115,13 +122,16 @@ for projeto, aba in zip(PROJETOS, abas):
             campo_assunto = campos_assunto[projeto]
             df_assunto = df_proj.dropna(subset=[campo_assunto]).copy()
             df_assunto['assunto'] = df_assunto[campo_assunto].apply(lambda x: x.get('value') if isinstance(x, dict) else str(x))
+            filtro_mes_assunto = st.selectbox(f"Selecione o mês - Assunto Relacionado ({projeto})", opcoes_filtro_mes, key=f"assunto_{projeto}")
+            if filtro_mes_assunto != 'Todos':
+                df_assunto = df_assunto[df_assunto['mes_str'] == filtro_mes_assunto]
             dados_assunto = df_assunto['assunto'].value_counts().reset_index()
             dados_assunto.columns = ['Assunto Relacionado', 'Qtd. Chamados']
             st.dataframe(dados_assunto)
 
         if projeto in ['TDS', 'INT']:
             st.subheader("🔄 Encaminhamentos")
-            mes_enc = st.selectbox(f"Selecione o mês - {projeto} (Encaminhamentos)", meses, index=len(meses)-1, key=f"mes_enc_{projeto}")
+            mes_enc = st.selectbox(f"Selecione o mês - Encaminhamentos ({projeto})", meses, index=len(meses)-1, key=f"mes_enc_{projeto}")
             df_mes = df_proj[df_proj['mes_str'] == mes_enc]
             col1, col2 = st.columns(2)
             with col1:
