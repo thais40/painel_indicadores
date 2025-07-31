@@ -70,8 +70,6 @@ for projeto, aba in zip(PROJETOS, abas):
         st.header(f'📊 Projeto: {projeto}')
         df_proj = df[df['projeto'] == projeto]
         meses = sorted(df_proj['mes_str'].unique(), key=lambda x: pd.to_datetime(x, format='%Y-%m'))
-        mes_sel = st.selectbox(f"Selecione o mês - {projeto}", meses, index=len(meses)-1, key=f"mes_{projeto}")
-        df_mes = df_proj[df_proj['mes_str'] == mes_sel]
 
         st.subheader("📈 Criados vs Resolvidos")
         criados = df_proj.groupby('mes_str')['created'].count().reset_index(name='Criados')
@@ -103,7 +101,7 @@ for projeto, aba in zip(PROJETOS, abas):
         if 'customfield_13719' in df_proj.columns:
             df_area = df_proj.dropna(subset=['customfield_13719']).copy()
             df_area['area'] = df_area['customfield_13719'].apply(lambda x: x.get('value') if isinstance(x, dict) else str(x))
-            dados_area = df_area[df_area['mes_str'] == mes_sel]['area'].value_counts().reset_index()
+            dados_area = df_area['area'].value_counts().reset_index()
             dados_area.columns = ['Área', 'Qtd. Chamados']
             st.dataframe(dados_area)
 
@@ -117,12 +115,14 @@ for projeto, aba in zip(PROJETOS, abas):
             campo_assunto = campos_assunto[projeto]
             df_assunto = df_proj.dropna(subset=[campo_assunto]).copy()
             df_assunto['assunto'] = df_assunto[campo_assunto].apply(lambda x: x.get('value') if isinstance(x, dict) else str(x))
-            dados_assunto = df_assunto[df_assunto['mes_str'] == mes_sel]['assunto'].value_counts().reset_index()
+            dados_assunto = df_assunto['assunto'].value_counts().reset_index()
             dados_assunto.columns = ['Assunto Relacionado', 'Qtd. Chamados']
             st.dataframe(dados_assunto)
 
         if projeto in ['TDS', 'INT']:
             st.subheader("🔄 Encaminhamentos")
+            mes_enc = st.selectbox(f"Selecione o mês - {projeto} (Encaminhamentos)", meses, index=len(meses)-1, key=f"mes_enc_{projeto}")
+            df_mes = df_proj[df_proj['mes_str'] == mes_enc]
             col1, col2 = st.columns(2)
             with col1:
                 count_produto = df_mes['status'].str.contains("Produto", case=False, na=False).sum()
