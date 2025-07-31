@@ -89,7 +89,7 @@ for projeto, aba in zip(PROJETOS, abas):
         df_sla['mes_str'] = df_sla['created'].dt.to_period("M").dt.to_timestamp().dt.strftime("%Y-%m")
         sla_meta = SLA_METAS[projeto]
         df_sla['dentro_sla'] = df_sla['sla_horas'] <= 40
-        sla_mensal = df_sla.groupby('mes_str')['dentro_sla'].agg(['mean', 'count']).reset_index()
+        sla_mensal = df_sla.groupby('mes_str')['dentro_sla'].agg(['mean']).reset_index()
         sla_mensal['percentual'] = (sla_mensal['mean'] * 100).round(1)
         sla_mensal['fora'] = 100 - sla_mensal['percentual']
         base_sla = pd.DataFrame({'mes_str': meses})
@@ -131,12 +131,12 @@ for projeto, aba in zip(PROJETOS, abas):
 
         if projeto in ['TDS', 'INT']:
             st.subheader("🔄 Encaminhamentos")
-            mes_enc = st.selectbox(f"Selecione o mês - Encaminhamentos ({projeto})", meses, index=len(meses)-1, key=f"mes_enc_{projeto}")
-            df_mes = df_proj[df_proj['mes_str'] == mes_enc]
+            filtro_mes_enc = st.selectbox(f"Selecione o mês - Encaminhamentos ({projeto})", opcoes_filtro_mes, key=f"mes_enc_{projeto}")
+            df_enc = df_proj if filtro_mes_enc == 'Todos' else df_proj[df_proj['mes_str'] == filtro_mes_enc]
             col1, col2 = st.columns(2)
             with col1:
-                count_produto = df_mes['status'].str.contains("Produto", case=False, na=False).sum()
+                count_produto = df_enc['status'].str.contains("Produto", case=False, na=False).sum()
                 st.metric("Encaminhados Produto", count_produto)
             with col2:
-                count_n3 = df_mes['escalado_n3_valor'] == "Sim"
+                count_n3 = df_enc['escalado_n3_valor'] == "Sim"
                 st.metric("Encaminhados N3", count_n3.sum())
