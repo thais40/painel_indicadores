@@ -90,16 +90,24 @@ for projeto, aba in zip(PROJETOS, abas):
         df_sla = df_proj.dropna(subset=['sla_millis']).copy()
         df_sla['sla_horas'] = df_sla['sla_millis'] / (1000 * 60 * 60)
         df_sla['dentro_sla'] = df_sla['sla_horas'] <= 40
+        df_sla['mes_str'] = df_sla['created'].dt.to_period("M").dt.to_timestamp().dt.strftime("%Y-%m")
         sla_meta = SLA_METAS[projeto]
-        sla_mensal = df_sla.groupby('mes_str')['dentro_sla'].mean().reset_index()
-        sla_mensal['percentual'] = (sla_mensal['dentro_sla'] * 100).round(1)
+
+        # Agrupamento mesmo com meses sem dados
+        sla_mensal = df_sla.groupby('mes_str')['dentro_sla'].agg(['mean']).reset_index()
+        sla_mensal['percentual'] = (sla_mensal['mean'] * 100).round(1)
         sla_mensal['fora'] = 100 - sla_mensal['percentual']
-        sla_plot = base_meses.merge(sla_mensal[['mes_str', 'percentual', 'fora']], on='mes_str', how='left').fillna(0)
+        base_sla = pd.DataFrame({'mes_str': meses})
+        sla_plot = base_sla.merge(sla_mensal[['mes_str', 'percentual', 'fora']], on='mes_str', how='left').fillna(0)
+
+        # Gráfico
         fig_sla = go.Figure([
-            go.Bar(name='Dentro SLA', x=sla_plot['mes_str'], y=sla_plot['percentual'], text=sla_plot['percentual'], textposition='outside', marker_color='green'),
-            go.Bar(name='Fora SLA', x=sla_plot['mes_str'], y=sla_plot['fora'], text=sla_plot['fora'], textposition='outside', marker_color='red')
+            go.Bar(name='Dentro SLA', x=sla_plot['mes_str'], y=sla_plot['percentual'], text=sla_plot['percentual'],
+                   textposition='outside', marker_color='green'),
+            go.Bar(name='Fora SLA', x=sla_plot['mes_str'], y=sla_plot['fora'], text=sla_plot['fora'],
+                   textposition='outside', marker_color='red')
         ])
-        fig_sla.update_layout(barmode='group', yaxis_title='%', xaxis_title='Mês', title=f'SLA Mensal ({sla_meta}%)')
+        fig_sla.update_layout(barmode='group', yaxis_title='%', xaxis_title='Mês', title=f'SLA Mensal ({sla_meta}%)")
         st.plotly_chart(fig_sla, use_container_width=True)
 
         # Área Solicitante
