@@ -107,7 +107,7 @@ for projeto, aba in zip(PROJETOS, abas):
             go.Bar(name='Fora SLA', x=sla_plot['mes_str'], y=sla_plot['fora'], text=sla_plot['fora'],
                    textposition='outside', marker_color='red')
         ])
-        fig_sla.update_layout(barmode='group', yaxis_title='%', xaxis_title='Mês', title=f'SLA Mensal ({sla_meta}%)")
+        fig_sla.update_layout(barmode='group', yaxis_title='%', xaxis_title='Mês', title=f'SLA Mensal ({sla_meta}%)'
         st.plotly_chart(fig_sla, use_container_width=True)
 
         # Área Solicitante
