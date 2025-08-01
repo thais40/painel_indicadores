@@ -48,8 +48,8 @@ def buscar_issues():
             for issue in issues:
                 f = issue["fields"]
 
-                # Aplica o campo de SLA correto por projeto
-                if projeto == 'TDS':
+                # SLA por projeto
+                if projeto in ['TDS', 'TINE']:
                     sla_millis = extrair_sla_millis(f.get("customfield_13744", {}))  # SLA SUP
                 else:
                     sla_millis = extrair_sla_millis(f.get("customfield_13686", {}))  # Tempo de resolução
@@ -65,7 +65,7 @@ def buscar_issues():
                     "customfield_13643": f.get("customfield_13643"),
                     "customfield_13699": f.get("customfield_13699"),
                     "customfield_13659": f.get("customfield_13659"),
-                    "customfield_10010": f.get("customfield_10010")  # Request Type (INTEL)
+                    "customfield_10010": f.get("customfield_10010")
                 })
             start_at += 100
 
@@ -100,13 +100,18 @@ for projeto, aba in zip(PROJETOS, abas):
 
         # SLA
         st.subheader("⏱️ SLA por Mês")
+
         df_sla = df_proj.dropna(subset=['sla_millis']).copy()
         df_sla['sla_horas'] = df_sla['sla_millis'] / (1000 * 60 * 60)
-        df_sla['dentro_sla'] = df_sla['sla_horas'] <= 40
-        df_sla['mes_str'] = df_sla['created'].dt.to_period("M").dt.to_timestamp().dt.strftime("%Y-%m")
-        sla_meta = SLA_METAS[projeto]
 
-        # Agrupamento mesmo com meses sem dados
+        # Meta personalizada
+        limite_sla = 80 if projeto == 'INTEL' else 40
+        meta_porcentagem = SLA_METAS[projeto]
+
+        df_sla['dentro_sla'] = df_sla['sla_horas'] <= limite_sla
+        df_sla['mes_str'] = df_sla['created'].dt.to_period("M").dt.to_timestamp().dt.strftime("%Y-%m")
+
+        # Agrupar SLA
         sla_mensal = df_sla.groupby('mes_str')['dentro_sla'].agg(['mean']).reset_index()
         sla_mensal['percentual'] = (sla_mensal['mean'] * 100).round(1)
         sla_mensal['fora'] = 100 - sla_mensal['percentual']
@@ -115,12 +120,17 @@ for projeto, aba in zip(PROJETOS, abas):
 
         # Gráfico
         fig_sla = go.Figure([
-            go.Bar(name='Dentro SLA', x=sla_plot['mes_str'], y=sla_plot['percentual'], text=sla_plot['percentual'],
-                   textposition='outside', marker_color='green'),
-            go.Bar(name='Fora SLA', x=sla_plot['mes_str'], y=sla_plot['fora'], text=sla_plot['fora'],
-                   textposition='outside', marker_color='red')
+            go.Bar(name='Dentro SLA', x=sla_plot['mes_str'], y=sla_plot['percentual'],
+                   text=sla_plot['percentual'], textposition='outside', marker_color='green'),
+            go.Bar(name='Fora SLA', x=sla_plot['mes_str'], y=sla_plot['fora'],
+                   text=sla_plot['fora'], textposition='outside', marker_color='red')
         ])
-        fig_sla.update_layout(barmode='group', yaxis_title='%', xaxis_title='Mês', title=f'SLA Mensal ({sla_meta}%)')
+        fig_sla.update_layout(
+            barmode='group',
+            yaxis_title='%',
+            xaxis_title='Mês',
+            title=f'SLA Mensal ({meta_porcentagem}% - {limite_sla}h)'
+        )
         st.plotly_chart(fig_sla, use_container_width=True)
 
         # Área Solicitante
