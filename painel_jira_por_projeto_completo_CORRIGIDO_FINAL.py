@@ -116,7 +116,7 @@ for projeto, aba in zip(PROJETOS, abas):
             barmode='group',
             yaxis_title='%',
             xaxis_title='Mês',
-            title=f'SLA Mensal ({meta_porcentagem}% - {limite_sla}h)"
+            title=f'SLA Mensal ({meta_porcentagem}% - {limite_sla}h)'
         )
         st.plotly_chart(fig_sla, use_container_width=True)
         # Área Solicitante
