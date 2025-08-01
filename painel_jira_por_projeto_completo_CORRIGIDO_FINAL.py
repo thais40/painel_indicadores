@@ -23,6 +23,7 @@ SLA_METAS = {'TDS': 98, 'INT': 96, 'TINE': 96, 'INTEL': 96}
 def buscar_issues():
     headers = {"Accept": "application/json"}
     all_issues = []
+
     for projeto in PROJETOS:
         start_at = 0
         while True:
@@ -31,7 +32,12 @@ def buscar_issues():
                 "jql": jql,
                 "startAt": start_at,
                 "maxResults": 100,
-                "fields": "summary,created,resolutiondate,status,customfield_13686,customfield_13719,customfield_13712,customfield_13643,customfield_13699,customfield_13659,customfield_10010"
+                "fields": (
+                    "summary,created,resolutiondate,status,"
+                    "customfield_13686,customfield_13744,"
+                    "customfield_13719,customfield_13712,customfield_13643,"
+                    "customfield_13699,customfield_13659,customfield_10010"
+                )
             }
             res = requests.get(f"{JIRA_URL}/rest/api/3/search", headers=headers, auth=auth, params=params)
             if res.status_code != 200:
@@ -41,7 +47,13 @@ def buscar_issues():
                 break
             for issue in issues:
                 f = issue["fields"]
-                sla_millis = extrair_sla_millis(f.get("customfield_13686", {}))
+
+                # Aplica o campo de SLA correto por projeto
+                if projeto == 'TDS':
+                    sla_millis = extrair_sla_millis(f.get("customfield_13744", {}))  # SLA SUP
+                else:
+                    sla_millis = extrair_sla_millis(f.get("customfield_13686", {}))  # Tempo de resolução
+
                 all_issues.append({
                     "projeto": projeto,
                     "created": f["created"],
@@ -53,9 +65,10 @@ def buscar_issues():
                     "customfield_13643": f.get("customfield_13643"),
                     "customfield_13699": f.get("customfield_13699"),
                     "customfield_13659": f.get("customfield_13659"),
-                    "customfield_10010": f.get("customfield_10010")  # Request Type
+                    "customfield_10010": f.get("customfield_10010")  # Request Type (INTEL)
                 })
             start_at += 100
+
     return pd.DataFrame(all_issues)
 
 df = buscar_issues()
