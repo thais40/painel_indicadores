@@ -9,7 +9,6 @@ from sla_utils import extrair_sla_millis
 st.set_page_config(layout='wide')
 st.title('Painel de Indicadores')
 
-# Autenticação
 JIRA_URL = st.secrets['JIRA_URL']
 EMAIL = st.secrets['EMAIL']
 TOKEN = st.secrets['TOKEN']
@@ -47,13 +46,10 @@ def buscar_issues():
                 break
             for issue in issues:
                 f = issue["fields"]
-
-                # SLA por projeto
                 if projeto in ['TDS', 'TINE']:
-                    sla_millis = extrair_sla_millis(f.get("customfield_13744", {}))  # SLA SUP
+                    sla_millis = extrair_sla_millis(f.get("customfield_13744", {}))
                 else:
-                    sla_millis = extrair_sla_millis(f.get("customfield_13686", {}))  # Tempo de resolução
-
+                    sla_millis = extrair_sla_millis(f.get("customfield_13686", {}))
                 all_issues.append({
                     "projeto": projeto,
                     "created": f["created"],
@@ -98,27 +94,18 @@ for projeto, aba in zip(PROJETOS, abas):
         fig.update_layout(barmode='group', xaxis_title='Mês', yaxis_title='Chamados')
         st.plotly_chart(fig, use_container_width=True)
 
-        # SLA
+        # SLA com meta por projeto
         st.subheader("⏱️ SLA por Mês")
-
         df_sla = df_proj.dropna(subset=['sla_millis']).copy()
         df_sla['sla_horas'] = df_sla['sla_millis'] / (1000 * 60 * 60)
-
-        # Meta personalizada
         limite_sla = 80 if projeto == 'INTEL' else 40
         meta_porcentagem = SLA_METAS[projeto]
-
         df_sla['dentro_sla'] = df_sla['sla_horas'] <= limite_sla
         df_sla['mes_str'] = df_sla['created'].dt.to_period("M").dt.to_timestamp().dt.strftime("%Y-%m")
-
-        # Agrupar SLA
-        sla_mensal = df_sla.groupby('mes_str')['dentro_sla'].agg(['mean']).reset_index()
-        sla_mensal['percentual'] = (sla_mensal['mean'] * 100).round(1)
+        sla_mensal = df_sla.groupby('mes_str')['dentro_sla'].mean().reset_index()
+        sla_mensal['percentual'] = (sla_mensal['dentro_sla'] * 100).round(1)
         sla_mensal['fora'] = 100 - sla_mensal['percentual']
-        base_sla = pd.DataFrame({'mes_str': meses})
-        sla_plot = base_sla.merge(sla_mensal[['mes_str', 'percentual', 'fora']], on='mes_str', how='left').fillna(0)
-
-        # Gráfico
+        sla_plot = base_meses.merge(sla_mensal[['mes_str', 'percentual', 'fora']], on='mes_str', how='left').fillna(0)
         fig_sla = go.Figure([
             go.Bar(name='Dentro SLA', x=sla_plot['mes_str'], y=sla_plot['percentual'],
                    text=sla_plot['percentual'], textposition='outside', marker_color='green'),
@@ -129,10 +116,9 @@ for projeto, aba in zip(PROJETOS, abas):
             barmode='group',
             yaxis_title='%',
             xaxis_title='Mês',
-            title=f'SLA Mensal ({meta_porcentagem}% - {limite_sla}h)'
+            title=f'SLA Mensal ({meta_porcentagem}% - {limite_sla}h)"
         )
         st.plotly_chart(fig_sla, use_container_width=True)
-
         # Área Solicitante
         st.subheader("📦 Área Solicitante")
         df_area = df_proj.dropna(subset=['customfield_13719']).copy()
@@ -163,7 +149,7 @@ for projeto, aba in zip(PROJETOS, abas):
             dados_assunto.columns = ['Assunto Relacionado', 'Qtd. Chamados']
             st.dataframe(dados_assunto)
 
-        # Encaminhamentos (apenas INT e TDS)
+        # Encaminhamentos (somente INT e TDS)
         if projeto in ['TDS', 'INT']:
             st.subheader("🔄 Encaminhamentos")
             filtro_mes_enc = st.selectbox(f"Selecione o mês - Encaminhamentos ({projeto})", opcoes_filtro_mes, key=f"enc_{projeto}")
@@ -175,4 +161,3 @@ for projeto, aba in zip(PROJETOS, abas):
             with col2:
                 count_n3 = df_enc['escalado_n3_valor'] == "Sim"
                 st.metric("Encaminhados N3", count_n3.sum())
-
