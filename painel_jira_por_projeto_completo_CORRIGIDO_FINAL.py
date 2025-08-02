@@ -119,16 +119,18 @@ for projeto, aba in zip(PROJETOS, abas):
             title=f'SLA Mensal ({meta_porcentagem}% - {limite_sla}h)'
         )
         st.plotly_chart(fig_sla, use_container_width=True)
-        # Área Solicitante
-        st.subheader("📦 Área Solicitante")
-        df_area = df_proj.dropna(subset=['customfield_13719']).copy()
-        df_area['area'] = df_area['customfield_13719'].apply(lambda x: x.get('value') if isinstance(x, dict) else str(x))
-        filtro_mes_area = st.selectbox(f"Selecione o mês - Área Solicitante ({projeto})", opcoes_filtro_mes, key=f"area_{projeto}")
-        if filtro_mes_area != 'Todos':
-            df_area = df_area[df_area['mes_str'] == filtro_mes_area]
-        dados_area = df_area['area'].value_counts().reset_index()
-        dados_area.columns = ['Área', 'Qtd. Chamados']
-        st.dataframe(dados_area)
+        
+        # Área Solicitante (exceto INTEL)
+        if projeto != 'INTEL':
+            st.subheader("📦 Área Solicitante")
+            df_area = df_proj.dropna(subset=['customfield_13719']).copy()
+            df_area['area'] = df_area['customfield_13719'].apply(lambda x: x.get('value') if isinstance(x, dict) else str(x))
+            filtro_mes_area = st.selectbox(f"Selecione o mês - Área Solicitante ({projeto})", opcoes_filtro_mes, key=f"area_{projeto}")
+            if filtro_mes_area != 'Todos':
+                df_area = df_area[df_area['mes_str'] == filtro_mes_area]
+            dados_area = df_area['area'].value_counts().reset_index()
+            dados_area.columns = ['Área', 'Qtd. Chamados']
+            st.dataframe(dados_area)
 
         # Assunto Relacionado
         st.subheader("🧠 Assunto Relacionado")
@@ -136,12 +138,22 @@ for projeto, aba in zip(PROJETOS, abas):
             'TDS': 'customfield_13712',
             'INT': 'customfield_13643',
             'TINE': 'customfield_13699',
-            'INTEL': 'customfield_10010'  # Request Type
+            'INTEL': 'issuetype'
         }
+        
         if projeto in campos_assunto:
             campo_assunto = campos_assunto[projeto]
             df_assunto = df_proj.dropna(subset=[campo_assunto]).copy()
-            df_assunto['assunto'] = df_assunto[campo_assunto].apply(lambda x: x.get('value') if isinstance(x, dict) else str(x))
+
+            if campo_assunto == 'issuetype':
+                df_assunto['assunto'] = df_assunto['issuetype'].apply(
+                    lambda x: x.get('name') if isinstance(x, dict) else str(x)
+                )
+            else:
+                df_assunto['assunto'] = df_assunto[campo_assunto].apply(
+                    lambda x: x.get('value') if isinstance(x, dict) else str(x)
+                )
+
             filtro_mes_assunto = st.selectbox(f"Selecione o mês - Assunto Relacionado ({projeto})", opcoes_filtro_mes, key=f"assunto_{projeto}")
             if filtro_mes_assunto != 'Todos':
                 df_assunto = df_assunto[df_assunto['mes_str'] == filtro_mes_assunto]
