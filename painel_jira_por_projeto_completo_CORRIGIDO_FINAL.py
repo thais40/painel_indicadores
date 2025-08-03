@@ -35,7 +35,8 @@ def buscar_issues():
                     "summary,created,resolutiondate,status,"
                     "customfield_13686,customfield_13744,"
                     "customfield_13719,customfield_13712,customfield_13643,"
-                    "customfield_13699,customfield_13659,customfield_10010"
+                    "customfield_13699,customfield_13659,customfield_10010,"
+                    "issuetype"
                 )
             }
             res = requests.get(f"{JIRA_URL}/rest/api/3/search", headers=headers, auth=auth, params=params)
@@ -61,7 +62,8 @@ def buscar_issues():
                     "customfield_13643": f.get("customfield_13643"),
                     "customfield_13699": f.get("customfield_13699"),
                     "customfield_13659": f.get("customfield_13659"),
-                    "customfield_10010": f.get("customfield_10010")
+                    "customfield_10010": f.get("customfield_10010"),
+                    "issuetype": f.get("issuetype")
                 })
             start_at += 100
 
@@ -94,7 +96,7 @@ for projeto, aba in zip(PROJETOS, abas):
         fig.update_layout(barmode='group', xaxis_title='Mês', yaxis_title='Chamados')
         st.plotly_chart(fig, use_container_width=True)
 
-        # SLA com meta por projeto
+        # SLA por Mês com meta e limite específicos
         st.subheader("⏱️ SLA por Mês")
         df_sla = df_proj.dropna(subset=['sla_millis']).copy()
         df_sla['sla_horas'] = df_sla['sla_millis'] / (1000 * 60 * 60)
@@ -119,7 +121,7 @@ for projeto, aba in zip(PROJETOS, abas):
             title=f'SLA Mensal ({meta_porcentagem}% - {limite_sla}h)'
         )
         st.plotly_chart(fig_sla, use_container_width=True)
-        
+
         # Área Solicitante (exceto INTEL)
         if projeto != 'INTEL':
             st.subheader("📦 Área Solicitante")
@@ -140,23 +142,21 @@ for projeto, aba in zip(PROJETOS, abas):
             'TINE': 'customfield_13699',
             'INTEL': 'issuetype'
         }
-        
-        if projeto in campos_assunto:
-            campo_assunto = campos_assunto[projeto]
-            df_assunto = df_proj.dropna(subset=[campo_assunto]).copy()
 
+        campo_assunto = campos_assunto.get(projeto)
+        if campo_assunto not in df_proj.columns:
+            st.warning(f'O campo "{campo_assunto}" não está presente nos dados deste projeto.')
+        else:
+            df_assunto = df_proj.dropna(subset=[campo_assunto]).copy()
             if campo_assunto == 'issuetype':
-                df_assunto['assunto'] = df_assunto['issuetype'].apply(
-                    lambda x: x.get('name') if isinstance(x, dict) else str(x)
-                )
+                df_assunto['assunto'] = df_assunto['issuetype'].apply(lambda x: x.get('name') if isinstance(x, dict) else str(x))
             else:
-                df_assunto['assunto'] = df_assunto[campo_assunto].apply(
-                    lambda x: x.get('value') if isinstance(x, dict) else str(x)
-                )
+                df_assunto['assunto'] = df_assunto[campo_assunto].apply(lambda x: x.get('value') if isinstance(x, dict) else str(x))
 
             filtro_mes_assunto = st.selectbox(f"Selecione o mês - Assunto Relacionado ({projeto})", opcoes_filtro_mes, key=f"assunto_{projeto}")
             if filtro_mes_assunto != 'Todos':
                 df_assunto = df_assunto[df_assunto['mes_str'] == filtro_mes_assunto]
+
             dados_assunto = df_assunto['assunto'].value_counts().reset_index()
             dados_assunto.columns = ['Assunto Relacionado', 'Qtd. Chamados']
             st.dataframe(dados_assunto)
