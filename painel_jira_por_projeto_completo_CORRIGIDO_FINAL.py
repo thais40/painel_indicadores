@@ -9,6 +9,11 @@ from sla_utils import extrair_sla_millis
 st.set_page_config(layout='wide')
 st.title('Painel de Indicadores')
 
+# 🔄 Botão de atualização
+if st.button("🔄 Atualizar dados do Jira"):
+    st.cache_data.clear()
+    st.experimental_rerun()
+
 JIRA_URL = st.secrets['JIRA_URL']
 EMAIL = st.secrets['EMAIL']
 TOKEN = st.secrets['TOKEN']
