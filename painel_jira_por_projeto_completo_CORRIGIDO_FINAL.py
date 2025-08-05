@@ -117,10 +117,22 @@ for projeto, aba in zip(PROJETOS, abas):
         sla_mensal['fora'] = 100 - sla_mensal['percentual']
         sla_plot = base_meses.merge(sla_mensal[['mes_str', 'percentual', 'fora']], on='mes_str', how='left').fillna(0)
         fig_sla = go.Figure([
-            go.Bar(name='Dentro SLA', x=sla_plot['mes_str'], y=sla_plot['percentual'],
-                   text=sla_plot['percentual'], textposition='outside', marker_color='green'),
-            go.Bar(name='Fora SLA', x=sla_plot['mes_str'], y=sla_plot['fora'],
-                   text=sla_plot['fora'], textposition='outside', marker_color='red')
+            go.Bar(
+                name='Dentro SLA',
+                x=sla_plot['mes_str'],
+                y=sla_plot['percentual'],
+                text=sla_plot['percentual'].map(lambda x: f"{x:.2f}"),
+                textposition='outside',
+                marker_color='green'
+            ),
+            go.Bar(
+                name='Fora SLA',
+                x=sla_plot['mes_str'],
+                y=sla_plot['fora'],
+                text=sla_plot['fora'].map(lambda x: f"{x:.2f}"),
+                textposition='outside',
+                marker_color='red'
+            )
         ])
         fig_sla.update_layout(
             barmode='group',
