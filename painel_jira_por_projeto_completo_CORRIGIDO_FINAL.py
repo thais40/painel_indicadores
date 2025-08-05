@@ -15,6 +15,14 @@ TOKEN = st.secrets['TOKEN']
 auth = HTTPBasicAuth(EMAIL, TOKEN)
 
 PROJETOS = ['TDS', 'INT', 'TINE', 'INTEL']
+
+TITULOS = {
+    'TDS': 'Tech Support',
+    'INT': 'Integrations',
+    'TINE': 'IT Support NE',
+    'INTEL': 'Intelligence'
+}
+
 CUTOFF_DATE = '2024-01-01'
 SLA_METAS = {'TDS': 98, 'INT': 96, 'TINE': 96, 'INTEL': 96}
 
@@ -75,11 +83,11 @@ df['resolved'] = pd.to_datetime(df['resolved'])
 df['mes_str'] = pd.to_datetime(df['created']).dt.to_period("M").dt.to_timestamp().dt.strftime("%Y-%m")
 df['escalado_n3_valor'] = df['customfield_13659'].apply(lambda x: x.get('value') if isinstance(x, dict) else None)
 
-abas = st.tabs(PROJETOS)
+abas = st.tabs([TITULOS[projeto] for projeto in PROJETOS])
 
 for projeto, aba in zip(PROJETOS, abas):
     with aba:
-        st.header(f'📊 Projeto: {projeto}')
+        st.header(f'📊 Projeto: {TITULOS[projeto]}')
         df_proj = df[df['projeto'] == projeto].copy()
         meses = sorted(df['mes_str'].unique(), key=lambda x: pd.to_datetime(x, format='%Y-%m'))
         base_meses = pd.DataFrame({'mes_str': meses})
@@ -96,7 +104,7 @@ for projeto, aba in zip(PROJETOS, abas):
         fig.update_layout(barmode='group', xaxis_title='Mês', yaxis_title='Chamados')
         st.plotly_chart(fig, use_container_width=True)
 
-        # SLA por Mês com meta e limite específicos
+        # SLA com meta por projeto
         st.subheader("⏱️ SLA por Mês")
         df_sla = df_proj.dropna(subset=['sla_millis']).copy()
         df_sla['sla_horas'] = df_sla['sla_millis'] / (1000 * 60 * 60)
@@ -173,3 +181,5 @@ for projeto, aba in zip(PROJETOS, abas):
             with col2:
                 count_n3 = df_enc['escalado_n3_valor'] == "Sim"
                 st.metric("Encaminhados N3", count_n3.sum())
+
+
