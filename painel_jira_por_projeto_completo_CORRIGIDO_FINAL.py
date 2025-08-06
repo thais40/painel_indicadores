@@ -9,10 +9,10 @@ from sla_utils import extrair_sla_millis
 st.set_page_config(layout='wide')
 st.title('Painel de Indicadores')
 
-# 🔄 Botão de atualização
+# 🔄 Botão para atualizar dados do Jira manualmente
 if st.button("🔄 Atualizar dados do Jira"):
     st.cache_data.clear()
-    st.experimental_rerun()
+    st.rerun()
 
 JIRA_URL = st.secrets['JIRA_URL']
 EMAIL = st.secrets['EMAIL']
@@ -20,14 +20,12 @@ TOKEN = st.secrets['TOKEN']
 auth = HTTPBasicAuth(EMAIL, TOKEN)
 
 PROJETOS = ['TDS', 'INT', 'TINE', 'INTEL']
-
 TITULOS = {
     'TDS': 'Tech Support',
     'INT': 'Integrations',
     'TINE': 'IT Support NE',
     'INTEL': 'Intelligence'
 }
-
 CUTOFF_DATE = '2024-01-01'
 SLA_METAS = {'TDS': 98, 'INT': 96, 'TINE': 96, 'INTEL': 96}
 
@@ -109,7 +107,7 @@ for projeto, aba in zip(PROJETOS, abas):
         fig.update_layout(barmode='group', xaxis_title='Mês', yaxis_title='Chamados')
         st.plotly_chart(fig, use_container_width=True)
 
-        # SLA com meta por projeto
+        # SLA por Mês com meta e limite por projeto
         st.subheader("⏱️ SLA por Mês")
         df_sla = df_proj.dropna(subset=['sla_millis']).copy()
         df_sla['sla_horas'] = df_sla['sla_millis'] / (1000 * 60 * 60)
@@ -118,26 +116,14 @@ for projeto, aba in zip(PROJETOS, abas):
         df_sla['dentro_sla'] = df_sla['sla_horas'] <= limite_sla
         df_sla['mes_str'] = df_sla['created'].dt.to_period("M").dt.to_timestamp().dt.strftime("%Y-%m")
         sla_mensal = df_sla.groupby('mes_str')['dentro_sla'].mean().reset_index()
-        sla_mensal['percentual'] = (sla_mensal['dentro_sla'] * 100).round(1)
-        sla_mensal['fora'] = 100 - sla_mensal['percentual']
+        sla_mensal['percentual'] = (sla_mensal['dentro_sla'] * 100).round(2)
+        sla_mensal['fora'] = (100 - sla_mensal['percentual']).round(2)
         sla_plot = base_meses.merge(sla_mensal[['mes_str', 'percentual', 'fora']], on='mes_str', how='left').fillna(0)
         fig_sla = go.Figure([
-            go.Bar(
-                name='Dentro SLA',
-                x=sla_plot['mes_str'],
-                y=sla_plot['percentual'],
-                text=sla_plot['percentual'].map(lambda x: f"{x:.2f}"),
-                textposition='outside',
-                marker_color='green'
-            ),
-            go.Bar(
-                name='Fora SLA',
-                x=sla_plot['mes_str'],
-                y=sla_plot['fora'],
-                text=sla_plot['fora'].map(lambda x: f"{x:.2f}"),
-                textposition='outside',
-                marker_color='red'
-            )
+            go.Bar(name='Dentro SLA', x=sla_plot['mes_str'], y=sla_plot['percentual'],
+                   text=sla_plot['percentual'].map(lambda x: f"{x:.2f}"), textposition='outside', marker_color='green'),
+            go.Bar(name='Fora SLA', x=sla_plot['mes_str'], y=sla_plot['fora'],
+                   text=sla_plot['fora'].map(lambda x: f"{x:.2f}"), textposition='outside', marker_color='red')
         ])
         fig_sla.update_layout(
             barmode='group',
@@ -146,7 +132,6 @@ for projeto, aba in zip(PROJETOS, abas):
             title=f'SLA Mensal ({meta_porcentagem}% - {limite_sla}h)'
         )
         st.plotly_chart(fig_sla, use_container_width=True)
-
         # Área Solicitante (exceto INTEL)
         if projeto != 'INTEL':
             st.subheader("📦 Área Solicitante")
@@ -198,5 +183,3 @@ for projeto, aba in zip(PROJETOS, abas):
             with col2:
                 count_n3 = df_enc['escalado_n3_valor'] == "Sim"
                 st.metric("Encaminhados N3", count_n3.sum())
-
-
