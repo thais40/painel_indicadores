@@ -10,7 +10,7 @@ st.set_page_config(layout='wide')
 st.title('Painel de Indicadores')
 
 # 🔄 Botão para atualizar dados do Jira manualmente
-if st.button("🔄 Atualizar dados do Jira"):
+if st.button("🔄 Atualizar dados"):
     st.cache_data.clear()
     st.rerun()
 
