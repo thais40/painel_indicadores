@@ -145,7 +145,7 @@ for projeto, aba in zip(PROJETOS, abas):
             st.dataframe(dados_area)
 
         # Assunto Relacionado
-        st.subheader("🧠 Assunto Relacionado")
+        st.subheader("📋 Assunto Relacionado")
         campos_assunto = {
             'TDS': 'customfield_13712',
             'INT': 'customfield_13643',
