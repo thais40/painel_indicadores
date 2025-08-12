@@ -1,185 +1,168 @@
-import streamlit as st
 import pandas as pd
-import requests
-from requests.auth import HTTPBasicAuth
-from datetime import datetime
-import plotly.graph_objects as go
-from sla_utils import extrair_sla_millis
+import plotly.express as px
+import streamlit as st
 
-st.set_page_config(layout='wide')
-st.title('Painel de Indicadores')
+st.set_page_config(layout="wide")
+st.title("Painel de Indicadores")
 
-# 🔄 Botão para atualizar dados do Jira manualmente
-if st.button("🔄 Atualizar dados"):
-    st.cache_data.clear()
-    st.rerun()
+# Simulação de DataFrame - Substitua com sua função real
+# df = carregar_dados_jira()
+# df = pd.read_csv("seus_dados.csv")
 
-JIRA_URL = st.secrets['JIRA_URL']
-EMAIL = st.secrets['EMAIL']
-TOKEN = st.secrets['TOKEN']
-auth = HTTPBasicAuth(EMAIL, TOKEN)
+# Conversão de datas
+df["created"] = pd.to_datetime(df["created"])
+df["resolved"] = pd.to_datetime(df["resolved"])
 
-PROJETOS = ['TDS', 'INT', 'TINE', 'INTEL']
-TITULOS = {
-    'TDS': 'Tech Support',
-    'INT': 'Integrations',
-    'TINE': 'IT Support NE',
-    'INTEL': 'Intelligence'
+# Extração de ano e mês
+df["ano_created"] = df["created"].dt.year
+df["mes_created"] = df["created"].dt.month
+df["ano_resolved"] = df["resolved"].dt.year
+df["mes_resolved"] = df["resolved"].dt.month
+
+# Filtros
+anos_disponiveis = sorted(df["ano_created"].dropna().unique())
+meses_disponiveis = sorted(df["mes_created"].dropna().unique())
+
+col1, col2 = st.columns(2)
+with col1:
+    ano_selecionado = st.selectbox("Selecione o Ano", options=["Todos"] + list(map(str, anos_disponiveis)))
+with col2:
+    mes_selecionado = st.selectbox("Selecione o Mês", options=["Todos"] + list(map(str, meses_disponiveis)))
+
+# Aplicação dos filtros
+df_filtrado = df.copy()
+if ano_selecionado != "Todos":
+    df_filtrado = df_filtrado[df_filtrado["ano_created"] == int(ano_selecionado)]
+if mes_selecionado != "Todos":
+    df_filtrado = df_filtrado[df_filtrado["mes_created"] == int(mes_selecionado)]
+
+# Criados vs Resolvidos
+df_filtrado["mes_str_created"] = df_filtrado["created"].dt.to_period("M").dt.to_timestamp()
+df_filtrado["mes_str_resolved"] = df_filtrado["resolved"].dt.to_period("M").dt.to_timestamp()
+
+criados = df_filtrado.groupby("mes_str_created").size().reset_index(name="Criados")
+resolvidos = df_filtrado[df_filtrado["resolved"].notna()].groupby("mes_str_resolved").size().reset_index(name="Resolvidos")
+
+criados.rename(columns={"mes_str_created": "mes_str"}, inplace=True)
+resolvidos.rename(columns={"mes_str_resolved": "mes_str"}, inplace=True)
+
+grafico_cr = pd.merge(criados, resolvidos, how="outer", on="mes_str").fillna(0).sort_values("mes_str")
+grafico_cr["mes_str"] = grafico_cr["mes_str"].dt.strftime("%b %Y")
+
+fig_cr = px.bar(
+    grafico_cr,
+    x="mes_str",
+    y=["Criados", "Resolvidos"],
+    barmode="group",
+    text_auto=True,
+    title="Chamados Criados vs Resolvidos por Mês",
+    height=400  # reduzido para evitar corte
+)
+fig_cr.update_layout(
+    xaxis_title="Mês",
+    yaxis_title="Chamados",
+    legend_title="Tipo",
+    bargap=0.15
+)
+st.plotly_chart(fig_cr, use_container_width=True, key="grafico_criados_resolvidos")
+
+# Gráfico de SLA com OKR consolidado
+if "sla_millis" in df.columns:
+    SLA_LIMITE = 40 * 60 * 60 * 1000  # 40 horas em milissegundos
+
+    df_filtrado["mes_resolvido"] = df_filtrado["resolved"].dt.to_period("M").dt.to_timestamp()
+    df_filtrado["dentro_sla"] = df_filtrado["sla_millis"] <= SLA_LIMITE
+
+    sla_mes = df_filtrado[df_filtrado["resolved"].notna()].groupby("mes_resolvido")["dentro_sla"].agg([
+        ("Dentro do SLA", lambda x: (x == True).sum()),
+        ("Fora do SLA", lambda x: (x == False).sum())
+    ]).reset_index()
+
+    sla_mes["Total"] = sla_mes["Dentro do SLA"] + sla_mes["Fora do SLA"]
+    sla_mes["percentual"] = (sla_mes["Dentro do SLA"] / sla_mes["Total"]) * 100
+    sla_mes["mes"] = sla_mes["mes_resolvido"].dt.strftime("%b %Y")
+
+    fig_sla = px.bar(
+        sla_mes,
+        x="mes",
+        y=["Dentro do SLA", "Fora do SLA"],
+        text_auto=True,
+        barmode="group",
+        title="SLA Mensal (com OKR Consolidado)",
+        height=400  # reduzido
+    )
+    fig_sla.update_layout(
+        yaxis_title="Chamados",
+        xaxis_title="Mês",
+        bargap=0.15
+    )
+
+    # 🎯 OKR geral no topo
+    percentual_total = sla_mes["Dentro do SLA"].sum() / sla_mes["Total"].sum() * 100
+    fig_sla.add_annotation(
+        x=0.99, y=0.95, xref="paper", yref="paper",
+        text=f"🎯 OKR Geral: {percentual_total:.2f}%",
+        showarrow=False,
+        font=dict(size=14, color="green"),
+        align="right"
+    )
+
+    st.plotly_chart(fig_sla, use_container_width=True, key="grafico_sla_ok")
+
+# Área Solicitante (caso o campo esteja presente)
+if "customfield_13719" in df_filtrado.columns:
+    st.subheader("📦 Área Solicitante")
+
+    df_area = df_filtrado.dropna(subset=["customfield_13719"]).copy()
+    df_area["area"] = df_area["customfield_13719"].apply(
+        lambda x: x.get("value") if isinstance(x, dict) else str(x)
+    )
+
+    dados_area = df_area["area"].value_counts().reset_index()
+    dados_area.columns = ["Área", "Qtd. Chamados"]
+    st.dataframe(dados_area)
+
+# Assunto Relacionado adaptado por projeto
+st.subheader("🧾 Assunto Relacionado")
+
+campos_assunto = {
+    "TDS": "customfield_13712",
+    "INT": "customfield_13643",
+    "TINE": "customfield_13699",
+    "INTEL": "issuetype"
 }
-CUTOFF_DATE = '2024-01-01'
-SLA_METAS = {'TDS': 98, 'INT': 96, 'TINE': 96, 'INTEL': 96}
 
-@st.cache_data(show_spinner=True)
-def buscar_issues():
-    headers = {"Accept": "application/json"}
-    all_issues = []
+campo_assunto = None
+for c in campos_assunto.values():
+    if c in df_filtrado.columns:
+        campo_assunto = c
+        break
 
-    for projeto in PROJETOS:
-        start_at = 0
-        while True:
-            jql = f'project = "{projeto}" AND created >= "{CUTOFF_DATE}" ORDER BY created ASC'
-            params = {
-                "jql": jql,
-                "startAt": start_at,
-                "maxResults": 100,
-                "fields": (
-                    "summary,created,resolutiondate,status,"
-                    "customfield_13686,customfield_13744,"
-                    "customfield_13719,customfield_13712,customfield_13643,"
-                    "customfield_13699,customfield_13659,customfield_10010,"
-                    "issuetype"
-                )
-            }
-            res = requests.get(f"{JIRA_URL}/rest/api/3/search", headers=headers, auth=auth, params=params)
-            if res.status_code != 200:
-                break
-            issues = res.json().get("issues", [])
-            if not issues:
-                break
-            for issue in issues:
-                f = issue["fields"]
-                if projeto in ['TDS', 'TINE']:
-                    sla_millis = extrair_sla_millis(f.get("customfield_13744", {}))
-                else:
-                    sla_millis = extrair_sla_millis(f.get("customfield_13686", {}))
-                all_issues.append({
-                    "projeto": projeto,
-                    "created": f["created"],
-                    "resolved": f.get("resolutiondate"),
-                    "status": f.get("status", {}).get("name", ""),
-                    "sla_millis": sla_millis,
-                    "customfield_13719": f.get("customfield_13719"),
-                    "customfield_13712": f.get("customfield_13712"),
-                    "customfield_13643": f.get("customfield_13643"),
-                    "customfield_13699": f.get("customfield_13699"),
-                    "customfield_13659": f.get("customfield_13659"),
-                    "customfield_10010": f.get("customfield_10010"),
-                    "issuetype": f.get("issuetype")
-                })
-            start_at += 100
-
-    return pd.DataFrame(all_issues)
-
-df = buscar_issues()
-df['created'] = pd.to_datetime(df['created'])
-df['resolved'] = pd.to_datetime(df['resolved'])
-df['mes_str'] = pd.to_datetime(df['created']).dt.to_period("M").dt.to_timestamp().dt.strftime("%Y-%m")
-df['escalado_n3_valor'] = df['customfield_13659'].apply(lambda x: x.get('value') if isinstance(x, dict) else None)
-
-abas = st.tabs([TITULOS[projeto] for projeto in PROJETOS])
-
-for projeto, aba in zip(PROJETOS, abas):
-    with aba:
-        st.header(f'📊 Projeto: {TITULOS[projeto]}')
-        df_proj = df[df['projeto'] == projeto].copy()
-        meses = sorted(df['mes_str'].unique(), key=lambda x: pd.to_datetime(x, format='%Y-%m'))
-        base_meses = pd.DataFrame({'mes_str': meses})
-        opcoes_filtro_mes = ['Todos'] + meses
-
-        # Criados vs Resolvidos
-        st.subheader("📈 Criados vs Resolvidos")
-        criados = df_proj.groupby('mes_str')['created'].count().reset_index(name='Criados')
-        resolvidos = df_proj[df_proj['resolved'].notna()].groupby('mes_str')['resolved'].count().reset_index(name='Resolvidos')
-        grafico = base_meses.merge(criados, on='mes_str', how='left').merge(resolvidos, on='mes_str', how='left').fillna(0)
-        fig = go.Figure()
-        fig.add_bar(x=grafico['mes_str'], y=grafico['Criados'], name='Criados', text=grafico['Criados'], textposition='outside')
-        fig.add_bar(x=grafico['mes_str'], y=grafico['Resolvidos'], name='Resolvidos', text=grafico['Resolvidos'], textposition='outside')
-        fig.update_layout(barmode='group', xaxis_title='Mês', yaxis_title='Chamados')
-        st.plotly_chart(fig, use_container_width=True)
-
-        # SLA por Mês com meta e limite por projeto
-        st.subheader("⏱️ SLA por Mês")
-        df_sla = df_proj.dropna(subset=['sla_millis']).copy()
-        df_sla['sla_horas'] = df_sla['sla_millis'] / (1000 * 60 * 60)
-        limite_sla = 80 if projeto == 'INTEL' else 40
-        meta_porcentagem = SLA_METAS[projeto]
-        df_sla['dentro_sla'] = df_sla['sla_horas'] <= limite_sla
-        df_sla['mes_str'] = df_sla['created'].dt.to_period("M").dt.to_timestamp().dt.strftime("%Y-%m")
-        sla_mensal = df_sla.groupby('mes_str')['dentro_sla'].mean().reset_index()
-        sla_mensal['percentual'] = (sla_mensal['dentro_sla'] * 100).round(2)
-        sla_mensal['fora'] = (100 - sla_mensal['percentual']).round(2)
-        sla_plot = base_meses.merge(sla_mensal[['mes_str', 'percentual', 'fora']], on='mes_str', how='left').fillna(0)
-        fig_sla = go.Figure([
-            go.Bar(name='Dentro SLA', x=sla_plot['mes_str'], y=sla_plot['percentual'],
-                   text=sla_plot['percentual'].map(lambda x: f"{x:.2f}"), textposition='outside', marker_color='green'),
-            go.Bar(name='Fora SLA', x=sla_plot['mes_str'], y=sla_plot['fora'],
-                   text=sla_plot['fora'].map(lambda x: f"{x:.2f}"), textposition='outside', marker_color='red')
-        ])
-        fig_sla.update_layout(
-            barmode='group',
-            yaxis_title='%',
-            xaxis_title='Mês',
-            title=f'SLA Mensal ({meta_porcentagem}% - {limite_sla}h)'
+if campo_assunto:
+    df_assunto = df_filtrado.dropna(subset=[campo_assunto]).copy()
+    if campo_assunto == "issuetype":
+        df_assunto["assunto"] = df_assunto["issuetype"].apply(
+            lambda x: x.get("name") if isinstance(x, dict) else str(x)
         )
-        st.plotly_chart(fig_sla, use_container_width=True)
-        # Área Solicitante (exceto INTEL)
-        if projeto != 'INTEL':
-            st.subheader("📦 Área Solicitante")
-            df_area = df_proj.dropna(subset=['customfield_13719']).copy()
-            df_area['area'] = df_area['customfield_13719'].apply(lambda x: x.get('value') if isinstance(x, dict) else str(x))
-            filtro_mes_area = st.selectbox(f"Selecione o mês - Área Solicitante ({projeto})", opcoes_filtro_mes, key=f"area_{projeto}")
-            if filtro_mes_area != 'Todos':
-                df_area = df_area[df_area['mes_str'] == filtro_mes_area]
-            dados_area = df_area['area'].value_counts().reset_index()
-            dados_area.columns = ['Área', 'Qtd. Chamados']
-            st.dataframe(dados_area)
+    else:
+        df_assunto["assunto"] = df_assunto[campo_assunto].apply(
+            lambda x: x.get("value") if isinstance(x, dict) else str(x)
+        )
 
-        # Assunto Relacionado
-        st.subheader("📋 Assunto Relacionado")
-        campos_assunto = {
-            'TDS': 'customfield_13712',
-            'INT': 'customfield_13643',
-            'TINE': 'customfield_13699',
-            'INTEL': 'issuetype'
-        }
+    dados_assunto = df_assunto["assunto"].value_counts().reset_index()
+    dados_assunto.columns = ["Assunto Relacionado", "Qtd. Chamados"]
+    st.dataframe(dados_assunto)
 
-        campo_assunto = campos_assunto.get(projeto)
-        if campo_assunto not in df_proj.columns:
-            st.warning(f'O campo "{campo_assunto}" não está presente nos dados deste projeto.')
-        else:
-            df_assunto = df_proj.dropna(subset=[campo_assunto]).copy()
-            if campo_assunto == 'issuetype':
-                df_assunto['assunto'] = df_assunto['issuetype'].apply(lambda x: x.get('name') if isinstance(x, dict) else str(x))
-            else:
-                df_assunto['assunto'] = df_assunto[campo_assunto].apply(lambda x: x.get('value') if isinstance(x, dict) else str(x))
+# Encaminhamentos (Produto e N3)
+st.subheader("🔄 Encaminhamentos")
 
-            filtro_mes_assunto = st.selectbox(f"Selecione o mês - Assunto Relacionado ({projeto})", opcoes_filtro_mes, key=f"assunto_{projeto}")
-            if filtro_mes_assunto != 'Todos':
-                df_assunto = df_assunto[df_assunto['mes_str'] == filtro_mes_assunto]
+col1, col2 = st.columns(2)
 
-            dados_assunto = df_assunto['assunto'].value_counts().reset_index()
-            dados_assunto.columns = ['Assunto Relacionado', 'Qtd. Chamados']
-            st.dataframe(dados_assunto)
+with col1:
+    count_produto = df_filtrado["status"].str.contains("Produto", case=False, na=False).sum()
+    st.metric("Encaminhados Produto", count_produto)
 
-        # Encaminhamentos (somente INT e TDS)
-        if projeto in ['TDS', 'INT']:
-            st.subheader("🔄 Encaminhamentos")
-            filtro_mes_enc = st.selectbox(f"Selecione o mês - Encaminhamentos ({projeto})", opcoes_filtro_mes, key=f"enc_{projeto}")
-            df_enc = df_proj if filtro_mes_enc == 'Todos' else df_proj[df_proj['mes_str'] == filtro_mes_enc]
-            col1, col2 = st.columns(2)
-            with col1:
-                count_produto = df_enc['status'].str.contains("Produto", case=False, na=False).sum()
-                st.metric("Encaminhados Produto", count_produto)
-            with col2:
-                count_n3 = df_enc['escalado_n3_valor'] == "Sim"
-                st.metric("Encaminhados N3", count_n3.sum())
+with col2:
+    if "escalado_n3_valor" in df_filtrado.columns:
+        count_n3 = (df_filtrado["escalado_n3_valor"] == "Sim").sum()
+        st.metric("Encaminhados N3", count_n3)
