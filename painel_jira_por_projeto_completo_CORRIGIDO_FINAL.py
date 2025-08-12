@@ -8,9 +8,9 @@ from datetime import datetime
 st.set_page_config(layout='wide')
 st.title("📊 Painel de Indicadores")
 
-JIRA_URL = "https://tiendanube.atlassian.net"
-EMAIL = st.secrets["jira"]["email"]
-TOKEN = st.secrets["jira"]["token"]
+JIRA_URL = st.secrets['JIRA_URL']
+EMAIL = st.secrets['EMAIL']
+TOKEN = st.secrets['TOKEN']
 auth = HTTPBasicAuth(EMAIL, TOKEN)
 
 PROJETOS = ["TDS", "INT", "TINE", "INTEL"]
