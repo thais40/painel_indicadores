@@ -8,6 +8,11 @@ from datetime import datetime
 st.set_page_config(layout="wide")
 st.title("📊 Painel de Indicadores")
 
+# 🔄 Botão para atualizar dados do Jira manualmente
+if st.button("🔄 Atualizar dados"):
+    st.cache_data.clear()
+    st.rerun()
+
 JIRA_URL = "https://tiendanube.atlassian.net"
 EMAIL = st.secrets["jira"]["email"]
 TOKEN = st.secrets["jira"]["token"]
@@ -105,10 +110,18 @@ for projeto, tab in zip(PROJETOS, tabs):
         # Gráfico: Criados vs Resolvidos
         st.markdown("### 📈 Tickets Criados vs Resolvidos")
         meses_cr = sorted(dfp["mes_created"].dropna().unique())
-        mes_cr = st.selectbox(f"Mês (Criados vs Resolvidos) - {TITULOS[projeto]}", ["Todos"] + [m.strftime("%b/%Y") for m in meses_cr], key=f"cr_{projeto}")
+        anos_cr = sorted(dfp["mes_created"].dt.year.unique())
+        meses_cr = sorted(dfp["mes_created"].dt.month.unique())
+        col_cr1, col_cr2 = st.columns(2)
+        with col_cr1:
+            ano_cr = st.selectbox(f"Ano - {TITULOS[projeto]} (Criados vs Resolvidos)", ["Todos"] + [str(a) for a in anos_cr], key=f"ano_cr_{projeto}")
+        with col_cr2:
+            mes_cr = st.selectbox(f"Mês - {TITULOS[projeto]} (Criados vs Resolvidos)", ["Todos"] + [str(m).zfill(2) for m in meses_cr], key=f"mes_cr_{projeto}") for m in meses_cr], key=f"cr_{projeto}") for m in meses_cr], key=f"cr_{projeto}")
         df_cr = dfp.copy()
+        if ano_cr != "Todos":
+            df_cr = df_cr[df_cr["mes_created"].dt.year == int(ano_cr)]
         if mes_cr != "Todos":
-            df_cr = df_cr[df_cr["mes_created"].dt.strftime("%b/%Y") == mes_cr]
+            df_cr = df_cr[df_cr["mes_created"].dt.month == int(mes_cr)]
         criados = df_cr.groupby("mes_created").size().reset_index(name="Criados")
         resolvidos = df_cr[df_cr["resolved"].notna()].groupby("mes_resolved").size().reset_index(name="Resolvidos")
         criados.rename(columns={"mes_created": "mes_str"}, inplace=True)
