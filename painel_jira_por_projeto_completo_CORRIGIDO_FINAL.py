@@ -105,7 +105,7 @@ for projeto, tab in zip(PROJETOS, tabs):
         # Gráfico: Criados vs Resolvidos
         st.markdown("### 📈 Tickets Criados vs Resolvidos")
         meses_cr = sorted(dfp["mes_created"].dropna().unique())
-        mes_cr = st.selectbox(f"Mês (Criados vs Resolvidos) - {TITULOS[projeto]}", ["Todos"] + [m.strftime("%b/%Y") for m in meses_cr], key=f"cr_{projeto}") for m in meses_cr], key=f"cr_{projeto}")
+        mes_cr = st.selectbox(f"Mês (Criados vs Resolvidos) - {TITULOS[projeto]}", ["Todos"] + [m.strftime("%b/%Y") for m in meses_cr], key=f"cr_{projeto}")
         df_cr = dfp.copy()
         if mes_cr != "Todos":
             df_cr = df_cr[df_cr["mes_created"].dt.strftime("%b/%Y") == mes_cr]
