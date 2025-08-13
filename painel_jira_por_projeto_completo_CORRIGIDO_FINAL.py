@@ -132,7 +132,7 @@ for projeto, tab in zip(PROJETOS, tabs):
         st.plotly_chart(fig, use_container_width=True, key=f"crv_{projeto}")
 
         # SLA
-        st.markdown("### ⏱️ SLA + OKR")
+        st.markdown("### ⏱️ SLA")
         anos_sla = sorted(dfp["mes_resolved"].dt.year.unique())
         meses_sla = sorted(dfp["mes_resolved"].dt.month.unique())
         col_sla1, col_sla2 = st.columns(2)
