@@ -19,6 +19,12 @@ TOKEN = st.secrets['TOKEN']
 auth = HTTPBasicAuth(EMAIL, TOKEN)
 
 PROJETOS = ["TDS", "INT", "TINE", "INTEL"]
+TITULOS = {
+    'TDS': 'Tech Support',
+    'INT': 'Integrations',
+    'TINE': 'IT Support NE',
+    'INTEL': 'Intelligence'
+}
 SLA_CAMPOS = {
     "TDS": "customfield_13744",
     "TINE": "customfield_13744",
