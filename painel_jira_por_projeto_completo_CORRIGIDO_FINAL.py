@@ -132,8 +132,19 @@ for projeto, tab in zip(PROJETOS, tabs):
         st.plotly_chart(fig, use_container_width=True, key=f"crv_{projeto}")
 
         # SLA
-        st.markdown("### ⏱️ SLA")
+        st.markdown("### ⏱️ SLA + OKR")
+        anos_sla = sorted(dfp["mes_resolved"].dt.year.unique())
+        meses_sla = sorted(dfp["mes_resolved"].dt.month.unique())
+        col_sla1, col_sla2 = st.columns(2)
+        with col_sla1:
+            ano_sla = st.selectbox(f"Ano - {TITULOS[projeto]} (SLA)", ["Todos"] + [str(a) for a in anos_sla], key=f"ano_sla_{projeto}")
+        with col_sla2:
+            mes_sla = st.selectbox(f"Mês - {TITULOS[projeto]} (SLA)", ["Todos"] + [str(m).zfill(2) for m in meses_sla], key=f"mes_sla_{projeto}")
         df_sla = dfp[dfp["resolved"].notna()].copy()
+        if ano_sla != "Todos":
+            df_sla = df_sla[df_sla["mes_resolved"].dt.year == int(ano_sla)]
+        if mes_sla != "Todos":
+            df_sla = df_sla[df_sla["mes_resolved"].dt.month == int(mes_sla)]
         df_sla["dentro_sla"] = df_sla["sla_millis"] <= sla_limite
         agrupado = df_sla.groupby("mes_resolved")["dentro_sla"].agg([("Dentro do SLA", "sum"), ("Fora do SLA", lambda x: (~x).sum())]).reset_index()
         agrupado["Total"] = agrupado["Dentro do SLA"] + agrupado["Fora do SLA"]
