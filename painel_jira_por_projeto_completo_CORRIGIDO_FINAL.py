@@ -14,8 +14,8 @@ if st.button("🔄 Atualizar dados"):
     st.rerun()
 
 JIRA_URL = "https://tiendanube.atlassian.net"
-EMAIL = st.secrets["jira"]["email"]
-TOKEN = st.secrets["jira"]["token"]
+EMAIL = st.secrets['EMAIL']
+TOKEN = st.secrets['TOKEN']
 auth = HTTPBasicAuth(EMAIL, TOKEN)
 
 PROJETOS = ["TDS", "INT", "TINE", "INTEL"]
