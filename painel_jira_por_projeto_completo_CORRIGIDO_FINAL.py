@@ -116,7 +116,7 @@ for projeto, tab in zip(PROJETOS, tabs):
         with col_cr1:
             ano_cr = st.selectbox(f"Ano - {TITULOS[projeto]} (Criados vs Resolvidos)", ["Todos"] + [str(a) for a in anos_cr], key=f"ano_cr_{projeto}")
         with col_cr2:
-            mes_cr = st.selectbox(f"Mês - {TITULOS[projeto]} (Criados vs Resolvidos)", ["Todos"] + [str(m).zfill(2) for m in meses_cr], key=f"mes_cr_{projeto}") for m in meses_cr], key=f"cr_{projeto}") for m in meses_cr], key=f"cr_{projeto}")
+            mes_cr = st.selectbox(f"Mês - {TITULOS[projeto]} (Criados vs Resolvidos)", ["Todos"] + [str(m).zfill(2) for m in meses_cr], key=f"mes_cr_{projeto}")
         df_cr = dfp.copy()
         if ano_cr != "Todos":
             df_cr = df_cr[df_cr["mes_created"].dt.year == int(ano_cr)]
