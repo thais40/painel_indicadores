@@ -132,19 +132,34 @@ for projeto, tab in zip(PROJETOS, tabs):
         agrupado["% Dentro SLA texto"] = agrupado["% Dentro SLA"].apply(lambda x: f"{x:.1f}%")
         agrupado["% Fora SLA texto"] = agrupado["% Fora SLA"].apply(lambda x: f"{x:.1f}%")
 
-        fig_sla = px.bar(
+       # Derrete o DataFrame
+        agrupado_meltado = pd.melt(
             agrupado,
+            id_vars=["mes"],
+            value_vars=["% Dentro SLA", "% Fora SLA"],
+            var_name="SLA Status",
+            value_name="Porcentagem"
+        )
+        
+        # Adiciona os textos com %
+        agrupado_meltado["Texto"] = agrupado_meltado["Porcentagem"].apply(lambda x: f"{x:.1f}%")
+        
+        # Gráfico de barras com texto formatado
+        fig_sla = px.bar(
+            agrupado_meltado,
             x="mes",
-            y=["% Dentro SLA", "% Fora SLA"],
+            y="Porcentagem",
+            color="SLA Status",
+            text="Texto",
             barmode="group",
-            text=[agrupado["% Dentro SLA texto"], agrupado["% Fora SLA texto"]],
             color_discrete_map={
                 "% Dentro SLA": "green",
                 "% Fora SLA": "red"
             },
             height=400
         )
-
+        
+        # OKR anotado no topo
         okr_total = agrupado["Dentro do SLA"].sum() / agrupado["Total"].sum() * 100 if agrupado["Total"].sum() else 0
         fig_sla.add_annotation(
             text=f"🎯 OKR: {okr_total:.1f}% - Meta: {sla_meta:.2f}%",
@@ -155,7 +170,7 @@ for projeto, tab in zip(PROJETOS, tabs):
             showarrow=False,
             font=dict(size=14, color="green" if okr_total >= sla_meta else "red")
         )
-
+        
         st.plotly_chart(fig_sla, use_container_width=True, key=f"sla_{projeto}_plot")
 
         # Criados vs Resolvidos
