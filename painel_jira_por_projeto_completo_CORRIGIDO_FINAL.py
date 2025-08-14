@@ -131,70 +131,65 @@ for projeto, tab in zip(PROJETOS, tabs):
         fig = px.bar(grafico, x="mes_str", y=["Criados", "Resolvidos"], barmode="group", text_auto=True, height=400)
         st.plotly_chart(fig, use_container_width=True, key=f"crv_{projeto}")
 
-       # SLA
+        # SLA
         st.markdown("### ⏱️ SLA")
-        
-        col1, col2 = st.columns(2)
-        anos_sla = sorted(dfp["mes_resolved"].dropna().dt.year.unique())
-        meses_sla = sorted(dfp["mes_resolved"].dropna().dt.month.unique())
-        
-        with col1:
-            ano_sla = st.selectbox(f"Ano - {TITULOS[projeto]} (SLA)", ["Todos"] + [str(a) for a in anos_sla], key=f"{projeto}_ano_sla")
-        with col2:
-            mes_sla = st.selectbox(f"Mês - {TITULOS[projeto]} (SLA)", ["Todos"] + [f"{m:02d}" for m in meses_sla], key=f"{projeto}_mes_sla")
-        
+        col_ano, col_mes = st.columns(2)
+        with col_ano:
+            anos_disponiveis = sorted(dfp["resolved"].dropna().dt.year.unique())
+            filtro_ano = st.selectbox(f"Ano - {TITULOS[projeto]} (SLA)", ["Todos"] + list(map(str, anos_disponiveis)), key=f"sla_ano_{projeto}")
+        with col_mes:
+            meses_disponiveis = sorted(dfp["resolved"].dropna().dt.strftime("%b").unique().tolist())
+            filtro_mes = st.selectbox(f"Mês - {TITULOS[projeto]} (SLA)", ["Todos"] + meses_disponiveis, key=f"sla_mes_{projeto}")
+
         df_sla = dfp[dfp["resolved"].notna()].copy()
-        if ano_sla != "Todos":
-            df_sla = df_sla[df_sla["resolved"].dt.year.astype(str) == ano_sla]
-        if mes_sla != "Todos":
-            df_sla = df_sla[df_sla["resolved"].dt.month.astype(str) == mes_sla]
-        
+        df_sla["ano"] = df_sla["resolved"].dt.year
+        df_sla["mes"] = df_sla["resolved"].dt.strftime("%b")
+        df_sla["mes_full"] = df_sla["resolved"].dt.to_period("M").dt.to_timestamp()
+
+        if filtro_ano != "Todos":
+            df_sla = df_sla[df_sla["ano"] == int(filtro_ano)]
+        if filtro_mes != "Todos":
+            df_sla = df_sla[df_sla["mes"] == filtro_mes]
+
         sla_limite = SLA_HORAS[projeto] * 60 * 60 * 1000
         sla_meta = SLA_METAS[projeto]
-        
         df_sla["dentro_sla"] = df_sla["sla_millis"] <= sla_limite
-        agrupado = df_sla.groupby("mes_resolved")["dentro_sla"].agg(
-            Dentro=("sum"), Fora=(lambda x: (~x).sum())
-        ).reset_index()
-        
-        agrupado["Total"] = agrupado["Dentro"] + agrupado["Fora"]
-        agrupado["% Dentro SLA"] = (agrupado["Dentro"] / agrupado["Total"] * 100).round(1)
-        agrupado["% Fora SLA"] = (agrupado["Fora"] / agrupado["Total"] * 100).round(1)
-        agrupado["mes"] = agrupado["mes_resolved"].dt.strftime("%b/%Y")
-        
-        df_sla_plot = agrupado[["mes", "% Dentro SLA", "% Fora SLA"]].rename(
-            columns={"% Dentro SLA": "% Dentro SLA", "% Fora SLA": "% Fora SLA"}
-        )
-        
+
+        agrupado = df_sla.groupby("mes_full")["dentro_sla"].agg([
+            ("Dentro do SLA", lambda x: round(x.sum() / len(x) * 100, 1)),
+            ("Fora do SLA", lambda x: round((~x).sum() / len(x) * 100, 1))
+        ]).reset_index()
+        agrupado["mes"] = agrupado["mes_full"].dt.strftime("%b/%Y")
+
         fig_sla = px.bar(
-            df_sla_plot,
+            agrupado,
             x="mes",
-            y=["% Dentro SLA", "% Fora SLA"],
+            y=["Dentro do SLA", "Fora do SLA"],
             barmode="group",
             text_auto=True,
             color_discrete_map={
-                "% Dentro SLA": "green",
-                "% Fora SLA": "red"
+                "Dentro do SLA": "green",
+                "Fora do SLA": "red"
             },
             height=450
         )
-        
-        okr_total = (
-            agrupado["Dentro"].sum() / agrupado["Total"].sum() * 100
-            if agrupado["Total"].sum() else 0
-        )
-        
+
+        total_dentro = agrupado["Dentro do SLA"].sum()
+        total_fora = agrupado["Fora do SLA"].sum()
+        total_okr = total_dentro + total_fora
+        percentual_okr = total_dentro / total_okr * 100 if total_okr else 0
+
         fig_sla.add_annotation(
-            text=f"🎯 OKR: {okr_total:.1f}%",
+            text=f"🎯 OKR: {percentual_okr:.1f}% - Meta: {sla_meta:.1f}%",
             x=0.01,
-            y=0.95,
+            y=1.15,
             xref="paper",
             yref="paper",
             showarrow=False,
-            font=dict(size=14, color="green" if okr_total >= sla_meta else "red")
+            font=dict(size=16, color="green" if percentual_okr >= sla_meta else "red")
         )
-        
-        st.plotly_chart(fig_sla, use_container_width=True, key=f"sla_{projeto}")
+
+        st.plotly_chart(fig_sla, use_container_width=True, key=f"sla_{projeto}_plot")
 
         # Assunto Relacionado
         st.markdown("### 🧾 Assunto Relacionado")
