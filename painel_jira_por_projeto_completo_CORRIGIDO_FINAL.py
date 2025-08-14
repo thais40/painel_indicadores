@@ -132,7 +132,7 @@ for projeto, tab in zip(PROJETOS, tabs):
         st.plotly_chart(fig, use_container_width=True, key=f"crv_{projeto}")
 
         # SLA
-        st.markdown("### ⏱️ SLA + OKR")
+        st.markdown("### ⏱️ SLA")
         
         df_sla = dfp[dfp["resolved"].notna()].copy()
         df_sla["dentro_sla"] = df_sla["sla_millis"] <= sla_limite
