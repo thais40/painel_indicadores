@@ -107,35 +107,6 @@ for projeto, tab in zip(PROJETOS, tabs):
         sla_limite = SLA_HORAS[projeto] * 60 * 60 * 1000
         sla_meta = SLA_METAS[projeto]
 
-        # Gráfico: SLA + OKR (ajustado)
-        st.markdown("### ⏱️ SLA + OKR")
-        df_sla = dfp[dfp["resolved"].notna()].copy()
-        df_sla["dentro_sla"] = df_sla["sla_millis"] <= sla_limite
-        agrupado = df_sla.groupby("mes_resolved")["dentro_sla"].agg([
-            ("% Dentro SLA", lambda x: round((x.sum() / len(x)) * 100, 1) if len(x) else 0),
-            ("% Fora SLA", lambda x: round((~x).sum() / len(x) * 100, 1) if len(x) else 0)
-        ]).reset_index()
-        agrupado["mes"] = agrupado["mes_resolved"].dt.strftime("%b/%Y")
-        df_melted = agrupado.melt(id_vars="mes", value_vars=["% Dentro SLA", "% Fora SLA"],
-                                  var_name="variable", value_name="value")
-        fig_sla = px.bar(df_melted, x="mes", y="value", color="variable",
-                         barmode="group", text_auto=True, height=400,
-                         color_discrete_map={"% Dentro SLA": "green", "% Fora SLA": "red"})
-
-        # OKR reposicionado acima do gráfico
-        okr_total = agrupado["% Dentro SLA"].mean() if not agrupado.empty else 0
-        fig_sla.update_layout(
-            annotations=[
-                dict(
-                    text=f"🎯 OKR: {okr_total:.1f}% — Meta: {sla_meta}%",
-                    xref="paper", yref="paper",
-                    x=0, y=1.15, showarrow=False,
-                    font=dict(size=16, color="green" if okr_total >= sla_meta else "red")
-                )
-            ]
-        )
-        st.plotly_chart(fig_sla, use_container_width=True, key=f"sla_{projeto}_plot")
-
         # Gráfico: Criados vs Resolvidos
         st.markdown("### 📈 Tickets Criados vs Resolvidos")
         meses_cr = sorted(dfp["mes_created"].dropna().unique())
