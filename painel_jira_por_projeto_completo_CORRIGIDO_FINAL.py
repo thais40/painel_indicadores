@@ -131,35 +131,43 @@ for projeto, tab in zip(PROJETOS, tabs):
         fig = px.bar(grafico, x="mes_str", y=["Criados", "Resolvidos"], barmode="group", text_auto=True, height=400)
         st.plotly_chart(fig, use_container_width=True, key=f"crv_{projeto}")
 
-        # SLA
+       # SLA
         st.markdown("### ⏱️ SLA")
         
+        col1, col2 = st.columns(2)
+        anos_sla = sorted(dfp["mes_resolved"].dropna().dt.year.unique())
+        meses_sla = sorted(dfp["mes_resolved"].dropna().dt.month.unique())
+        
+        with col1:
+            ano_sla = st.selectbox(f"Ano - {TITULOS[projeto]} (SLA)", ["Todos"] + [str(a) for a in anos_sla], key=f"{projeto}_ano_sla")
+        with col2:
+            mes_sla = st.selectbox(f"Mês - {TITULOS[projeto]} (SLA)", ["Todos"] + [f"{m:02d}" for m in meses_sla], key=f"{projeto}_mes_sla")
+        
         df_sla = dfp[dfp["resolved"].notna()].copy()
-        df_sla["dentro_sla"] = df_sla["sla_millis"] <= sla_limite
-        
-        # Filtros personalizados
-        anos_sla = sorted(df_sla["mes_resolved"].dt.year.dropna().unique())
-        ano_sla = st.selectbox(f"Ano - {TITULOS[projeto]} (SLA)", ["Todos"] + [str(a) for a in anos_sla], key=f"ano_sla_{projeto}")
-        meses_sla = sorted(df_sla["mes_resolved"].dt.strftime("%b/%Y").dropna().unique())
-        mes_sla = st.selectbox(f"Mês - {TITULOS[projeto]} (SLA)", ["Todos"] + list(meses_sla), key=f"mes_sla_{projeto}")
-        
         if ano_sla != "Todos":
-            df_sla = df_sla[df_sla["mes_resolved"].dt.year == int(ano_sla)]
+            df_sla = df_sla[df_sla["resolved"].dt.year.astype(str) == ano_sla]
         if mes_sla != "Todos":
-            df_sla = df_sla[df_sla["mes_resolved"].dt.strftime("%b/%Y") == mes_sla]
+            df_sla = df_sla[df_sla["resolved"].dt.month.astype(str) == mes_sla]
         
+        sla_limite = SLA_HORAS[projeto] * 60 * 60 * 1000
+        sla_meta = SLA_METAS[projeto]
+        
+        df_sla["dentro_sla"] = df_sla["sla_millis"] <= sla_limite
         agrupado = df_sla.groupby("mes_resolved")["dentro_sla"].agg(
-            dentro="sum", total="count"
+            Dentro=("sum"), Fora=(lambda x: (~x).sum())
         ).reset_index()
-        agrupado["fora"] = agrupado["total"] - agrupado["dentro"]
-        agrupado["% Dentro SLA"] = (agrupado["dentro"] / agrupado["total"] * 100).round(1)
-        agrupado["% Fora SLA"] = (agrupado["fora"] / agrupado["total"] * 100).round(1)
+        
+        agrupado["Total"] = agrupado["Dentro"] + agrupado["Fora"]
+        agrupado["% Dentro SLA"] = (agrupado["Dentro"] / agrupado["Total"] * 100).round(1)
+        agrupado["% Fora SLA"] = (agrupado["Fora"] / agrupado["Total"] * 100).round(1)
         agrupado["mes"] = agrupado["mes_resolved"].dt.strftime("%b/%Y")
         
-        okr_total = agrupado["dentro"].sum() / agrupado["total"].sum() * 100 if agrupado["total"].sum() else 0
+        df_sla_plot = agrupado[["mes", "% Dentro SLA", "% Fora SLA"]].rename(
+            columns={"% Dentro SLA": "% Dentro SLA", "% Fora SLA": "% Fora SLA"}
+        )
         
         fig_sla = px.bar(
-            agrupado,
+            df_sla_plot,
             x="mes",
             y=["% Dentro SLA", "% Fora SLA"],
             barmode="group",
@@ -168,18 +176,25 @@ for projeto, tab in zip(PROJETOS, tabs):
                 "% Dentro SLA": "green",
                 "% Fora SLA": "red"
             },
-            height=400
+            height=450
+        )
+        
+        okr_total = (
+            agrupado["Dentro"].sum() / agrupado["Total"].sum() * 100
+            if agrupado["Total"].sum() else 0
         )
         
         fig_sla.add_annotation(
             text=f"🎯 OKR: {okr_total:.1f}%",
-            x=0.98, y=0.95,
-            xref="paper", yref="paper",
+            x=0.01,
+            y=0.95,
+            xref="paper",
+            yref="paper",
             showarrow=False,
             font=dict(size=14, color="green" if okr_total >= sla_meta else "red")
         )
         
-        st.plotly_chart(fig_sla, use_container_width=True, key=f"sla_{projeto}_plot")
+        st.plotly_chart(fig_sla, use_container_width=True, key=f"sla_{projeto}")
 
         # Assunto Relacionado
         st.markdown("### 🧾 Assunto Relacionado")
