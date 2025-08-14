@@ -1,185 +1,247 @@
 import streamlit as st
 import pandas as pd
+import plotly.express as px
 import requests
 from requests.auth import HTTPBasicAuth
 from datetime import datetime
-import plotly.graph_objects as go
-from sla_utils import extrair_sla_millis
 
-st.set_page_config(layout='wide')
-st.title('Painel de Indicadores')
+st.set_page_config(layout="wide")
+st.title("📊 Painel de Indicadores")
 
 # 🔄 Botão para atualizar dados do Jira manualmente
 if st.button("🔄 Atualizar dados"):
     st.cache_data.clear()
     st.rerun()
 
-JIRA_URL = st.secrets['JIRA_URL']
+JIRA_URL = "https://tiendanube.atlassian.net"
 EMAIL = st.secrets['EMAIL']
 TOKEN = st.secrets['TOKEN']
 auth = HTTPBasicAuth(EMAIL, TOKEN)
 
-PROJETOS = ['TDS', 'INT', 'TINE', 'INTEL']
+PROJETOS = ["TDS", "INT", "TINE", "INTEL"]
 TITULOS = {
-    'TDS': 'Tech Support',
-    'INT': 'Integrations',
-    'TINE': 'IT Support NE',
-    'INTEL': 'Intelligence'
+    "TDS": "Tech Support",
+    "INT": "Integrations",
+    "TINE": "IT Support NE",
+    "INTEL": "Intelligence"
 }
-CUTOFF_DATE = '2024-01-01'
-SLA_METAS = {'TDS': 98, 'INT': 96, 'TINE': 96, 'INTEL': 96}
+SLA_CAMPOS = {
+    "TDS": "customfield_13744",
+    "TINE": "customfield_13744",
+    "INT": "customfield_13686",
+    "INTEL": "customfield_13686"
+}
+CAMPOS_ASSUNTO = {
+    "TDS": "customfield_13712",
+    "INT": "customfield_13643",
+    "TINE": "customfield_13699",
+    "INTEL": "issuetype"
+}
+CAMPO_AREA = "customfield_13719"
+CAMPO_N3 = "customfield_13659"
+SLA_METAS = {"TDS": 98, "INT": 96, "TINE": 96, "INTEL": 96}
+SLA_HORAS = {"TDS": 40, "INT": 40, "TINE": 40, "INTEL": 80}
 
-@st.cache_data(show_spinner=True)
+def extrair_sla_millis(sla_field):
+    try:
+        if sla_field.get("completedCycles"):
+            return sla_field["completedCycles"][0].get("elapsedTime", {}).get("millis")
+        if sla_field.get("ongoingCycle"):
+            return sla_field["ongoingCycle"].get("elapsedTime", {}).get("millis")
+    except:
+        return None
+    return None
+
+@st.cache_data(show_spinner="🔄 Buscando dados do Jira...")
 def buscar_issues():
-    headers = {"Accept": "application/json"}
-    all_issues = []
-
+    todos = []
     for projeto in PROJETOS:
-        start_at = 0
+        start = 0
         while True:
-            jql = f'project = "{projeto}" AND created >= "{CUTOFF_DATE}" ORDER BY created ASC'
+            jql = f'project = "{projeto}" AND created >= "2024-01-01" ORDER BY created ASC'
             params = {
                 "jql": jql,
-                "startAt": start_at,
+                "startAt": start,
                 "maxResults": 100,
-                "fields": (
-                    "summary,created,resolutiondate,status,"
-                    "customfield_13686,customfield_13744,"
-                    "customfield_13719,customfield_13712,customfield_13643,"
-                    "customfield_13699,customfield_13659,customfield_10010,"
-                    "issuetype"
-                )
+                "fields": "created,resolutiondate,status,issuetype," +
+                          f"{SLA_CAMPOS[projeto]},{CAMPOS_ASSUNTO[projeto]},{CAMPO_AREA},{CAMPO_N3}"
             }
-            res = requests.get(f"{JIRA_URL}/rest/api/3/search", headers=headers, auth=auth, params=params)
+            res = requests.get(f"{JIRA_URL}/rest/api/3/search", auth=auth, params=params)
             if res.status_code != 200:
                 break
-            issues = res.json().get("issues", [])
-            if not issues:
+            dados = res.json().get("issues", [])
+            if not dados:
                 break
-            for issue in issues:
+            for issue in dados:
                 f = issue["fields"]
-                if projeto in ['TDS', 'TINE']:
-                    sla_millis = extrair_sla_millis(f.get("customfield_13744", {}))
-                else:
-                    sla_millis = extrair_sla_millis(f.get("customfield_13686", {}))
-                all_issues.append({
+                sla_raw = f.get(SLA_CAMPOS[projeto], {})
+                todos.append({
                     "projeto": projeto,
-                    "created": f["created"],
+                    "created": f.get("created"),
                     "resolved": f.get("resolutiondate"),
-                    "status": f.get("status", {}).get("name", ""),
-                    "sla_millis": sla_millis,
-                    "customfield_13719": f.get("customfield_13719"),
-                    "customfield_13712": f.get("customfield_13712"),
-                    "customfield_13643": f.get("customfield_13643"),
-                    "customfield_13699": f.get("customfield_13699"),
-                    "customfield_13659": f.get("customfield_13659"),
-                    "customfield_10010": f.get("customfield_10010"),
-                    "issuetype": f.get("issuetype")
+                    "status": f.get("status", {}).get("name"),
+                    "sla_millis": extrair_sla_millis(sla_raw),
+                    "area": f.get(CAMPO_AREA),
+                    "assunto": f.get(CAMPOS_ASSUNTO[projeto]),
+                    "issuetype": f.get("issuetype"),
+                    "n3": f.get(CAMPO_N3)
                 })
-            start_at += 100
+            start += 100
+    return pd.DataFrame(todos)
 
-    return pd.DataFrame(all_issues)
-
+# ===== CARREGAR DADOS =====
 df = buscar_issues()
-df['created'] = pd.to_datetime(df['created'])
-df['resolved'] = pd.to_datetime(df['resolved'])
-df['mes_str'] = pd.to_datetime(df['created']).dt.to_period("M").dt.to_timestamp().dt.strftime("%Y-%m")
-df['escalado_n3_valor'] = df['customfield_13659'].apply(lambda x: x.get('value') if isinstance(x, dict) else None)
+df["created"] = pd.to_datetime(df["created"])
+df["resolved"] = pd.to_datetime(df["resolved"])
+df["mes_created"] = df["created"].dt.to_period("M").dt.to_timestamp()
+df["mes_resolved"] = df["resolved"].dt.to_period("M").dt.to_timestamp()
 
-abas = st.tabs([TITULOS[projeto] for projeto in PROJETOS])
+# ===== VISUALIZAÇÃO DE DADOS =====
+tabs = st.tabs([TITULOS[p] for p in PROJETOS])
 
-for projeto, aba in zip(PROJETOS, abas):
-    with aba:
-        st.header(f'📊 Projeto: {TITULOS[projeto]}')
-        df_proj = df[df['projeto'] == projeto].copy()
-        meses = sorted(df['mes_str'].unique(), key=lambda x: pd.to_datetime(x, format='%Y-%m'))
-        base_meses = pd.DataFrame({'mes_str': meses})
-        opcoes_filtro_mes = ['Todos'] + meses
+for projeto, tab in zip(PROJETOS, tabs):
+    with tab:
+        st.subheader(f"📂 Projeto: {TITULOS[projeto]}")
+        dfp = df[df["projeto"] == projeto].copy()
+        sla_limite = SLA_HORAS[projeto] * 60 * 60 * 1000
+        sla_meta = SLA_METAS[projeto]
+
+        # === FILTROS SLA ===
+        anos_sla = sorted(dfp["resolved"].dt.year.dropna().unique())
+        ano_selecionado_sla = st.selectbox(f"Ano - {TITULOS[projeto]} (SLA)", ["Todos"] + list(map(str, anos_sla)), key=f"ano_sla_{projeto}")
+        meses_sla = sorted(dfp["resolved"].dt.strftime("%b/%Y").dropna().unique())
+        mes_selecionado_sla = st.selectbox(f"Mês - {TITULOS[projeto]} (SLA)", ["Todos"] + list(meses_sla), key=f"mes_sla_{projeto}")
+
+        df_sla = dfp[dfp["resolved"].notna()].copy()
+        if ano_selecionado_sla != "Todos":
+            df_sla = df_sla[df_sla["resolved"].dt.year == int(ano_selecionado_sla)]
+        if mes_selecionado_sla != "Todos":
+            df_sla = df_sla[df_sla["resolved"].dt.strftime("%b/%Y") == mes_selecionado_sla]
+
+        df_sla["dentro_sla"] = df_sla["sla_millis"] <= sla_limite
+        agrupado = df_sla.groupby("mes_resolved")["dentro_sla"].agg([
+            ("Dentro do SLA", "sum"),
+            ("Fora do SLA", lambda x: (~x).sum())
+        ]).reset_index()
+
+        agrupado["Total"] = agrupado["Dentro do SLA"] + agrupado["Fora do SLA"]
+        agrupado["% Dentro SLA"] = (agrupado["Dentro do SLA"] / agrupado["Total"] * 100).round(1)
+        agrupado["% Fora SLA"] = (agrupado["Fora do SLA"] / agrupado["Total"] * 100).round(1)
+        agrupado["mes"] = agrupado["mes_resolved"].dt.strftime("%b/%Y")
+
+        agrupado["% Dentro SLA texto"] = agrupado["% Dentro SLA"].apply(lambda x: f"{x:.1f}%")
+        agrupado["% Fora SLA texto"] = agrupado["% Fora SLA"].apply(lambda x: f"{x:.1f}%")
+
+        fig_sla = px.bar(
+            agrupado,
+            x="mes",
+            y=["% Dentro SLA", "% Fora SLA"],
+            barmode="group",
+            text=[agrupado["% Dentro SLA texto"], agrupado["% Fora SLA texto"]],
+            color_discrete_map={
+                "% Dentro SLA": "green",
+                "% Fora SLA": "red"
+            },
+            height=400
+        )
+
+        okr_total = agrupado["Dentro do SLA"].sum() / agrupado["Total"].sum() * 100 if agrupado["Total"].sum() else 0
+        fig_sla.add_annotation(
+            text=f"🎯 OKR: {okr_total:.1f}% - Meta: {sla_meta:.2f}%",
+            x=0.5,
+            y=1.13,
+            xref="paper",
+            yref="paper",
+            showarrow=False,
+            font=dict(size=14, color="green" if okr_total >= sla_meta else "red")
+        )
+
+        st.plotly_chart(fig_sla, use_container_width=True, key=f"sla_{projeto}_plot")
 
         # Criados vs Resolvidos
-        st.subheader("📈 Criados vs Resolvidos")
-        criados = df_proj.groupby('mes_str')['created'].count().reset_index(name='Criados')
-        resolvidos = df_proj[df_proj['resolved'].notna()].groupby('mes_str')['resolved'].count().reset_index(name='Resolvidos')
-        grafico = base_meses.merge(criados, on='mes_str', how='left').merge(resolvidos, on='mes_str', how='left').fillna(0)
-        fig = go.Figure()
-        fig.add_bar(x=grafico['mes_str'], y=grafico['Criados'], name='Criados', text=grafico['Criados'], textposition='outside')
-        fig.add_bar(x=grafico['mes_str'], y=grafico['Resolvidos'], name='Resolvidos', text=grafico['Resolvidos'], textposition='outside')
-        fig.update_layout(barmode='group', xaxis_title='Mês', yaxis_title='Chamados')
-        st.plotly_chart(fig, use_container_width=True)
-
-        # SLA por Mês com meta e limite por projeto
-        st.subheader("⏱️ SLA por Mês")
-        df_sla = df_proj.dropna(subset=['sla_millis']).copy()
-        df_sla['sla_horas'] = df_sla['sla_millis'] / (1000 * 60 * 60)
-        limite_sla = 80 if projeto == 'INTEL' else 40
-        meta_porcentagem = SLA_METAS[projeto]
-        df_sla['dentro_sla'] = df_sla['sla_horas'] <= limite_sla
-        df_sla['mes_str'] = df_sla['created'].dt.to_period("M").dt.to_timestamp().dt.strftime("%Y-%m")
-        sla_mensal = df_sla.groupby('mes_str')['dentro_sla'].mean().reset_index()
-        sla_mensal['percentual'] = (sla_mensal['dentro_sla'] * 100).round(2)
-        sla_mensal['fora'] = (100 - sla_mensal['percentual']).round(2)
-        sla_plot = base_meses.merge(sla_mensal[['mes_str', 'percentual', 'fora']], on='mes_str', how='left').fillna(0)
-        fig_sla = go.Figure([
-            go.Bar(name='Dentro SLA', x=sla_plot['mes_str'], y=sla_plot['percentual'],
-                   text=sla_plot['percentual'].map(lambda x: f"{x:.2f}"), textposition='outside', marker_color='green'),
-            go.Bar(name='Fora SLA', x=sla_plot['mes_str'], y=sla_plot['fora'],
-                   text=sla_plot['fora'].map(lambda x: f"{x:.2f}"), textposition='outside', marker_color='red')
-        ])
-        fig_sla.update_layout(
-            barmode='group',
-            yaxis_title='%',
-            xaxis_title='Mês',
-            title=f'SLA Mensal ({meta_porcentagem}% - {limite_sla}h)'
-        )
-        st.plotly_chart(fig_sla, use_container_width=True)
-        # Área Solicitante (exceto INTEL)
-        if projeto != 'INTEL':
-            st.subheader("📦 Área Solicitante")
-            df_area = df_proj.dropna(subset=['customfield_13719']).copy()
-            df_area['area'] = df_area['customfield_13719'].apply(lambda x: x.get('value') if isinstance(x, dict) else str(x))
-            filtro_mes_area = st.selectbox(f"Selecione o mês - Área Solicitante ({projeto})", opcoes_filtro_mes, key=f"area_{projeto}")
-            if filtro_mes_area != 'Todos':
-                df_area = df_area[df_area['mes_str'] == filtro_mes_area]
-            dados_area = df_area['area'].value_counts().reset_index()
-            dados_area.columns = ['Área', 'Qtd. Chamados']
-            st.dataframe(dados_area)
+        st.markdown("### 📈 Tickets Criados vs Resolvidos")
+        anos_cr = sorted(dfp["mes_created"].dt.year.unique())
+        meses_cr = sorted(dfp["mes_created"].dt.month.unique())
+        col_cr1, col_cr2 = st.columns(2)
+        with col_cr1:
+            ano_cr = st.selectbox(f"Ano - {TITULOS[projeto]}", ["Todos"] + [str(a) for a in anos_cr], key=f"ano_cr_{projeto}")
+        with col_cr2:
+            mes_cr = st.selectbox(f"Mês - {TITULOS[projeto]}", ["Todos"] + [str(m).zfill(2) for m in meses_cr], key=f"mes_cr_{projeto}")
+        df_cr = dfp.copy()
+        if ano_cr != "Todos":
+            df_cr = df_cr[df_cr["mes_created"].dt.year == int(ano_cr)]
+        if mes_cr != "Todos":
+            df_cr = df_cr[df_cr["mes_created"].dt.month == int(mes_cr)]
+        criados = df_cr.groupby("mes_created").size().reset_index(name="Criados")
+        resolvidos = df_cr[df_cr["resolved"].notna()].groupby("mes_resolved").size().reset_index(name="Resolvidos")
+        criados.rename(columns={"mes_created": "mes_str"}, inplace=True)
+        resolvidos.rename(columns={"mes_resolved": "mes_str"}, inplace=True)
+        grafico = pd.merge(criados, resolvidos, how="outer", on="mes_str").fillna(0).sort_values("mes_str")
+        grafico["mes_str"] = grafico["mes_str"].dt.strftime("%b/%Y")
+        fig = px.bar(grafico, x="mes_str", y=["Criados", "Resolvidos"], barmode="group", text_auto=True, height=400)
+        st.plotly_chart(fig, use_container_width=True, key=f"crv_{projeto}")
 
         # Assunto Relacionado
-        st.subheader("📋 Assunto Relacionado")
-        campos_assunto = {
-            'TDS': 'customfield_13712',
-            'INT': 'customfield_13643',
-            'TINE': 'customfield_13699',
-            'INTEL': 'issuetype'
-        }
-
-        campo_assunto = campos_assunto.get(projeto)
-        if campo_assunto not in df_proj.columns:
-            st.warning(f'O campo "{campo_assunto}" não está presente nos dados deste projeto.')
+        st.markdown("### 🧾 Assunto Relacionado")
+        anos_ass = sorted(dfp["mes_created"].dt.year.unique())
+        meses_ass = sorted(dfp["mes_created"].dt.month.unique())
+        col_ass1, col_ass2 = st.columns(2)
+        with col_ass1:
+            ano_ass = st.selectbox(f"Ano - {TITULOS[projeto]} (Assunto)", ["Todos"] + [str(a) for a in anos_ass], key=f"ano_ass_{projeto}")
+        with col_ass2:
+            mes_ass = st.selectbox(f"Mês - {TITULOS[projeto]} (Assunto)", ["Todos"] + [str(m).zfill(2) for m in meses_ass], key=f"mes_ass_{projeto}")
+        df_ass = dfp.copy()
+        if ano_ass != "Todos":
+            df_ass = df_ass[df_ass["mes_created"].dt.year == int(ano_ass)]
+        if mes_ass != "Todos":
+            df_ass = df_ass[df_ass["mes_created"].dt.month == int(mes_ass)]
+        if CAMPOS_ASSUNTO[projeto] == "issuetype":
+            df_ass["assunto_nome"] = df_ass["issuetype"].apply(lambda x: x.get("name") if isinstance(x, dict) else str(x))
         else:
-            df_assunto = df_proj.dropna(subset=[campo_assunto]).copy()
-            if campo_assunto == 'issuetype':
-                df_assunto['assunto'] = df_assunto['issuetype'].apply(lambda x: x.get('name') if isinstance(x, dict) else str(x))
-            else:
-                df_assunto['assunto'] = df_assunto[campo_assunto].apply(lambda x: x.get('value') if isinstance(x, dict) else str(x))
+            df_ass["assunto_nome"] = df_ass["assunto"].apply(lambda x: x.get("value") if isinstance(x, dict) else str(x))
+        assunto_count = df_ass["assunto_nome"].value_counts().reset_index()
+        assunto_count.columns = ["Assunto", "Qtd"]
+        st.dataframe(assunto_count)
 
-            filtro_mes_assunto = st.selectbox(f"Selecione o mês - Assunto Relacionado ({projeto})", opcoes_filtro_mes, key=f"assunto_{projeto}")
-            if filtro_mes_assunto != 'Todos':
-                df_assunto = df_assunto[df_assunto['mes_str'] == filtro_mes_assunto]
+        # Área Solicitante
+        if projeto != "INTEL":
+            st.markdown("### 📦 Área Solicitante")
+            anos_area = sorted(dfp["mes_created"].dt.year.unique())
+            meses_area = sorted(dfp["mes_created"].dt.month.unique())
+            col_ar1, col_ar2 = st.columns(2)
+            with col_ar1:
+                ano_area = st.selectbox(f"Ano - {TITULOS[projeto]} (Área)", ["Todos"] + [str(a) for a in anos_area], key=f"ano_area_{projeto}")
+            with col_ar2:
+                mes_area = st.selectbox(f"Mês - {TITULOS[projeto]} (Área)", ["Todos"] + [str(m).zfill(2) for m in meses_area], key=f"mes_area_{projeto}")
+            df_area = dfp.copy()
+            if ano_area != "Todos":
+                df_area = df_area[df_area["mes_created"].dt.year == int(ano_area)]
+            if mes_area != "Todos":
+                df_area = df_area[df_area["mes_created"].dt.month == int(mes_area)]
+            df_area["area_nome"] = df_area["area"].apply(lambda x: x.get("value") if isinstance(x, dict) else str(x))
+            area_count = df_area["area_nome"].value_counts().reset_index()
+            area_count.columns = ["Área", "Qtd"]
+            st.dataframe(area_count)
 
-            dados_assunto = df_assunto['assunto'].value_counts().reset_index()
-            dados_assunto.columns = ['Assunto Relacionado', 'Qtd. Chamados']
-            st.dataframe(dados_assunto)
+        # Encaminhamentos
+        st.markdown("### 🔄 Encaminhamentos")
+        anos_enc = sorted(dfp["mes_created"].dt.year.unique())
+        meses_enc = sorted(dfp["mes_created"].dt.month.unique())
+        col_en1, col_en2 = st.columns(2)
+        with col_en1:
+            ano_enc = st.selectbox(f"Ano - {TITULOS[projeto]} (Encaminhamentos)", ["Todos"] + [str(a) for a in anos_enc], key=f"ano_enc_{projeto}")
+        with col_en2:
+            mes_enc = st.selectbox(f"Mês - {TITULOS[projeto]} (Encaminhamentos)", ["Todos"] + [str(m).zfill(2) for m in meses_enc], key=f"mes_enc_{projeto}")
+        df_enc = dfp.copy()
+        if ano_enc != "Todos":
+            df_enc = df_enc[df_enc["mes_created"].dt.year == int(ano_enc)]
+        if mes_enc != "Todos":
+            df_enc = df_enc[df_enc["mes_created"].dt.month == int(mes_enc)]
+        col1, col2 = st.columns(2)
+        with col1:
+            count_prod = df_enc["status"].str.contains("Produto", case=False, na=False).sum()
+            st.metric("Encaminhados Produto", count_prod)
+        with col2:
+            df_enc["n3_valor"] = df_enc["n3"].apply(lambda x: x.get("value") if isinstance(x, dict) else None)
+            st.metric("Encaminhados N3", (df_enc["n3_valor"] == "Sim").sum())
 
-        # Encaminhamentos (somente INT e TDS)
-        if projeto in ['TDS', 'INT']:
-            st.subheader("🔄 Encaminhamentos")
-            filtro_mes_enc = st.selectbox(f"Selecione o mês - Encaminhamentos ({projeto})", opcoes_filtro_mes, key=f"enc_{projeto}")
-            df_enc = df_proj if filtro_mes_enc == 'Todos' else df_proj[df_proj['mes_str'] == filtro_mes_enc]
-            col1, col2 = st.columns(2)
-            with col1:
-                count_produto = df_enc['status'].str.contains("Produto", case=False, na=False).sum()
-                st.metric("Encaminhados Produto", count_produto)
-            with col2:
-                count_n3 = df_enc['escalado_n3_valor'] == "Sim"
-                st.metric("Encaminhados N3", count_n3.sum())
