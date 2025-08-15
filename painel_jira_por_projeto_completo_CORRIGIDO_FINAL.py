@@ -115,6 +115,29 @@ for projeto, tab in zip(PROJETOS, tabs):
         sla_limite = SLA_HORAS[projeto] * 60 * 60 * 1000
         sla_meta = SLA_METAS[projeto]
 
+        # Criados vs Resolvidos
+        st.markdown("### 📈 Tickets Criados vs Resolvidos")
+        anos_cr = sorted(dfp["mes_created"].dt.year.unique())
+        meses_cr = sorted(dfp["mes_created"].dt.month.unique())
+        col_cr1, col_cr2 = st.columns(2)
+        with col_cr1:
+            ano_cr = st.selectbox(f"Ano - {TITULOS[projeto]}", ["Todos"] + [str(a) for a in anos_cr], key=f"ano_cr_{projeto}")
+        with col_cr2:
+            mes_cr = st.selectbox(f"Mês - {TITULOS[projeto]}", ["Todos"] + [str(m).zfill(2) for m in meses_cr], key=f"mes_cr_{projeto}")
+        df_cr = dfp.copy()
+        if ano_cr != "Todos":
+            df_cr = df_cr[df_cr["mes_created"].dt.year == int(ano_cr)]
+        if mes_cr != "Todos":
+            df_cr = df_cr[df_cr["mes_created"].dt.month == int(mes_cr)]
+        criados = df_cr.groupby("mes_created").size().reset_index(name="Criados")
+        resolvidos = df_cr[df_cr["resolved"].notna()].groupby("mes_resolved").size().reset_index(name="Resolvidos")
+        criados.rename(columns={"mes_created": "mes_str"}, inplace=True)
+        resolvidos.rename(columns={"mes_resolved": "mes_str"}, inplace=True)
+        grafico = pd.merge(criados, resolvidos, how="outer", on="mes_str").fillna(0).sort_values("mes_str")
+        grafico["mes_str"] = grafico["mes_str"].dt.strftime("%b/%Y")
+        fig = px.bar(grafico, x="mes_str", y=["Criados", "Resolvidos"], barmode="group", text_auto=True, height=400)
+        st.plotly_chart(fig, use_container_width=True, key=f"crv_{projeto}")
+
         # SLA com filtros separados
         st.markdown("### ⏱️ SLA")
         
@@ -248,29 +271,6 @@ for projeto, tab in zip(PROJETOS, tabs):
         fig_sla.update_traces(textposition="outside")
         fig_sla.update_layout(yaxis_title="%", xaxis_title="Mês")
         st.plotly_chart(fig_sla, use_container_width=True, key=f"sla_{projeto}")
-
-        # Criados vs Resolvidos
-        st.markdown("### 📈 Tickets Criados vs Resolvidos")
-        anos_cr = sorted(dfp["mes_created"].dt.year.unique())
-        meses_cr = sorted(dfp["mes_created"].dt.month.unique())
-        col_cr1, col_cr2 = st.columns(2)
-        with col_cr1:
-            ano_cr = st.selectbox(f"Ano - {TITULOS[projeto]}", ["Todos"] + [str(a) for a in anos_cr], key=f"ano_cr_{projeto}")
-        with col_cr2:
-            mes_cr = st.selectbox(f"Mês - {TITULOS[projeto]}", ["Todos"] + [str(m).zfill(2) for m in meses_cr], key=f"mes_cr_{projeto}")
-        df_cr = dfp.copy()
-        if ano_cr != "Todos":
-            df_cr = df_cr[df_cr["mes_created"].dt.year == int(ano_cr)]
-        if mes_cr != "Todos":
-            df_cr = df_cr[df_cr["mes_created"].dt.month == int(mes_cr)]
-        criados = df_cr.groupby("mes_created").size().reset_index(name="Criados")
-        resolvidos = df_cr[df_cr["resolved"].notna()].groupby("mes_resolved").size().reset_index(name="Resolvidos")
-        criados.rename(columns={"mes_created": "mes_str"}, inplace=True)
-        resolvidos.rename(columns={"mes_resolved": "mes_str"}, inplace=True)
-        grafico = pd.merge(criados, resolvidos, how="outer", on="mes_str").fillna(0).sort_values("mes_str")
-        grafico["mes_str"] = grafico["mes_str"].dt.strftime("%b/%Y")
-        fig = px.bar(grafico, x="mes_str", y=["Criados", "Resolvidos"], barmode="group", text_auto=True, height=400)
-        st.plotly_chart(fig, use_container_width=True, key=f"crv_{projeto}")
 
         # Assunto Relacionado
         st.markdown("### 🧾 Assunto Relacionado")
