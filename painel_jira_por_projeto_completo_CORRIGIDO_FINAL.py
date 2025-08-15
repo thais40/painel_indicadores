@@ -137,22 +137,22 @@ for projeto, tab in zip(PROJETOS, tabs):
         df_sla = df_sla[df_sla["sla_millis"].notna()]
         df_sla["mes_str"] = df_sla["mes_resolved"].dt.strftime("%b/%Y")
         # ----- Garantia de variável `projeto` definida -----
-try:
-    _ = projeto  # verifica se já existe
-except NameError:
-    try:
-        import streamlit as st
-    except Exception:
-        # Se streamlit não estiver disponível, define um default
-        st = None
-    projetos_disponiveis = list(SLA_LIMITE.keys()) if isinstance(SLA_LIMITE, dict) and len(SLA_LIMITE) > 0 else ["TDS"]
-    if st:
-        projeto = st.sidebar.selectbox("Projeto", projetos_disponiveis, index=0)
-    else:
-        # fallback quando rodar sem Streamlit (ex.: testes locais)
-        projeto = projetos_disponiveis[0]
-# ----- fim da garantia de `projeto` -----
-df_sla["dentro_sla"] = df_sla["sla_millis"] <= SLA_LIMITE[projeto]
+        try:
+            _ = projeto  # verifica se já existe
+        except NameError:
+            try:
+                import streamlit as st
+            except Exception:
+                # Se streamlit não estiver disponível, define um default
+                st = None
+            projetos_disponiveis = list(SLA_LIMITE.keys()) if isinstance(SLA_LIMITE, dict) and len(SLA_LIMITE) > 0 else ['TDS']
+            if st:
+                projeto = st.sidebar.selectbox('Projeto', projetos_disponiveis, index=0)
+            else:
+                # fallback quando rodar sem Streamlit (ex.: testes locais)
+                projeto = projetos_disponiveis[0]
+        # ----- fim da garantia de `projeto` -----
+        df_sla["dentro_sla"] = df_sla["sla_millis"] <= SLA_LIMITE[projeto]
         agrupado = df_sla.groupby("mes_str")["dentro_sla"].value_counts(normalize=True).unstack(fill_value=0) * 100
         agrupado = agrupado.rename(columns={True: "% Dentro SLA", False: "% Fora SLA"}).reset_index()
         agrupado = agrupado.sort_values("mes_str")
