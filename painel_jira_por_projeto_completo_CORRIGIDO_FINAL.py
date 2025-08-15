@@ -163,19 +163,49 @@ for projeto, tab in zip(PROJETOS, tabs):
         sla_meta = SLA_METAS[projeto]
         okr_label = f"🎯 OKR: {percentual_sla:.1f}% - Meta: {sla_meta:.1f}%"
         
-        fig_sla = px.bar(
-            agrupado,
-            x="mes_str",
-            y=["% Dentro SLA", "% Fora SLA"],
-            barmode="group",
-            text_auto=".1f",
-            color_discrete_map={
-                "% Dentro SLA": "green",
-                "% Fora SLA": "red"
-            },
-            height=450,
-            title=okr_label
-        )
+        # --- Plotly Express (corrigido: usar formato long) ---
+        if 'agrupado' in locals() and hasattr(agrupado, 'empty') and not agrupado.empty:
+            # Mantém apenas colunas booleanas esperadas (True/False), se existirem
+            colunas_validas = [c for c in agrupado.columns if c in [True, False, 'True', 'False']]
+            if colunas_validas:
+                agrupado_use = agrupado[colunas_validas].copy()
+            else:
+                agrupado_use = agrupado.copy()
+        
+            \1
+    # ---- Ordenação cronológica do eixo X ----
+    # Tenta parsear no formato 'Apr/2024' (en_US). Se falhar, tenta parse genérico.
+    try:
+        agrupado_long["mes_data"] = pd.to_datetime(agrupado_long["mes_str"], format="%b/%Y")
+    except Exception:
+        agrupado_long["mes_data"] = pd.to_datetime(agrupado_long["mes_str"], errors="coerce")
+    # Ordena por data
+    agrupado_long = agrupado_long.sort_values("mes_data")
+    # Recria rótulos e fixa ordem categórica para o Plotly respeitar a sequência
+    agrupado_long["mes_str"] = agrupado_long["mes_data"].dt.strftime("%b/%Y")
+    categorias_mes = agrupado_long["mes_str"].dropna().unique().tolist()
+    agrupado_long["mes_str"] = pd.Categorical(agrupado_long["mes_str"], categories=categorias_mes, ordered=True)
+    # ------------------------------------------
+# Normaliza booleans representados como string
+            agrupado_long['dentro_sla'] = agrupado_long['dentro_sla'].map(lambda x: True if x is True or x == 'True' else (False if x is False or x == 'False' else x))
+            # Garante numérico
+            agrupado_long['percentual'] = pd.to_numeric(agrupado_long['percentual'], errors='coerce').fillna(0)
+        
+            fig_sla = px.bar(
+                agrupado_long,
+                x='mes_str',
+                y='percentual',
+                color='dentro_sla',
+                barmode='stack',
+                title=okr_label
+            )
+            # Exibir valores e formatar como porcentagem
+            fig_sla.update_traces(texttemplate='%{y:.1f}%', textposition='outside')
+            fig_sla.update_yaxes(ticksuffix='%')
+        else:
+            # DataFrame vazio — cria figura vazia amigável
+            fig_sla = px.bar(title=okr_label)
+
         fig_sla.update_traces(textposition="outside")
         fig_sla.update_layout(yaxis_title="%", xaxis_title="Mês")
         st.plotly_chart(fig_sla, use_container_width=True, key=f"sla_{projeto}")
