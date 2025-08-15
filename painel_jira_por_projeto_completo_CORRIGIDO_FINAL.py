@@ -195,20 +195,48 @@ for projeto, tab in zip(PROJETOS, tabs):
             # Garante numérico
             agrupado_long['percentual'] = pd.to_numeric(agrupado_long['percentual'], errors='coerce').fillna(0)
         
-            # --- Plotly Express (ajuste de cores e layout) ---
-            # Filtra apenas linhas com True/False e cria rótulo amigável
-            agrupado_long = agrupado_long[agrupado_long["dentro_sla"].isin([True, False])].copy()
-            agrupado_long["sla_label"] = agrupado_long["dentro_sla"].map({True: "Dentro do SLA", False: "Fora do SLA"})
+            # --- Plotly Express (PT-BR, barras lado a lado, cores fixas) ---
+            # Renomeia colunas booleanas para rótulos PT-BR antes de 'melt'
+            colunas_validas = [c for c in agrupado.columns if c in [True, False, 'True', 'False']]
+            agrupado_use = (agrupado[colunas_validas].copy() if colunas_validas else agrupado.copy())
+            rename_map = {}
+            for c in list(agrupado_use.columns):
+                if c is True or c == 'True':
+                    rename_map[c] = 'Dentro do SLA'
+                elif c is False or c == 'False':
+                    rename_map[c] = 'Fora do SLA'
+            agrupado_use.rename(columns=rename_map, inplace=True)
+            
+            agrupado_long = agrupado_use.reset_index().melt(
+                id_vars='mes_str',
+                var_name='sla_label',
+                value_name='percentual'
+            )
+            # Garante numérico
+            agrupado_long['percentual'] = pd.to_numeric(agrupado_long['percentual'], errors='coerce').fillna(0)
+            
+            # ---- Ordenação cronológica do eixo X ----
+            try:
+                agrupado_long['mes_data'] = pd.to_datetime(agrupado_long['mes_str'], format='%b/%Y')
+            except Exception:
+                agrupado_long['mes_data'] = pd.to_datetime(agrupado_long['mes_str'], errors='coerce')
+            agrupado_long = agrupado_long.sort_values('mes_data')
+            agrupado_long['mes_str'] = agrupado_long['mes_data'].dt.strftime('%b/%Y')
+            categorias_mes = agrupado_long['mes_str'].dropna().unique().tolist()
+            agrupado_long['mes_str'] = pd.Categorical(agrupado_long['mes_str'], categories=categorias_mes, ordered=True)
             
             fig_sla = px.bar(
                 agrupado_long,
-                x="mes_str",
-                y="percentual",
-                color="sla_label",
-                barmode="group",  # barras lado a lado
+                x='mes_str',
+                y='percentual',
+                color='sla_label',
+                barmode='group',
                 title=okr_label,
-                color_discrete_map={"Dentro do SLA": "green", "Fora do SLA": "red"},
+                color_discrete_map={'Dentro do SLA': 'green', 'Fora do SLA': 'red'}
             )
+            fig_sla.update_traces(texttemplate='%{y:.1f}%', textposition='outside')
+            fig_sla.update_yaxes(ticksuffix='%')
+
             # Exibir valores e formatar como porcentagem
             fig_sla.update_traces(texttemplate='%{y:.1f}%', textposition='outside')
             fig_sla.update_yaxes(ticksuffix='%')
