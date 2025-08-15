@@ -172,21 +172,25 @@ for projeto, tab in zip(PROJETOS, tabs):
             else:
                 agrupado_use = agrupado.copy()
         
-            \1
-    # ---- Ordenação cronológica do eixo X ----
-    # Tenta parsear no formato 'Apr/2024' (en_US). Se falhar, tenta parse genérico.
-    try:
-        agrupado_long["mes_data"] = pd.to_datetime(agrupado_long["mes_str"], format="%b/%Y")
-    except Exception:
-        agrupado_long["mes_data"] = pd.to_datetime(agrupado_long["mes_str"], errors="coerce")
-    # Ordena por data
-    agrupado_long = agrupado_long.sort_values("mes_data")
-    # Recria rótulos e fixa ordem categórica para o Plotly respeitar a sequência
-    agrupado_long["mes_str"] = agrupado_long["mes_data"].dt.strftime("%b/%Y")
-    categorias_mes = agrupado_long["mes_str"].dropna().unique().tolist()
-    agrupado_long["mes_str"] = pd.Categorical(agrupado_long["mes_str"], categories=categorias_mes, ordered=True)
-    # ------------------------------------------
-# Normaliza booleans representados como string
+            agrupado_long = agrupado_use.reset_index().melt(
+                id_vars='mes_str',
+                var_name='dentro_sla',
+                value_name='percentual'
+            )
+            # ---- Ordenação cronológica do eixo X ----
+            # Tenta parsear no formato 'Apr/2024' (en_US). Se falhar, tenta parse genérico.
+            try:
+                agrupado_long["mes_data"] = pd.to_datetime(agrupado_long["mes_str"], format="%b/%Y")
+            except Exception:
+                agrupado_long["mes_data"] = pd.to_datetime(agrupado_long["mes_str"], errors="coerce")
+            # Ordena por data
+            agrupado_long = agrupado_long.sort_values("mes_data")
+            # Recria rótulos e fixa ordem categórica para o Plotly respeitar a sequência
+            agrupado_long["mes_str"] = agrupado_long["mes_data"].dt.strftime("%b/%Y")
+            categorias_mes = agrupado_long["mes_str"].dropna().unique().tolist()
+            agrupado_long["mes_str"] = pd.Categorical(agrupado_long["mes_str"], categories=categorias_mes, ordered=True)
+            # ------------------------------------------
+            # Normaliza booleans representados como string
             agrupado_long['dentro_sla'] = agrupado_long['dentro_sla'].map(lambda x: True if x is True or x == 'True' else (False if x is False or x == 'False' else x))
             # Garante numérico
             agrupado_long['percentual'] = pd.to_numeric(agrupado_long['percentual'], errors='coerce').fillna(0)
