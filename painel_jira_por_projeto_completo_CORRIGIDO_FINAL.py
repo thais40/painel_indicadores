@@ -205,14 +205,39 @@ for projeto, tab in zip(PROJETOS, tabs):
             # Garante numérico
             agrupado_long['percentual'] = pd.to_numeric(agrupado_long['percentual'], errors='coerce').fillna(0)
         
+            # --- Gráfico SLA: estilo original (empilhado), só duas séries e cores corretas ---
+            # Garante que o DataFrame tenha APENAS as colunas booleans True/False
+            cols_bool = []
+            if True in agrupado.columns: cols_bool.append(True)
+            if False in agrupado.columns: cols_bool.append(False)
+            agr_wide = (agrupado[cols_bool].copy() if cols_bool else agrupado.copy())
+            # Renomeia colunas para rótulos originais
+            rename_map = {True: "% Dentro SLA", False: "% Fora SLA"}
+            agr_wide.rename(columns=rename_map, inplace=True)
+            # Traz índice 'mes_str' para coluna e ordena cronologicamente
+            agr_wide = agr_wide.reset_index()
+            try:
+                agr_wide["mes_data"] = pd.to_datetime(agr_wide["mes_str"], format="%b/%Y")
+            except Exception:
+                agr_wide["mes_data"] = pd.to_datetime(agr_wide["mes_str"], errors="coerce")
+            agr_wide = agr_wide.sort_values("mes_data")
+            agr_wide["mes_str"] = agr_wide["mes_data"].dt.strftime("%b/%Y")
+            cats = agr_wide["mes_str"].dropna().unique().tolist()
+            agr_wide["mes_str"] = pd.Categorical(agr_wide["mes_str"], categories=cats, ordered=True)
+            
+            # Constrói gráfico empilhado com duas séries explícitas (evita 'index' na legenda)
+            y_cols = [c for c in ["% Dentro SLA", "% Fora SLA"] if c in agr_wide.columns]
             fig_sla = px.bar(
-                agrupado_long,
-                x='mes_str',
-                y='percentual',
-                color='dentro_sla',
-                barmode='stack',
-                title=okr_label
+                agr_wide,
+                x="mes_str",
+                y=y_cols,
+                barmode="stack",
+                title=okr_label,
+                color_discrete_map={"% Dentro SLA": "green", "% Fora SLA": "red"}
             )
+            fig_sla.update_traces(texttemplate="%{y:.1f}%", textposition="outside")
+            fig_sla.update_yaxes(ticksuffix="%")
+
             # Exibir valores e formatar como porcentagem
             fig_sla.update_traces(texttemplate='%{y:.1f}%', textposition='outside')
             fig_sla.update_yaxes(ticksuffix='%')
