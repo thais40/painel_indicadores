@@ -106,72 +106,54 @@ for projeto, tab in zip(PROJETOS, tabs):
         sla_limite = SLA_HORAS[projeto] * 60 * 60 * 1000
         sla_meta = SLA_METAS[projeto]
 
-        # === FILTROS SLA ===
-        anos_sla = sorted(dfp["resolved"].dt.year.dropna().unique())
-        ano_selecionado_sla = st.selectbox(f"Ano - {TITULOS[projeto]} (SLA)", ["Todos"] + list(map(str, anos_sla)), key=f"ano_sla_{projeto}")
-        meses_sla = sorted(dfp["resolved"].dt.strftime("%b/%Y").dropna().unique())
-        mes_selecionado_sla = st.selectbox(f"Mês - {TITULOS[projeto]} (SLA)", ["Todos"] + list(meses_sla), key=f"mes_sla_{projeto}")
-
-        df_sla = dfp[dfp["resolved"].notna()].copy()
-        if ano_selecionado_sla != "Todos":
-            df_sla = df_sla[df_sla["resolved"].dt.year == int(ano_selecionado_sla)]
-        if mes_selecionado_sla != "Todos":
-            df_sla = df_sla[df_sla["resolved"].dt.strftime("%b/%Y") == mes_selecionado_sla]
-
-        df_sla["dentro_sla"] = df_sla["sla_millis"] <= sla_limite
-        agrupado = df_sla.groupby("mes_resolved")["dentro_sla"].agg([
-            ("Dentro do SLA", "sum"),
-            ("Fora do SLA", lambda x: (~x).sum())
-        ]).reset_index()
-
-        agrupado["Total"] = agrupado["Dentro do SLA"] + agrupado["Fora do SLA"]
-        agrupado["% Dentro SLA"] = (agrupado["Dentro do SLA"] / agrupado["Total"] * 100).round(1)
-        agrupado["% Fora SLA"] = (agrupado["Fora do SLA"] / agrupado["Total"] * 100).round(1)
-        agrupado["mes"] = agrupado["mes_resolved"].dt.strftime("%b/%Y")
-
-        agrupado["% Dentro SLA texto"] = agrupado["% Dentro SLA"].apply(lambda x: f"{x:.1f}%")
-        agrupado["% Fora SLA texto"] = agrupado["% Fora SLA"].apply(lambda x: f"{x:.1f}%")
-
-       # Derrete o DataFrame
-        agrupado_meltado = pd.melt(
-            agrupado,
-            id_vars=["mes"],
-            value_vars=["% Dentro SLA", "% Fora SLA"],
-            var_name="SLA Status",
-            value_name="Porcentagem"
-        )
+        # SLA com filtros separados
+        st.markdown("### ⏱️ SLA")
         
-        # Adiciona os textos com %
-        agrupado_meltado["Texto"] = agrupado_meltado["Porcentagem"].apply(lambda x: f"{x:.1f}%")
+        # Filtros separados de ano e mês
+        anos_sla = sorted(dfp["mes_resolved"].dropna().dt.year.unique())
+        meses_sla = sorted(dfp["mes_resolved"].dropna().dt.month.unique())
         
-        # Gráfico de barras com texto formatado
+        col_sla1, col_sla2 = st.columns(2)
+        with col_sla1:
+            ano_sla = st.selectbox(f"Ano - {TITULOS[projeto]} (SLA)", ["Todos"] + [str(a) for a in anos_sla], key=f"ano_sla_{projeto}")
+        with col_sla2:
+            mes_sla = st.selectbox(f"Mês - {TITULOS[projeto]} (SLA)", ["Todos"] + [str(m).zfill(2) for m in meses_sla], key=f"mes_sla_{projeto}")
+        
+        df_sla = dfp.copy()
+        if ano_sla != "Todos":
+            df_sla = df_sla[df_sla["mes_resolved"].dt.year == int(ano_sla)]
+        if mes_sla != "Todos":
+            df_sla = df_sla[df_sla["mes_resolved"].dt.month == int(mes_sla)]
+        
+        df_sla = df_sla[df_sla["sla_millis"].notna()]
+        df_sla["mes_str"] = df_sla["mes_resolved"].dt.strftime("%b/%Y")
+        df_sla["dentro_sla"] = df_sla["sla_millis"] <= SLA_LIMITE[projeto]
+        agrupado = df_sla.groupby("mes_str")["dentro_sla"].value_counts(normalize=True).unstack(fill_value=0) * 100
+        agrupado = agrupado.rename(columns={True: "% Dentro SLA", False: "% Fora SLA"}).reset_index()
+        agrupado = agrupado.sort_values("mes_str")
+        
+        # Cálculo do OKR
+        total_chamados = len(df_sla)
+        percentual_sla = (df_sla["dentro_sla"].sum() / total_chamados) * 100 if total_chamados > 0 else 0
+        sla_meta = SLA_METAS[projeto]
+        okr_label = f"🎯 OKR: {percentual_sla:.1f}% - Meta: {sla_meta:.1f}%"
+        
         fig_sla = px.bar(
-            agrupado_meltado,
-            x="mes",
-            y="Porcentagem",
-            color="SLA Status",
-            text="Texto",
+            agrupado,
+            x="mes_str",
+            y=["% Dentro SLA", "% Fora SLA"],
             barmode="group",
+            text_auto=".1f",
             color_discrete_map={
                 "% Dentro SLA": "green",
                 "% Fora SLA": "red"
             },
-            height=400
+            height=450,
+            title=okr_label
         )
-        
-        # OKR anotado no topo
-        okr_total = agrupado["Dentro do SLA"].sum() / agrupado["Total"].sum() * 100 if agrupado["Total"].sum() else 0
-        fig_sla.add_annotation(
-            text=f"🎯 OKR: {okr_total:.1f}% - Meta: {sla_meta:.2f}%",
-            x=0.5,
-            y=1.13,
-            xref="paper",
-            yref="paper",
-            showarrow=False,
-            font=dict(size=14, color="green" if okr_total >= sla_meta else "red")
-        )
-        
-        st.plotly_chart(fig_sla, use_container_width=True, key=f"sla_{projeto}_plot")
+        fig_sla.update_traces(textposition="outside")
+        fig_sla.update_layout(yaxis_title="%", xaxis_title="Mês")
+        st.plotly_chart(fig_sla, use_container_width=True, key=f"sla_{projeto}")
 
         # Criados vs Resolvidos
         st.markdown("### 📈 Tickets Criados vs Resolvidos")
