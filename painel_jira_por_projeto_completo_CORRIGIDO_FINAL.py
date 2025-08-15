@@ -231,7 +231,7 @@ for projeto, tab in zip(PROJETOS, tabs):
                 agr_wide,
                 x="mes_str",
                 y=y_cols,
-                barmode="stack",
+                barmode="group",
                 title=okr_label,
                 color_discrete_map={"% Dentro SLA": "green", "% Fora SLA": "red"}
             )
