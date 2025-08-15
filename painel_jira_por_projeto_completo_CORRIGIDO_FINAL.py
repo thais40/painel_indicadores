@@ -195,14 +195,24 @@ for projeto, tab in zip(PROJETOS, tabs):
             # Garante numérico
             agrupado_long['percentual'] = pd.to_numeric(agrupado_long['percentual'], errors='coerce').fillna(0)
         
+            # --- Plotly Express (ajuste de cores e layout) ---
+            # Filtra apenas linhas com True/False e cria rótulo amigável
+            agrupado_long = agrupado_long[agrupado_long["dentro_sla"].isin([True, False])].copy()
+            agrupado_long["sla_label"] = agrupado_long["dentro_sla"].map({True: "Dentro do SLA", False: "Fora do SLA"})
+            
             fig_sla = px.bar(
                 agrupado_long,
-                x='mes_str',
-                y='percentual',
-                color='dentro_sla',
-                barmode='stack',
-                title=okr_label
+                x="mes_str",
+                y="percentual",
+                color="sla_label",
+                barmode="group",  # barras lado a lado
+                title=okr_label,
+                color_discrete_map={"Dentro do SLA": "green", "Fora do SLA": "red"},
             )
+            # Exibir valores e formatar como porcentagem
+            fig_sla.update_traces(texttemplate='%{y:.1f}%', textposition='outside')
+            fig_sla.update_yaxes(ticksuffix='%')
+
             # Exibir valores e formatar como porcentagem
             fig_sla.update_traces(texttemplate='%{y:.1f}%', textposition='outside')
             fig_sla.update_yaxes(ticksuffix='%')
