@@ -16,8 +16,8 @@ st.set_page_config(page_title="Painel de Indicadores — Jira (Classic)", layout
 # CREDENCIAIS FIXAS (via st.secrets) — sem sidebar
 # =====================================================
 JIRA_URL = "https://tiendanube.atlassian.net"
-EMAIL = st.secrets["EMAIL"]
-TOKEN = st.secrets["TOKEN"]
+EMAIL = st.secrets["EMAIL"]          # defina em .streamlit/secrets.toml
+TOKEN = st.secrets["TOKEN"]          # defina em .streamlit/secrets.toml
 auth = HTTPBasicAuth(EMAIL, TOKEN)
 
 # =====================================================
@@ -26,19 +26,20 @@ auth = HTTPBasicAuth(EMAIL, TOKEN)
 SLA_LIMITE = {
     "TDS": 40 * 60 * 60 * 1000,  # 40h
     "INT": 40 * 60 * 60 * 1000,
-    "TINE": 40 * 60 * 60 * 1000,  # 40h
-    "INTEL": 80 * 60 * 60 * 1000,  # 80h
+    "TINE": 40 * 60 * 60 * 1000, # 40h
+    "INTEL": 80 * 60 * 60 * 1000,# 80h
 }
 SLA_PADRAO_MILLIS = 40 * 60 * 60 * 1000
 ASSUNTO_ALVO_APPNE = "Problemas no App NE - App EN"
 
-CF_ASSUNTO_REL = "customfield_13747"
-CF_ORIGEM_PROB = "customfield_13628"
-CF_AREA_SOL    = "customfield_13719"
-CF_SLA_SUP     = "customfield_13744"  # SLA (SUP) p/ TDS/TINE
-CF_SLA_RES     = "customfield_13686"  # Tempo de resolução (fallback)
+CF_ASSUNTO_REL = "customfield_13747"   # Assunto Relacionado
+CF_ORIGEM_PROB = "customfield_13628"   # Origem do problema
+CF_AREA_SOL    = "customfield_13719"   # Área Solicitante (.value)
+CF_SLA_SUP     = "customfield_13744"   # SLA (SUP) p/ TDS/TINE
+CF_SLA_RES     = "customfield_13686"   # Tempo de resolução (fallback)
 
 PROJETO_DEFAULT = "TDS"  # ajuste se quiser
+JQL_PERIOD_START = "2024-01-01"  # ajuste o período “fixo” do classic
 
 # =====================================================
 # HELPERS
@@ -93,12 +94,11 @@ def month_range_from_series(s: pd.Series) -> Tuple[pd.Timestamp | None, pd.Times
     s = s.dropna()
     if s.empty:
         return None, None
-    # remove tz se houver
     try:
-        s = s.dt.tz_localize(None)
+        s = s.dt.tz_localize(None)  # remove tz se houver
     except Exception:
         pass
-    start = s.min().to_period("M").to_timestamp()                  # 1º dia do mês do mínimo
+    start = s.min().to_period("M").to_timestamp()                 # 1º dia do mês do mínimo
     end   = (s.max().to_period("M").to_timestamp() + MonthBegin(1))# 1º dia do mês seguinte ao máximo
     return start, end
 
@@ -113,12 +113,7 @@ def jira_search_cached(base_url: str, email: str, token: str, jql: str, fields: 
     collected: List[Dict[str, Any]] = []
 
     while True:
-        params = {
-            "jql": jql,
-            "startAt": start_at,
-            "maxResults": 100,
-            "fields": ",".join(fields),
-        }
+        params = {"jql": jql, "startAt": start_at, "maxResults": 100, "fields": ",".join(fields)}
         r = requests.get(url, params=params, auth=auth_local, timeout=60)
         if r.status_code >= 400:
             raise RuntimeError(f"Erro Jira {r.status_code}: {r.text[:300]}")
@@ -206,186 +201,183 @@ def build_df_area(df_flat: pd.DataFrame) -> pd.DataFrame:
     )
 
 # =====================================================
-# UI (classic)
+# RENDER
 # =====================================================
 st.title("📊 Painel de Indicadores — Jira (Classic)")
 
-# 🔄 Botão para atualizar dados do Jira manualmente (limpa cache e reroda)
+# 🔄 Botão para atualizar dados do Jira manualmente
 if st.button("🔄 Atualizar dados"):
     st.cache_data.clear()
     st.rerun()
 
 # Parâmetros ‘hardcoded’ do classic
 projeto = PROJETO_DEFAULT
-# Ajuste o período do JQL se quiser
-jql = f'project = {projeto} AND created >= "2024-01-01" ORDER BY created ASC'
+jql = f'project = {projeto} AND created >= "{JQL_PERIOD_START}" ORDER BY created ASC'
 
-if st.button("Carregar dados"):
-    try:
-        fields = ["key", "created", "resolutiondate",
-                  CF_ASSUNTO_REL, CF_ORIGEM_PROB, CF_AREA_SOL,
-                  CF_SLA_SUP, CF_SLA_RES]
+def load_and_render():
+    fields = ["key", "created", "resolutiondate",
+              CF_ASSUNTO_REL, CF_ORIGEM_PROB, CF_AREA_SOL,
+              CF_SLA_SUP, CF_SLA_RES]
 
-        raw = jira_search_cached(JIRA_URL, EMAIL, TOKEN, jql, fields)
-        st.caption(f"Issues retornados: {len(raw)}")
-        if not raw:
-            st.warning("JQL não retornou issues. Ajuste o período ou verifique permissões.")
-            st.stop()
+    raw = jira_search_cached(JIRA_URL, EMAIL, TOKEN, jql, fields)
+    st.caption(f"Issues retornados: {len(raw)}")
+    if not raw:
+        st.warning("JQL não retornou issues. Ajuste o período ou verifique permissões.")
+        return
 
-        df_flat = flatten_issues(raw)
-        df_issues = build_df_issues(df_flat, projeto)
-        df_assunto = build_df_assunto(df_issues)
-        df_area = build_df_area(df_flat)
+    df_flat = flatten_issues(raw)
+    df_issues = build_df_issues(df_flat, projeto)
+    df_assunto = build_df_assunto(df_issues)
+    df_area = build_df_area(df_flat)
 
-        # =====================================================
-        # 1) Criados vs Resolvidos
-        # =====================================================
-        st.subheader("Criados vs Resolvidos")
+    # 1) Criados vs Resolvidos
+    st.subheader("Criados vs Resolvidos")
 
-        start, end = month_range_from_series(df_issues["created"])
-        if start is None or end is None:
-            st.warning("Não há datas de criação válidas para montar a série mensal.")
-            st.stop()
+    start, end = month_range_from_series(df_issues["created"])
+    if start is None or end is None:
+        st.warning("Não há datas de criação válidas para montar a série mensal.")
+        return
 
-        df_months = pd.DataFrame({"mes": pd.date_range(start=start, end=end, freq="MS")})
+    df_months = pd.DataFrame({"mes": pd.date_range(start=start, end=end, freq="MS")})
 
-        criadas = (
-            df_issues
-            .groupby(df_issues["created"].dt.to_period("M"))
-            .size()
-            .rename("Criados")
+    criadas = (
+        df_issues
+        .groupby(df_issues["created"].dt.to_period("M"))
+        .size()
+        .rename("Criados")
+    )
+    criadas.index = criadas.index.to_timestamp()
+
+    if df_issues["resolved"].notna().any():
+        resolvidas = (
+            df_issues.dropna(subset=["resolved"])
+                     .groupby(df_issues["resolved"].dt.to_period("M"))
+                     .size()
+                     .rename("Resolvidos")
         )
-        criadas.index = criadas.index.to_timestamp()
+        resolvidas.index = resolvidas.index.to_timestamp()
+    else:
+        resolvidas = pd.Series(dtype=float, name="Resolvidos")
 
-        if df_issues["resolved"].notna().any():
-            resolvidas = (
-                df_issues.dropna(subset=["resolved"])
-                         .groupby(df_issues["resolved"].dt.to_period("M"))
-                         .size()
-                         .rename("Resolvidos")
-            )
-            resolvidas.index = resolvidas.index.to_timestamp()
-        else:
-            resolvidas = pd.Series(dtype=float, name="Resolvidos")
+    df_cr_res = (
+        df_months.set_index("mes")
+                 .join(criadas, how="left")
+                 .join(resolvidas, how="left")
+                 .fillna(0)
+                 .reset_index()
+    )
+    df_cr_res["mes_str"] = df_cr_res["mes"].dt.strftime("%b/%Y")
+    df_cr_res = ordenar_mes_str(df_cr_res, "mes_str")
 
-        df_cr_res = (
-            df_months.set_index("mes")
-                     .join(criadas, how="left")
-                     .join(resolvidas, how="left")
-                     .fillna(0)
-                     .reset_index()
-        )
-        df_cr_res["mes_str"] = df_cr_res["mes"].dt.strftime("%b/%Y")
-        df_cr_res = ordenar_mes_str(df_cr_res, "mes_str")
+    fig_cr = px.bar(
+        df_cr_res,
+        x="mes_str",
+        y=["Criados", "Resolvidos"],
+        barmode="group",
+        title=f"Criados vs Resolvidos — {projeto}",
+    )
+    st.plotly_chart(fig_cr, use_container_width=True)
 
-        fig_cr = px.bar(
-            df_cr_res,
-            x="mes_str",
-            y=["Criados", "Resolvidos"],
-            barmode="group",
-            title=f"Criados vs Resolvidos — {projeto}",
-        )
-        st.plotly_chart(fig_cr, use_container_width=True)
+    st.markdown("---")
 
-        st.markdown("---")
+    # 2) SLA — Dentro x Fora (%)
+    st.subheader("SLA — Dentro x Fora (%)")
 
-        # =====================================================
-        # 2) SLA — Dentro x Fora (%)
-        # =====================================================
-        st.subheader("SLA — Dentro x Fora (%)")
+    agrupado = (
+        df_issues
+        .groupby("mes_str")["dentro_sla"]
+        .value_counts(normalize=True)
+        .unstack(fill_value=0) * 100.0
+    )
 
-        agrupado = (
-            df_issues
-            .groupby("mes_str")["dentro_sla"]
-            .value_counts(normalize=True)
-            .unstack(fill_value=0) * 100.0
-        )
+    cols_exist = [c for c in agrupado.columns if c in (True, False, "True", "False")]
+    agr_wide = agrupado.loc[:, cols_exist].copy() if cols_exist else agrupado.copy()
+    agr_wide.rename(columns={
+        True: "% Dentro SLA",
+        False: "% Fora SLA",
+        "True": "% Dentro SLA",
+        "False": "% Fora SLA",
+    }, inplace=True)
 
-        cols_exist = [c for c in agrupado.columns if c in (True, False, "True", "False")]
-        agr_wide = agrupado.loc[:, cols_exist].copy() if cols_exist else agrupado.copy()
-        agr_wide.rename(columns={
-            True: "% Dentro SLA",
-            False: "% Fora SLA",
-            "True": "% Dentro SLA",
-            "False": "% Fora SLA",
-        }, inplace=True)
+    agr_wide = ordenar_mes_str(agr_wide.reset_index(), "mes_str")
 
-        agr_wide = ordenar_mes_str(agr_wide.reset_index(), "mes_str")
+    fig_sla = px.bar(
+        agr_wide,
+        x="mes_str",
+        y=[c for c in ["% Dentro SLA", "% Fora SLA"] if c in agr_wide.columns],
+        barmode="group",
+        color_discrete_map={"% Dentro SLA": "green", "% Fora SLA": "red"},
+        title=f"Percentual dentro/fora do SLA — {projeto}",
+    )
+    fig_sla.update_traces(texttemplate="%{y:.1f}%", textposition="outside")
+    fig_sla.update_yaxes(ticksuffix="%")
+    st.plotly_chart(fig_sla, use_container_width=True)
 
-        fig_sla = px.bar(
-            agr_wide,
-            x="mes_str",
-            y=[c for c in ["% Dentro SLA", "% Fora SLA"] if c in agr_wide.columns],
-            barmode="group",
-            color_discrete_map={"% Dentro SLA": "green", "% Fora SLA": "red"},
-            title=f"Percentual dentro/fora do SLA — {projeto}",
-        )
-        fig_sla.update_traces(texttemplate="%{y:.1f}%", textposition="outside")
-        fig_sla.update_yaxes(ticksuffix="%")
-        st.plotly_chart(fig_sla, use_container_width=True)
+    st.markdown("---")
 
-        st.markdown("---")
+    # 3) Assunto Relacionado
+    st.subheader("🧾 Assunto Relacionado")
+    st.dataframe(df_assunto, use_container_width=True, hide_index=True)
 
-        # =====================================================
-        # 3) Assunto Relacionado
-        # =====================================================
-        st.subheader("🧾 Assunto Relacionado")
-        st.dataframe(df_assunto, use_container_width=True, hide_index=True)
+    st.markdown("---")
 
-        st.markdown("---")
+    # 4) Área Solicitante
+    st.subheader("📦 Área Solicitante")
+    st.dataframe(df_area, use_container_width=True, hide_index=True)
 
-        # =====================================================
-        # 4) Área Solicitante
-        # =====================================================
-        st.subheader("📦 Área Solicitante")
-        st.dataframe(df_area, use_container_width=True, hide_index=True)
+    st.markdown("---")
 
-        st.markdown("---")
+    # 5) TDS • APP NE (final em expander)
+    if projeto.upper() == "TDS":
+        with st.expander("📱 TDS • APP NE — Detalhe", expanded=False):
+            df_app = df_issues[df_issues["assunto_relacionado"] == ASSUNTO_ALVO_APPNE].copy()
 
-        # =====================================================
-        # 5) TDS • APP NE (final em expander)
-        # =====================================================
-        if projeto.upper() == "TDS":
-            with st.expander("📱 TDS • APP NE — Detalhe", expanded=False):
-                df_app = df_issues[df_issues["assunto_relacionado"] == ASSUNTO_ALVO_APPNE].copy()
+            if df_app.empty:
+                st.info(f"Não há chamados para '{ASSUNTO_ALVO_APPNE}' no período selecionado.")
+            else:
+                df_app = ordenar_mes_str(df_app, "mes_str")
 
-                if df_app.empty:
-                    st.info(f"Não há chamados para '{ASSUNTO_ALVO_APPNE}' no período selecionado.")
-                else:
-                    df_app = ordenar_mes_str(df_app, "mes_str")
+                total_app = len(df_app)
+                por_origem = df_app["origem_problema"].value_counts(dropna=False).to_dict()
+                k1, k2, k3 = st.columns(3)
+                k1.metric("Total de chamados (APP NE/EN)", total_app)
+                k2.metric("APP NE", por_origem.get("APP NE", 0))
+                k3.metric("APP EN", por_origem.get("APP EN", 0))
 
-                    total_app = len(df_app)
-                    por_origem = df_app["origem_problema"].value_counts(dropna=False).to_dict()
-                    k1, k2, k3 = st.columns(3)
-                    k1.metric("Total de chamados (APP NE/EN)", total_app)
-                    k2.metric("APP NE", por_origem.get("APP NE", 0))
-                    k3.metric("APP EN", por_origem.get("APP EN", 0))
+                df_app_mes = (
+                    df_app
+                    .groupby(["mes_str", "origem_problema"])
+                    .size()
+                    .reset_index(name="Qtd")
+                )
+                df_app_mes = ordenar_mes_str(df_app_mes, "mes_str")
 
-                    df_app_mes = (
-                        df_app
-                        .groupby(["mes_str", "origem_problema"])
-                        .size()
-                        .reset_index(name="Qtd")
-                    )
-                    df_app_mes = ordenar_mes_str(df_app_mes, "mes_str")
+                fig_app = px.bar(
+                    df_app_mes,
+                    x="mes_str",
+                    y="Qtd",
+                    color="origem_problema",
+                    barmode="group",
+                    title="APP NE — Volumes por mês e origem",
+                    color_discrete_map={"APP NE": "#2ca02c", "APP EN": "#1f77b4"},
+                )
+                st.plotly_chart(fig_app, use_container_width=True)
 
-                    fig_app = px.bar(
-                        df_app_mes,
-                        x="mes_str",
-                        y="Qtd",
-                        color="origem_problema",
-                        barmode="group",
-                        title="APP NE — Volumes por mês e origem",
-                        color_discrete_map={"APP NE": "#2ca02c", "APP EN": "#1f77b4"},
-                    )
-                    st.plotly_chart(fig_app, use_container_width=True)
+                st.subheader("Chamados — Detalhe")
+                st.dataframe(
+                    df_app[["id", "mes_str", "assunto_relacionado", "origem_problema"]],
+                    use_container_width=True,
+                    hide_index=True,
+                )
 
-                    st.subheader("Chamados — Detalhe")
-                    st.dataframe(
-                        df_app[["id", "mes_str", "assunto_relacionado", "origem_problema"]],
-                        use_container_width=True,
-                        hide_index=True,
-                    )
-
-    except Exception as e:
-        st.error(f"Erro: {e}")
+# ============================
+# CARREGAMENTO AUTOMÁTICO
+# ============================
+# Na primeira renderização, carrega automaticamente
+if "auto_loaded" not in st.session_state:
+    st.session_state.auto_loaded = True
+    load_and_render()
+else:
+    # Em novas renderizações (ex.: interação), também carregamos;
+    # Se preferir evitar chamadas repetidas, comente a linha abaixo.
+    load_and_render()
