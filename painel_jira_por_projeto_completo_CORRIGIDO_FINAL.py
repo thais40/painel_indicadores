@@ -48,8 +48,15 @@ CAMPOS_ASSUNTO = {
 }
 CAMPO_AREA = "customfield_13719"
 CAMPO_N3 = "customfield_13659"
+
+# 👉 NOVO: campo “Origem do problema” (para o submenu APP NE)
+CAMPO_ORIGEM = "customfield_13628"
+
 SLA_METAS = {"TDS": 98, "INT": 96, "TINE": 96, "INTEL": 96}
 SLA_HORAS = {"TDS": 40, "INT": 40, "TINE": 40, "INTEL": 80}
+
+# 👉 NOVO: assunto alvo do submenu APP NE
+ASSUNTO_ALVO_APPNE = "Problemas no App NE - App EN"
 
 def extrair_sla_millis(sla_field):
     try:
@@ -72,8 +79,10 @@ def buscar_issues():
                 "jql": jql,
                 "startAt": start,
                 "maxResults": 100,
-                "fields": "created,resolutiondate,status,issuetype," +
-                          f"{SLA_CAMPOS[projeto]},{CAMPOS_ASSUNTO[projeto]},{CAMPO_AREA},{CAMPO_N3}"
+                "fields": (
+                    "created,resolutiondate,status,issuetype,"
+                    f"{SLA_CAMPOS[projeto]},{CAMPOS_ASSUNTO[projeto]},{CAMPO_AREA},{CAMPO_N3},{CAMPO_ORIGEM}"
+                )
             }
             res = requests.get(f"{JIRA_URL}/rest/api/3/search", auth=auth, params=params)
             if res.status_code != 200:
@@ -93,7 +102,11 @@ def buscar_issues():
                     "area": f.get(CAMPO_AREA),
                     "assunto": f.get(CAMPOS_ASSUNTO[projeto]),
                     "issuetype": f.get("issuetype"),
-                    "n3": f.get(CAMPO_N3)
+                    "n3": f.get(CAMPO_N3),
+                    # 👉 NOVO: origem do problema (cru, como vem do Jira)
+                    "origem": f.get(CAMPO_ORIGEM),
+                    # opcional: id/key se quiser detalhar depois
+                    "key": issue.get("key")
                 })
             start += 100
     return pd.DataFrame(todos)
@@ -161,20 +174,7 @@ for projeto, tab in zip(PROJETOS, tabs):
 
         df_sla = df_sla[df_sla["sla_millis"].notna()]
         df_sla["mes_str"] = df_sla["mes_resolved"].dt.strftime("%b/%Y")
-        # ----- Garantia de variável `projeto` definida -----
-        try:
-            _ = projeto  # verifica se já existe
-        except NameError:
-            try:
-                import streamlit as st
-            except Exception:
-                st = None
-            projetos_disponiveis = list(SLA_LIMITE.keys()) if isinstance(SLA_LIMITE, dict) and len(SLA_LIMITE) > 0 else ['TDS']
-            if st:
-                projeto = st.sidebar.selectbox('Projeto', projetos_disponiveis, index=0)
-            else:
-                projeto = projetos_disponiveis[0]
-        # ----- fim da garantia de `projeto` -----
+        # Garantia de uso do limite correto por projeto
         df_sla["dentro_sla"] = df_sla["sla_millis"] <= SLA_LIMITE[projeto]
         agrupado = df_sla.groupby("mes_str")["dentro_sla"].value_counts(normalize=True).unstack(fill_value=0) * 100
         agrupado = agrupado.rename(columns={True: "% Dentro SLA", False: "% Fora SLA"}).reset_index()
@@ -186,67 +186,23 @@ for projeto, tab in zip(PROJETOS, tabs):
         sla_meta = SLA_METAS[projeto]
         okr_label = f"🎯 OKR: {percentual_sla:.1f}% - Meta: {sla_meta:.1f}%"
 
-        # --- Plotly Express (corrigido: usar formato long) ---
-        if 'agrupado' in locals() and hasattr(agrupado, 'empty') and not agrupado.empty:
-            # Mantém apenas colunas booleanas esperadas (True/False), se existirem
-            colunas_validas = [c for c in agrupado.columns if c in [True, False, 'True', 'False']]
-            if colunas_validas:
-                agrupado_use = agrupado[colunas_validas].copy()
-            else:
-                agrupado_use = agrupado.copy()
-
-            agrupado_long = agrupado_use.reset_index().melt(
-                id_vars='mes_str',
-                var_name='dentro_sla',
-                value_name='percentual'
-            )
-            # ---- Ordenação cronológica do eixo X (sem alterar estilo/cores) ----
-            try:
-                agrupado_long["mes_data"] = pd.to_datetime(agrupado_long["mes_str"], format="%b/%Y")
-            except Exception:
-                agrupado_long["mes_data"] = pd.to_datetime(agrupado_long["mes_str"], errors="coerce")
-            agrupado_long = agrupado_long.sort_values("mes_data")
-            agrupado_long["mes_str"] = agrupado_long["mes_data"].dt.strftime("%b/%Y")
-            categorias_mes = agrupado_long["mes_str"].dropna().unique().tolist()
-            agrupado_long["mes_str"] = pd.Categorical(agrupado_long["mes_str"], categories=categorias_mes, ordered=True)
-            # ------------------------------------------
-            agrupado_long['dentro_sla'] = agrupado_long['dentro_sla'].map(
-                lambda x: True if x is True or x == 'True' else (False if x is False or x == 'False' else x)
-            )
-            agrupado_long['percentual'] = pd.to_numeric(agrupado_long['percentual'], errors='coerce').fillna(0)
-
-            # Gráfico SLA (duas séries lado a lado, cores corretas)
-            cols_bool = []
-            if True in agrupado.columns: cols_bool.append(True)
-            if False in agrupado.columns: cols_bool.append(False)
-            agr_wide = (agrupado[cols_bool].copy() if cols_bool else agrupado.copy())
-            rename_map = {True: "% Dentro SLA", False: "% Fora SLA"}
-            agr_wide.rename(columns=rename_map, inplace=True)
-            agr_wide = agr_wide.reset_index()
-            try:
-                agr_wide["mes_data"] = pd.to_datetime(agr_wide["mes_str"], format="%b/%Y")
-            except Exception:
-                agr_wide["mes_data"] = pd.to_datetime(agr_wide["mes_str"], errors="coerce")
-            agr_wide = agr_wide.sort_values("mes_data")
-            agr_wide["mes_str"] = agr_wide["mes_data"].dt.strftime("%b/%Y")
-            cats = agr_wide["mes_str"].dropna().unique().tolist()
-            agr_wide["mes_str"] = pd.Categorical(agr_wide["mes_str"], categories=cats, ordered=True)
-
-            y_cols = [c for c in ["% Dentro SLA", "% Fora SLA"] if c in agr_wide.columns]
-            fig_sla = px.bar(
-                agr_wide,
-                x="mes_str",
-                y=y_cols,
-                barmode="group",
-                title=okr_label,
-                color_discrete_map={"% Dentro SLA": "green", "% Fora SLA": "red"}
-            )
-            fig_sla.update_traces(texttemplate="%{y:.1f}%", textposition="outside")
-            fig_sla.update_yaxes(ticksuffix="%")
-        else:
-            fig_sla = px.bar(title=okr_label)
-
-        fig_sla.update_traces(textposition="outside")
+        # Gráfico SLA (duas séries lado a lado, cores corretas)
+        cols_bool = []
+        if True in agrupado.columns: cols_bool.append(True)
+        if False in agrupado.columns: cols_bool.append(False)
+        agr_wide = (agrupado[[c for c in ["% Dentro SLA", "% Fora SLA"] if c in agrupado.columns]].copy()
+                    if {"% Dentro SLA","% Fora SLA"}.issubset(set(agrupado.columns))
+                    else agrupado.copy())
+        fig_sla = px.bar(
+            agr_wide,
+            x="mes_str",
+            y=[c for c in ["% Dentro SLA", "% Fora SLA"] if c in agr_wide.columns],
+            barmode="group",
+            title=okr_label,
+            color_discrete_map={"% Dentro SLA": "green", "% Fora SLA": "red"}
+        )
+        fig_sla.update_traces(texttemplate="%{y:.1f}%", textposition="outside")
+        fig_sla.update_yaxes(ticksuffix="%")
         fig_sla.update_layout(yaxis_title="%", xaxis_title="Mês")
         st.plotly_chart(fig_sla, use_container_width=True, key=f"sla_{projeto}")
 
@@ -273,6 +229,50 @@ for projeto, tab in zip(PROJETOS, tabs):
         assunto_count = df_ass["assunto_nome"].value_counts().reset_index()
         assunto_count.columns = ["Assunto", "Qtd"]
         st.dataframe(assunto_count)
+
+        # ==============================================
+        # 👉 NOVO (3.1) Submenu APP NE — apenas TDS
+        # ==============================================
+        if projeto == "TDS":
+            with st.expander("📱 APP NE — Origem do problema", expanded=False):
+                # filtra assunto alvo
+                df_app = dfp.copy()
+                df_app["assunto_nome"] = df_app["assunto"].apply(lambda x: x.get("value") if isinstance(x, dict) else str(x))
+                df_app = df_app[df_app["assunto_nome"] == ASSUNTO_ALVO_APPNE]
+
+                if df_app.empty:
+                    st.info(f"Não há chamados com Assunto '{ASSUNTO_ALVO_APPNE}'.")
+                else:
+                    # extrai origem do problema
+                    df_app["origem_nome"] = df_app["origem"].apply(lambda x: x.get("value") if isinstance(x, dict) else (str(x) if x is not None else "—"))
+                    # métricas
+                    total_app = len(df_app)
+                    contagem = df_app["origem_nome"].value_counts(dropna=False).to_dict()
+                    c1, c2, c3 = st.columns(3)
+                    c1.metric("Total (APP NE/EN)", total_app)
+                    c2.metric("APP NE", contagem.get("APP NE", 0))
+                    c3.metric("APP EN", contagem.get("APP EN", 0))
+
+                    # série mensal por origem
+                    df_app["mes_str"] = df_app["mes_created"].dt.strftime("%b/%Y")
+                    serie = (df_app.groupby(["mes_str","origem_nome"]).size()
+                                   .reset_index(name="Qtd")
+                                   .sort_values("mes_str"))
+                    fig_app = px.bar(
+                        serie,
+                        x="mes_str",
+                        y="Qtd",
+                        color="origem_nome",
+                        barmode="group",
+                        title="APP NE — Volumes por mês e Origem do problema",
+                        color_discrete_map={"APP NE": "#2ca02c", "APP EN": "#1f77b4"}
+                    )
+                    st.plotly_chart(fig_app, use_container_width=True)
+
+                    # tabela de detalhes
+                    cols_show = ["key","created","mes_str","assunto_nome","origem_nome","status"]
+                    cols_show = [c for c in cols_show if c in df_app.columns]
+                    st.dataframe(df_app[cols_show], use_container_width=True, hide_index=True)
 
         # ==============================================
         # (4) 📦 Área Solicitante (continua igual: oculta para INTEL)
