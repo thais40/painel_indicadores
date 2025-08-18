@@ -3,7 +3,6 @@ import pandas as pd
 import numpy as np
 import streamlit as st
 import plotly.express as px
-from datetime import datetime
 
 st.set_page_config(page_title="Painel de Indicadores — Completo", layout="wide")
 
@@ -20,7 +19,7 @@ SLA_LIMITE = {
 SLA_PADRAO_MILLIS = 40 * 60 * 60 * 1000
 
 def ordenar_mes_str(df: pd.DataFrame, col: str = "mes_str") -> pd.DataFrame:
-    """Cria coluna mes_data, ordena e fixa categoria ordenada para mes_str."""
+    """Cria coluna mes_data, ordena e fixa categoria ordenada para mes_str (%b/%Y)."""
     dfx = df.copy()
     try:
         dfx["mes_data"] = pd.to_datetime(dfx[col], format="%b/%Y")
@@ -67,7 +66,21 @@ df_issues["sla_millis"] = atendimento_horas * 60 * 60 * 1000
 df_issues["dentro_sla"] = df_issues["sla_millis"] <= limite_ms
 df_issues["mes_str"] = pd.to_datetime(df_issues["created"]).dt.strftime("%b/%Y")
 
-# Tabelas "Assunto Relacionado" e "Área Solicitante"
+# =======================
+# MOCK dos campos Jira (Assunto/Origem)
+# (Remova ao conectar com seus dados reais)
+# =======================
+ASSUNTO_ALVO = "Problemas no App NE - App EN"
+prob_assunto_alvo = 0.35  # ~35% dos chamados entram no tema alvo
+df_issues["assunto_relacionado"] = np.where(
+    np.random.rand(len(df_issues)) < prob_assunto_alvo,
+    ASSUNTO_ALVO,
+    "Outros"
+)
+mask_app = df_issues["assunto_relacionado"] == ASSUNTO_ALVO
+df_issues.loc[mask_app, "origem_problema"] = np.random.choice(["APP NE", "APP EN"], size=mask_app.sum())
+
+# Tabelas "Assunto Relacionado" e "Área Solicitante" (mocks)
 assuntos = [
     "Problemas no App NE - App EN",
     "Extravio - Transportadora Ponto de Postagem NE",
@@ -89,6 +102,13 @@ areas = [
 ]
 qtd_areas = np.random.randint(700, 6000, size=len(areas))
 df_area = pd.DataFrame({"Área": areas, "Qtd": qtd_areas}).sort_values("Qtd", ascending=False)
+
+# =====================================================
+# Sidebar — Submenu quando projeto = TDS
+# =====================================================
+sub_menu = None
+if projeto == "TDS":
+    sub_menu = st.sidebar.radio("TDS • Submenu", ["Geral", "APP NE"], index=0)
 
 # =====================================================
 # SEÇÃO 1 — Criados vs Resolvidos (PRIMEIRO)
@@ -120,8 +140,7 @@ st.markdown("---")
 # =====================================================
 # SEÇÃO 2 — SLA (barras lado a lado, meses ordenados)
 # =====================================================
-okr_label = "🎯 OKR: cálculo demonstrativo com dados mock"
-# Percentuais por mês
+okr_label = "🎯 OKR (mock) — Percentual dentro/fora do SLA por mês"
 agrupado = (
     df_issues
     .groupby("mes_str")["dentro_sla"]
@@ -150,14 +169,76 @@ fig_sla.update_traces(texttemplate="%{y:.1f}%", textposition="outside")
 fig_sla.update_yaxes(ticksuffix="%")
 st.plotly_chart(fig_sla, use_container_width=True)
 
+# =====================================================
+# SEÇÃO — TDS • APP NE (submenu)
+# =====================================================
+if projeto == "TDS" and sub_menu == "APP NE":
+    st.markdown("---")
+    st.header("📱 TDS • APP NE")
+
+    # Filtra somente chamados do assunto alvo
+    df_app = df_issues[df_issues["assunto_relacionado"] == ASSUNTO_ALVO].copy()
+
+    if df_app.empty:
+        st.info("Não há chamados para o assunto 'Problemas no App NE - App EN' no período selecionado.")
+    else:
+        # Ordena meses
+        df_app = ordenar_mes_str(df_app, "mes_str")
+
+        # KPIs
+        total_app = len(df_app)
+        por_origem = df_app["origem_problema"].value_counts(dropna=False).to_dict()
+        colk1, colk2, colk3 = st.columns(3)
+        colk1.metric("Total de chamados (APP NE/EN)", total_app)
+        colk2.metric("APP NE", por_origem.get("APP NE", 0))
+        colk3.metric("APP EN", por_origem.get("APP EN", 0))
+
+        # Gráfico: chamados por mês, lado a lado por origem
+        df_app_mes = (
+            df_app
+            .groupby(["mes_str", "origem_problema"])
+            .size()
+            .reset_index(name="Qtd")
+        )
+        df_app_mes = ordenar_mes_str(df_app_mes, "mes_str")
+
+        fig_app = px.bar(
+            df_app_mes,
+            x="mes_str",
+            y="Qtd",
+            color="origem_problema",
+            barmode="group",  # lado a lado
+            title="APP NE — Volumes por mês e origem",
+            color_discrete_map={"APP NE": "#2ca02c", "APP EN": "#1f77b4"},  # verde e azul
+        )
+        st.plotly_chart(fig_app, use_container_width=True)
+
+        # Tabela com campos solicitados
+        view_cols = {
+            "id": "ID",
+            "mes_str": "Mês",
+            "assunto_relacionado": "Assunto relacionado",
+            "origem_problema": "Origem do problema",
+        }
+        st.subheader("Chamados — Detalhe")
+        st.dataframe(
+            df_app[list(view_cols.keys())].rename(columns=view_cols),
+            use_container_width=True,
+            hide_index=True,
+        )
+
+        # Exportar CSV (opcional)
+        csv = df_app[list(view_cols.keys())].rename(columns=view_cols).to_csv(index=False).encode("utf-8")
+        st.download_button("Baixar CSV (APP NE)", data=csv, file_name="tds_app_ne.csv", mime="text/csv")
+
 st.markdown("---")
 
 # =====================================================
 # SEÇÃO 3 — Assunto Relacionado (filtros + tabela alinhada)
 # =====================================================
 st.header("🧾 Assunto Relacionado")
-
 LEFT_RATIO, RIGHT_RATIO = 62, 38  # mantenha igual na tabela
+
 colA, colB = st.columns((LEFT_RATIO, RIGHT_RATIO), gap="large")
 with colA:
     filtro_ano_assunto = st.selectbox("Ano - Tech Support (Assunto)", ["Todos", "2024", "2025"], index=0)
@@ -201,4 +282,4 @@ st.dataframe(
     },
 )
 
-st.caption("Dica: substitua os blocos MOCK pelos seus dataframes reais (Jira/SQL/CSV). Mantive a ordem: Criados vs Resolvidos → SLA → Assunto → Área.")
+st.caption("Substitua os MOCKs pelos seus DataFrames reais. Ordem: Criados vs Resolvidos → SLA → (se TDS e APP NE) submenu → Assunto → Área.")
