@@ -252,7 +252,7 @@ for projeto, tab in zip(PROJETOS, tabs):
                             text="Qtd",
                             height=700   # 👉 aumenta bastante a altura do gráfico
                         )
-                        fig_app.update_traces(texttemplate="%{text}", textposition="outside')
+                        fig_app.update_traces(texttemplate="%{text}", textposition="outside")
                         fig_app.update_layout(yaxis_title="Qtd", xaxis_title="Mês")
                         st.plotly_chart(fig_app, use_container_width=True)
 
