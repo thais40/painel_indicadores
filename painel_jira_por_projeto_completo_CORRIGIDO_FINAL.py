@@ -120,14 +120,29 @@ for projeto, tab in zip(PROJETOS, tabs):
         dfp = df[df["projeto"] == projeto].copy()
 
         # ======================
-        # 1) Criados vs Resolvidos (ANTES do SLA)
+        # 1) Criados vs Resolvidos (ANTES do SLA) — COM FILTROS
         # ======================
         st.markdown("### 📈 Tickets Criados vs Resolvidos")
-        criados = dfp.groupby("mes_created").size().reset_index(name="Criados")
-        resolvidos = dfp[dfp["resolved"].notna()].groupby("mes_resolved").size().reset_index(name="Resolvidos")
+        anos_cr = sorted(dfp["mes_created"].dt.year.dropna().unique())
+        meses_cr = sorted(dfp["mes_created"].dt.month.dropna().unique())
+        col_cr1, col_cr2 = st.columns(2)
+        with col_cr1:
+            ano_cr = st.selectbox(f"Ano - {TITULOS[projeto]}", ["Todos"] + [str(a) for a in anos_cr], key=f"ano_cr_{projeto}")
+        with col_cr2:
+            mes_cr = st.selectbox(f"Mês - {TITULOS[projeto]}", ["Todos"] + [str(m).zfill(2) for m in meses_cr], key=f"mes_cr_{projeto}")
+
+        df_cr = dfp.copy()
+        if ano_cr != "Todos":
+            df_cr = df_cr[df_cr["mes_created"].dt.year == int(ano_cr)]
+        if mes_cr != "Todos":
+            df_cr = df_cr[df_cr["mes_created"].dt.month == int(mes_cr)]
+
+        criados = df_cr.groupby("mes_created").size().reset_index(name="Criados")
+        resolvidos = df_cr[df_cr["resolved"].notna()].groupby("mes_resolved").size().reset_index(name="Resolvidos")
         criados.rename(columns={"mes_created": "mes_str"}, inplace=True)
         resolvidos.rename(columns={"mes_resolved": "mes_str"}, inplace=True)
         grafico = pd.merge(criados, resolvidos, how="outer", on="mes_str").fillna(0).sort_values("mes_str")
+
         if grafico.empty:
             st.info("Sem dados para exibir.")
         else:
@@ -136,10 +151,23 @@ for projeto, tab in zip(PROJETOS, tabs):
             st.plotly_chart(fig, use_container_width=True, key=f"crv_{projeto}")
 
         # ======================
-        # 2) SLA
+        # 2) SLA — COM FILTROS
         # ======================
         st.markdown("### ⏱️ SLA")
+        anos_sla = sorted(dfp["mes_resolved"].dropna().dt.year.unique())
+        meses_sla = sorted(dfp["mes_resolved"].dropna().dt.month.unique())
+        col_sla1, col_sla2 = st.columns(2)
+        with col_sla1:
+            ano_sla = st.selectbox(f"Ano - {TITULOS[projeto]} (SLA)", ["Todos"] + [str(a) for a in anos_sla], key=f"ano_sla_{projeto}")
+        with col_sla2:
+            mes_sla = st.selectbox(f"Mês - {TITULOS[projeto]} (SLA)", ["Todos"] + [str(m).zfill(2) for m in meses_sla], key=f"mes_sla_{projeto}")
+
         df_sla = dfp[dfp["sla_millis"].notna()].copy()
+        if ano_sla != "Todos":
+            df_sla = df_sla[df_sla["mes_resolved"].dt.year == int(ano_sla)]
+        if mes_sla != "Todos":
+            df_sla = df_sla[df_sla["mes_resolved"].dt.month == int(mes_sla)]
+
         df_sla["mes_str"] = df_sla["mes_resolved"].dt.strftime("%b/%Y")
         if df_sla.empty:
             st.info("Sem dados de SLA para exibir.")
@@ -147,8 +175,8 @@ for projeto, tab in zip(PROJETOS, tabs):
             df_sla["dentro_sla"] = df_sla["sla_millis"] <= SLA_LIMITE[projeto]
             agrup = (
                 df_sla.groupby("mes_str")["dentro_sla"]
-                      .value_counts(normalize=True)
-                      .unstack(fill_value=0) * 100
+                    .value_counts(normalize=True)
+                    .unstack(fill_value=0) * 100
             ).rename(columns={True: "% Dentro SLA", False: "% Fora SLA"})
 
             agr_wide = agrup.reset_index().copy()
@@ -180,23 +208,40 @@ for projeto, tab in zip(PROJETOS, tabs):
                 st.plotly_chart(fig_sla, use_container_width=True, key=f"sla_{projeto}")
 
         # ======================
-        # 3) Assunto Relacionado
+        # 3) Assunto Relacionado — COM FILTROS
         # ======================
         st.markdown("### 🧾 Assunto Relacionado")
+        anos_ass = sorted(dfp["mes_created"].dt.year.dropna().unique())
+        meses_ass = sorted(dfp["mes_created"].dt.month.dropna().unique())
+        col_ass1, col_ass2 = st.columns(2)
+        with col_ass1:
+            ano_ass = st.selectbox(f"Ano - {TITULOS[projeto]} (Assunto)", ["Todos"] + [str(a) for a in anos_ass], key=f"ano_ass_{projeto}")
+        with col_ass2:
+            mes_ass = st.selectbox(f"Mês - {TITULOS[projeto]} (Assunto)", ["Todos"] + [str(m).zfill(2) for m in meses_ass], key=f"mes_ass_{projeto}")
+
+        df_ass = dfp.copy()
+        if ano_ass != "Todos":
+            df_ass = df_ass[df_ass["mes_created"].dt.year == int(ano_ass)]
+        if mes_ass != "Todos":
+            df_ass = df_ass[df_ass["mes_created"].dt.month == int(mes_ass)]
+
         if CAMPOS_ASSUNTO[projeto] == "issuetype":
-            dfp["assunto_nome"] = dfp["issuetype"].apply(lambda x: x.get("name") if isinstance(x, dict) else str(x))
+            df_ass["assunto_nome"] = df_ass["issuetype"].apply(lambda x: x.get("name") if isinstance(x, dict) else str(x))
         else:
-            dfp["assunto_nome"] = dfp["assunto"].apply(lambda x: x.get("value") if isinstance(x, dict) else str(x))
-        assunto_count = dfp["assunto_nome"].value_counts().reset_index()
+            df_ass["assunto_nome"] = df_ass["assunto"].apply(lambda x: x.get("value") if isinstance(x, dict) else str(x))
+
+        assunto_count = df_ass["assunto_nome"].value_counts().reset_index()
         assunto_count.columns = ["Assunto", "Qtd"]
-        st.dataframe(assunto_count)
+        st.dataframe(assunto_count, use_container_width=True)
 
         # ======================
-        # 3.1) Submenu APP NE — só para TDS (horizontal, com filtros, rótulos e meses ordenados)
+        # 3.1) Submenu APP NE — só para TDS (filtros, meses ordenados e gráfico maior)
         # ======================
         if projeto == "TDS":
             with st.expander("📱 APP NE — Origem do problema", expanded=False):
-                df_app = dfp[dfp["assunto_nome"] == ASSUNTO_ALVO_APPNE].copy()
+                df_app = dfp.copy()
+                # reaproveita o nome de assunto calculado acima em dfp
+                df_app = df_app[df_app["assunto_nome"] == ASSUNTO_ALVO_APPNE].copy()
 
                 if df_app.empty:
                     st.info(f"Não há chamados com Assunto '{ASSUNTO_ALVO_APPNE}'.")
@@ -206,6 +251,7 @@ for projeto, tab in zip(PROJETOS, tabs):
                     )
                     df_app["mes_dt"] = df_app["mes_created"].dt.to_period("M").dt.to_timestamp()
 
+                    # Filtros (Ano/Mês)
                     anos_app = sorted(df_app["mes_dt"].dt.year.dropna().unique())
                     meses_app = sorted(df_app["mes_dt"].dt.month.dropna().unique())
                     col_app1, col_app2 = st.columns(2)
@@ -240,7 +286,7 @@ for projeto, tab in zip(PROJETOS, tabs):
                         cats = serie["mes_str"].dropna().unique().tolist()
                         serie["mes_str"] = pd.Categorical(serie["mes_str"], categories=cats, ordered=True)
 
-                        # gráfico horizontal
+                        # gráfico VERTICAL maior (labels visíveis)
                         fig_app = px.bar(
                             serie,
                             x="mes_str",
@@ -250,7 +296,7 @@ for projeto, tab in zip(PROJETOS, tabs):
                             title="APP NE — Volumes por mês e Origem do problema",
                             color_discrete_map={"APP NE": "#2ca02c", "APP EN": "#1f77b4"},
                             text="Qtd",
-                            height=800   # 👉 aumenta bastante a altura do gráfico
+                            height=700
                         )
                         fig_app.update_traces(texttemplate="%{text}", textposition="outside")
                         fig_app.update_layout(yaxis_title="Qtd", xaxis_title="Mês")
@@ -262,24 +308,52 @@ for projeto, tab in zip(PROJETOS, tabs):
                         st.dataframe(df_app_f[cols_show], use_container_width=True, hide_index=True)
 
         # ======================
-        # 4) Área Solicitante (não mostra em INTEL)
+        # 4) Área Solicitante (não mostra em INTEL) — COM FILTROS
         # ======================
         if projeto != "INTEL":
             st.markdown("### 📦 Área Solicitante")
-            dfp["area_nome"] = dfp["area"].apply(lambda x: x.get("value") if isinstance(x, dict) else str(x))
-            area_count = dfp["area_nome"].value_counts().reset_index()
+            anos_area = sorted(dfp["mes_created"].dt.year.dropna().unique())
+            meses_area = sorted(dfp["mes_created"].dt.month.dropna().unique())
+            col_ar1, col_ar2 = st.columns(2)
+            with col_ar1:
+                ano_area = st.selectbox(f"Ano - {TITULOS[projeto]} (Área)", ["Todos"] + [str(a) for a in anos_area], key=f"ano_area_{projeto}")
+            with col_ar2:
+                mes_area = st.selectbox(f"Mês - {TITULOS[projeto]} (Área)", ["Todos"] + [str(m).zfill(2) for m in meses_area], key=f"mes_area_{projeto}")
+
+            df_area = dfp.copy()
+            if ano_area != "Todos":
+                df_area = df_area[df_area["mes_created"].dt.year == int(ano_area)]
+            if mes_area != "Todos":
+                df_area = df_area[df_area["mes_created"].dt.month == int(mes_area)]
+
+            df_area["area_nome"] = df_area["area"].apply(lambda x: x.get("value") if isinstance(x, dict) else str(x))
+            area_count = df_area["area_nome"].value_counts().reset_index()
             area_count.columns = ["Área", "Qtd"]
-            st.dataframe(area_count)
+            st.dataframe(area_count, use_container_width=True)
 
         # ======================
-        # 5) Encaminhamentos (só TDS e INT)
+        # 5) Encaminhamentos (só TDS e INT) — COM FILTROS
         # ======================
         if projeto in ("TDS", "INT"):
             st.markdown("### 🔄 Encaminhamentos")
+            anos_enc = sorted(dfp["mes_created"].dt.year.dropna().unique())
+            meses_enc = sorted(dfp["mes_created"].dt.month.dropna().unique())
+            col_en1, col_en2 = st.columns(2)
+            with col_en1:
+                ano_enc = st.selectbox(f"Ano - {TITULOS[projeto]} (Encaminhamentos)", ["Todos"] + [str(a) for a in anos_enc], key=f"ano_enc_{projeto}")
+            with col_en2:
+                mes_enc = st.selectbox(f"Mês - {TITULOS[projeto]} (Encaminhamentos)", ["Todos"] + [str(m).zfill(2) for m in meses_enc], key=f"mes_enc_{projeto}")
+
+            df_enc = dfp.copy()
+            if ano_enc != "Todos":
+                df_enc = df_enc[df_enc["mes_created"].dt.year == int(ano_enc)]
+            if mes_enc != "Todos":
+                df_enc = df_enc[df_enc["mes_created"].dt.month == int(mes_enc)]
+
             col1, col2 = st.columns(2)
             with col1:
-                count_prod = dfp["status"].str.contains("Produto", case=False, na=False).sum()
+                count_prod = df_enc["status"].str.contains("Produto", case=False, na=False).sum()
                 st.metric("Encaminhados Produto", count_prod)
             with col2:
-                dfp["n3_valor"] = dfp["n3"].apply(lambda x: x.get("value") if isinstance(x, dict) else None)
-                st.metric("Encaminhados N3", (dfp["n3_valor"] == "Sim").sum())
+                df_enc["n3_valor"] = df_enc["n3"].apply(lambda x: x.get("value") if isinstance(x, dict) else None)
+                st.metric("Encaminhados N3", (df_enc["n3_valor"] == "Sim").sum())
