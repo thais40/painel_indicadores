@@ -38,8 +38,8 @@ CF_AREA_SOL    = "customfield_13719"   # Área Solicitante (.value)
 CF_SLA_SUP     = "customfield_13744"   # SLA (SUP) p/ TDS/TINE
 CF_SLA_RES     = "customfield_13686"   # Tempo de resolução (fallback)
 
-PROJETO_DEFAULT = "TDS"  # ajuste se quiser
-JQL_PERIOD_START = "2024-01-01"  # ajuste o período “fixo” do classic
+PROJETO_DEFAULT = "TDS"           # ajuste se quiser
+JQL_PERIOD_START = "2024-01-01"   # ajuste o período “fixo” do classic
 
 # =====================================================
 # HELPERS
@@ -85,21 +85,37 @@ def ordenar_mes_str(df: pd.DataFrame, col="mes_str") -> pd.DataFrame:
     dfx[col] = pd.Categorical(dfx[col], categories=cats, ordered=True)
     return dfx
 
-def month_range_from_series(s: pd.Series) -> Tuple[pd.Timestamp | None, pd.Timestamp | None]:
+# 🔒 Helper robusto para ranges mensais (evita "duplicate keys" no to_datetime)
+def month_range_from_series(s) -> Tuple[pd.Timestamp | None, pd.Timestamp | None]:
     """
-    Retorna (inicio_do_mes_min, inicio_do_proximo_mes_max) para usar em date_range(freq='MS').
-    Lida com NaT, timezone e séries vazias.
+    Retorna (início_do_mês_mín, início_do_próximo_mês_do_máx) para usar com freq='MS'.
+    Robusto para: DataFrame com colunas duplicadas, Series com dicts/objetos, timezone.
     """
+    # 1) Se vier DataFrame (ex.: colunas duplicadas "created"), usa a 1ª coluna
+    if isinstance(s, pd.DataFrame):
+        if s.shape[1] == 0:
+            return None, None
+        s = s.iloc[:, 0]
+
+    # 2) Converte tudo para string antes de to_datetime (evita assemble-from-units)
+    s = pd.Series(s)  # garante Series
+    s = s.astype(str)
+
+    # 3) Parse para datetime (coerce) e remove NaT
     s = pd.to_datetime(s, errors="coerce")
     s = s.dropna()
     if s.empty:
         return None, None
+
+    # 4) Remove timezone se houver
     try:
-        s = s.dt.tz_localize(None)  # remove tz se houver
+        s = s.dt.tz_localize(None)
     except Exception:
         pass
-    start = s.min().to_period("M").to_timestamp()                 # 1º dia do mês do mínimo
-    end   = (s.max().to_period("M").to_timestamp() + MonthBegin(1))# 1º dia do mês seguinte ao máximo
+
+    # 5) Gera limites mensais
+    start = s.min().to_period("M").to_timestamp()                   # 1º dia do mês do mínimo
+    end   = (s.max().to_period("M").to_timestamp() + MonthBegin(1)) # 1º dia do mês seguinte ao máximo
     return start, end
 
 # =====================================================
@@ -203,7 +219,7 @@ def build_df_area(df_flat: pd.DataFrame) -> pd.DataFrame:
 # =====================================================
 # RENDER
 # =====================================================
-st.title("📊 Painel de Indicadores — Jira (Classic)")
+st.title("📊 Painel de Indicadores")
 
 # 🔄 Botão para atualizar dados do Jira manualmente
 if st.button("🔄 Atualizar dados"):
@@ -227,6 +243,11 @@ def load_and_render():
 
     df_flat = flatten_issues(raw)
     df_issues = build_df_issues(df_flat, projeto)
+
+    # ✅ Reforço de tipo: garante datetime mesmo se algo rio abaixo mudou o dtype
+    df_issues["created"] = pd.to_datetime(df_issues["created"], errors="coerce")
+    df_issues["resolved"] = pd.to_datetime(df_issues["resolved"], errors="coerce")
+
     df_assunto = build_df_assunto(df_issues)
     df_area = build_df_area(df_flat)
 
