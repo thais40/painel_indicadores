@@ -156,7 +156,6 @@ for projeto, tab in zip(PROJETOS, tabs):
             if not y_cols:
                 st.info("Sem colunas de SLA para exibir.")
             else:
-                # ordenar meses
                 try:
                     agr_wide["mes_data"] = pd.to_datetime(agr_wide["mes_str"], format="%b/%Y")
                 except Exception:
@@ -193,7 +192,7 @@ for projeto, tab in zip(PROJETOS, tabs):
         st.dataframe(assunto_count)
 
         # ======================
-        # 3.1) Submenu APP NE — só para TDS (com filtros, rótulos e meses ordenados)
+        # 3.1) Submenu APP NE — só para TDS (horizontal, com filtros, rótulos e meses ordenados)
         # ======================
         if projeto == "TDS":
             with st.expander("📱 APP NE — Origem do problema", expanded=False):
@@ -202,13 +201,11 @@ for projeto, tab in zip(PROJETOS, tabs):
                 if df_app.empty:
                     st.info(f"Não há chamados com Assunto '{ASSUNTO_ALVO_APPNE}'.")
                 else:
-                    # origem + coluna mensal para ordenar
                     df_app["origem_nome"] = df_app["origem"].apply(
                         lambda x: x.get("value") if isinstance(x, dict) else (str(x) if x is not None else "—")
                     )
                     df_app["mes_dt"] = df_app["mes_created"].dt.to_period("M").dt.to_timestamp()
 
-                    # Filtros (Ano/Mês)
                     anos_app = sorted(df_app["mes_dt"].dt.year.dropna().unique())
                     meses_app = sorted(df_app["mes_dt"].dt.month.dropna().unique())
                     col_app1, col_app2 = st.columns(2)
@@ -226,7 +223,6 @@ for projeto, tab in zip(PROJETOS, tabs):
                     if df_app_f.empty:
                         st.info("Sem dados para exibir com os filtros selecionados.")
                     else:
-                        # métricas (filtradas)
                         total_app = len(df_app_f)
                         contagem = df_app_f["origem_nome"].value_counts(dropna=False).to_dict()
                         c1, c2, c3 = st.columns(3)
@@ -234,7 +230,6 @@ for projeto, tab in zip(PROJETOS, tabs):
                         c2.metric("APP NE", contagem.get("APP NE", 0))
                         c3.metric("APP EN", contagem.get("APP EN", 0))
 
-                        # série mensal (ordenada) com rótulos de quantidade
                         serie = (
                             df_app_f.groupby(["mes_dt", "origem_nome"])
                                     .size()
@@ -245,21 +240,22 @@ for projeto, tab in zip(PROJETOS, tabs):
                         cats = serie["mes_str"].dropna().unique().tolist()
                         serie["mes_str"] = pd.Categorical(serie["mes_str"], categories=cats, ordered=True)
 
+                        # gráfico horizontal
                         fig_app = px.bar(
                             serie,
-                            x="mes_str",
-                            y="Qtd",
+                            x="Qtd",
+                            y="mes_str",
                             color="origem_nome",
                             barmode="group",
+                            orientation="h",
                             title="APP NE — Volumes por mês e Origem do problema",
                             color_discrete_map={"APP NE": "#2ca02c", "APP EN": "#1f77b4"},
                             text="Qtd"
                         )
                         fig_app.update_traces(texttemplate="%{text}", textposition="outside")
-                        fig_app.update_layout(yaxis_title="Qtd", xaxis_title="Mês")
+                        fig_app.update_layout(xaxis_title="Qtd", yaxis_title="Mês")
                         st.plotly_chart(fig_app, use_container_width=True)
 
-                        # Tabela detalhada (filtrada)
                         df_app_f["mes_str"] = df_app_f["mes_dt"].dt.strftime("%b/%Y")
                         cols_show = ["key", "created", "mes_str", "assunto_nome", "origem_nome", "status"]
                         cols_show = [c for c in cols_show if c in df_app_f.columns]
