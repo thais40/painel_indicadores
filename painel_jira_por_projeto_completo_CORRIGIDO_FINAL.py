@@ -243,17 +243,17 @@ for projeto, tab in zip(PROJETOS, tabs):
                         # gráfico horizontal
                         fig_app = px.bar(
                             serie,
-                            x="Qtd",
-                            y="mes_str",
+                            x="mes_str",
+                            y="Qtd",
                             color="origem_nome",
                             barmode="group",
-                            orientation="h",
                             title="APP NE — Volumes por mês e Origem do problema",
                             color_discrete_map={"APP NE": "#2ca02c", "APP EN": "#1f77b4"},
-                            text="Qtd"
+                            text="Qtd",
+                            height=700   # 👉 aumenta bastante a altura do gráfico
                         )
-                        fig_app.update_traces(texttemplate="%{text}", textposition="outside")
-                        fig_app.update_layout(xaxis_title="Qtd", yaxis_title="Mês")
+                        fig_app.update_traces(texttemplate="%{text}", textposition="outside')
+                        fig_app.update_layout(yaxis_title="Qtd", xaxis_title="Mês")
                         st.plotly_chart(fig_app, use_container_width=True)
 
                         df_app_f["mes_str"] = df_app_f["mes_dt"].dt.strftime("%b/%Y")
