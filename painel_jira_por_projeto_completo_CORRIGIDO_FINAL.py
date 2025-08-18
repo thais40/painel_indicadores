@@ -239,13 +239,25 @@ for projeto, tab in zip(PROJETOS, tabs):
         # ======================
         if projeto == "TDS":
             with st.expander("📱 APP NE — Origem do problema", expanded=False):
-                df_app = dfp.copy()
-                # reaproveita o nome de assunto calculado acima em dfp
-                df_app = df_app[df_app["assunto_nome"] == ASSUNTO_ALVO_APPNE].copy()
+
+                # ✅ Garante 'assunto_nome' (independente de cima)
+                if "assunto_nome" not in dfp.columns:
+                    if CAMPOS_ASSUNTO[projeto] == "issuetype":
+                        dfp["assunto_nome"] = dfp["issuetype"].apply(
+                            lambda x: x.get("name") if isinstance(x, dict) else (str(x) if x is not None else "—")
+                        )
+                    else:
+                        dfp["assunto_nome"] = dfp["assunto"].apply(
+                            lambda x: x.get("value") if isinstance(x, dict) else (str(x) if x is not None else "—")
+                        )
+
+                # Filtra assunto alvo
+                df_app = dfp[dfp["assunto_nome"] == ASSUNTO_ALVO_APPNE].copy()
 
                 if df_app.empty:
                     st.info(f"Não há chamados com Assunto '{ASSUNTO_ALVO_APPNE}'.")
                 else:
+                    # Origem + coluna mensal
                     df_app["origem_nome"] = df_app["origem"].apply(
                         lambda x: x.get("value") if isinstance(x, dict) else (str(x) if x is not None else "—")
                     )
@@ -269,6 +281,7 @@ for projeto, tab in zip(PROJETOS, tabs):
                     if df_app_f.empty:
                         st.info("Sem dados para exibir com os filtros selecionados.")
                     else:
+                        # Métricas (filtradas)
                         total_app = len(df_app_f)
                         contagem = df_app_f["origem_nome"].value_counts(dropna=False).to_dict()
                         c1, c2, c3 = st.columns(3)
@@ -276,6 +289,7 @@ for projeto, tab in zip(PROJETOS, tabs):
                         c2.metric("APP NE", contagem.get("APP NE", 0))
                         c3.metric("APP EN", contagem.get("APP EN", 0))
 
+                        # Série mensal por origem (ordenada) + rótulos
                         serie = (
                             df_app_f.groupby(["mes_dt", "origem_nome"])
                                     .size()
@@ -286,7 +300,6 @@ for projeto, tab in zip(PROJETOS, tabs):
                         cats = serie["mes_str"].dropna().unique().tolist()
                         serie["mes_str"] = pd.Categorical(serie["mes_str"], categories=cats, ordered=True)
 
-                        # gráfico VERTICAL maior (labels visíveis)
                         fig_app = px.bar(
                             serie,
                             x="mes_str",
@@ -296,12 +309,13 @@ for projeto, tab in zip(PROJETOS, tabs):
                             title="APP NE — Volumes por mês e Origem do problema",
                             color_discrete_map={"APP NE": "#2ca02c", "APP EN": "#1f77b4"},
                             text="Qtd",
-                            height=700
+                            height=700  # maior para números bem visíveis
                         )
                         fig_app.update_traces(texttemplate="%{text}", textposition="outside")
                         fig_app.update_layout(yaxis_title="Qtd", xaxis_title="Mês")
                         st.plotly_chart(fig_app, use_container_width=True)
 
+                        # Tabela detalhada (filtrada)
                         df_app_f["mes_str"] = df_app_f["mes_dt"].dt.strftime("%b/%Y")
                         cols_show = ["key", "created", "mes_str", "assunto_nome", "origem_nome", "status"]
                         cols_show = [c for c in cols_show if c in df_app_f.columns]
