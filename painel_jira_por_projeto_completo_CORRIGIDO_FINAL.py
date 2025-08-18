@@ -1,420 +1,322 @@
-# -*- coding: utf-8 -*-
-import time
-from typing import Any, Dict, List, Tuple
-
-import numpy as np
-import pandas as pd
-import requests
 import streamlit as st
+import pandas as pd
 import plotly.express as px
-from requests.auth import HTTPBasicAuth
-from pandas.tseries.offsets import MonthBegin
+import requests
 
-st.set_page_config(page_title="Painel de Indicadores — Jira (Classic)", layout="wide")
-
-# =====================================================
-# CREDENCIAIS FIXAS (via st.secrets) — sem sidebar
-# =====================================================
-JIRA_URL = "https://tiendanube.atlassian.net"
-EMAIL = st.secrets["EMAIL"]          # defina em .streamlit/secrets.toml
-TOKEN = st.secrets["TOKEN"]          # defina em .streamlit/secrets.toml
-auth = HTTPBasicAuth(EMAIL, TOKEN)
-
-# =====================================================
-# CONFIG
-# =====================================================
+# Limites de SLA por projeto (em milissegundos)
 SLA_LIMITE = {
-    "TDS": 40 * 60 * 60 * 1000,  # 40h
-    "INT": 40 * 60 * 60 * 1000,
-    "TINE": 40 * 60 * 60 * 1000, # 40h
-    "INTEL": 80 * 60 * 60 * 1000,# 80h
+    "TDS": 40 * 60 * 60 * 1000,     # 40 horas
+    "INT": 40 * 60 * 60 * 1000,     # 40 horas
+    "TINE": 40 * 60 * 60 * 1000,    # 40 horas
+    "INTEL": 80 * 60 * 60 * 1000    # 80 horas
 }
-SLA_PADRAO_MILLIS = 40 * 60 * 60 * 1000
-ASSUNTO_ALVO_APPNE = "Problemas no App NE - App EN"
 
-CF_ASSUNTO_REL = "customfield_13747"   # Assunto Relacionado
-CF_ORIGEM_PROB = "customfield_13628"   # Origem do problema
-CF_AREA_SOL    = "customfield_13719"   # Área Solicitante (.value)
-CF_SLA_SUP     = "customfield_13744"   # SLA (SUP) p/ TDS/TINE
-CF_SLA_RES     = "customfield_13686"   # Tempo de resolução (fallback)
+from requests.auth import HTTPBasicAuth
+from datetime import datetime
 
-PROJETOS = ["TDS", "INT", "TINE", "INTEL"]
-JQL_PERIOD_START = "2024-01-01"        # início fixo do período
-# fim: hoje (dinâmico)
-JQL_PERIOD_END = pd.to_datetime("today").strftime("%Y-%m-%d")
-
-# =====================================================
-# HELPERS
-# =====================================================
-def first_option(value):
-    """Extrai .value de option Jira (dict/list/str)."""
-    if value is None or (isinstance(value, float) and np.isnan(value)):
-        return None
-    if isinstance(value, dict):
-        return value.get("value") or value.get("name") or str(value)
-    if isinstance(value, (list, tuple)):
-        if not value:
-            return None
-        v0 = value[0]
-        if isinstance(v0, dict):
-            return v0.get("value") or v0.get("name") or str(v0)
-        return str(v0)
-    return str(value)
-
-def get_nested(d, path, default=None):
-    node = d
-    for k in path:
-        if not isinstance(node, dict) or k not in node:
-            return default
-        node = node[k]
-    return node
-
-def ensure_ms(x):
-    try:
-        return float(x)
-    except Exception:
-        return pd.to_numeric(x, errors="coerce")
-
-def ordenar_mes_str(df: pd.DataFrame, col="mes_str") -> pd.DataFrame:
-    dfx = df.copy()
-    try:
-        dfx["mes_data"] = pd.to_datetime(dfx[col], format="%b/%Y")
-    except Exception:
-        dfx["mes_data"] = pd.to_datetime(dfx[col], errors="coerce")
-    dfx = dfx.sort_values("mes_data")
-    dfx[col] = dfx["mes_data"].dt.strftime("%b/%Y")
-    cats = dfx[col].dropna().unique().tolist()
-    dfx[col] = pd.Categorical(dfx[col], categories=cats, ordered=True)
-    return dfx
-
-def month_range_from_series(s) -> Tuple[pd.Timestamp | None, pd.Timestamp | None]:
-    """
-    Retorna (início_do_mês_mín, início_do_próximo_mês_do_máx) para usar com freq='MS'.
-    Robusto para: DataFrame com colunas duplicadas, Series com dicts/objetos, timezone.
-    """
-    if isinstance(s, pd.DataFrame):
-        if s.shape[1] == 0:
-            return None, None
-        s = s.iloc[:, 0]
-    s = pd.Series(s)  # garante Series
-    s = s.astype(str)  # evita assemble-from-units
-    s = pd.to_datetime(s, errors="coerce").dropna()
-    if s.empty:
-        return None, None
-    try:
-        s = s.dt.tz_localize(None)
-    except Exception:
-        pass
-    start = s.min().to_period("M").to_timestamp()                   # 1º dia do mês do mínimo
-    end   = (s.max().to_period("M").to_timestamp() + MonthBegin(1)) # 1º dia do mês seguinte ao máximo
-    return start, end
-
-# =====================================================
-# JIRA API (com cache)
-# =====================================================
-@st.cache_data(show_spinner=False, ttl=900)  # 15 min de cache
-def jira_search_cached(base_url: str, email: str, token: str, jql: str, fields: List[str]) -> List[Dict[str, Any]]:
-    url = base_url.rstrip("/") + "/rest/api/3/search"
-    auth_local = HTTPBasicAuth(email, token)
-    start_at = 0
-    collected: List[Dict[str, Any]] = []
-
-    while True:
-        params = {"jql": jql, "startAt": start_at, "maxResults": 100, "fields": ",".join(fields)}
-        r = requests.get(url, params=params, auth=auth_local, timeout=60)
-        if r.status_code >= 400:
-            raise RuntimeError(f"Erro Jira {r.status_code}: {r.text[:300]}")
-        data = r.json()
-        issues = data.get("issues", [])
-        collected.extend(issues)
-
-        total = data.get("total", 0)
-        if len(collected) >= total:
-            break
-        start_at += 100
-        time.sleep(0.2)
-
-    return collected
-
-def flatten_issues(raw: List[Dict[str, Any]]) -> pd.DataFrame:
-    rows = []
-    for it in raw:
-        f = it.get("fields", {})
-        rows.append({
-            "key": it.get("key"),
-            "id": it.get("id"),
-            "created": f.get("created"),
-            "resolutiondate": f.get("resolutiondate"),
-            CF_ASSUNTO_REL: f.get(CF_ASSUNTO_REL),
-            CF_ORIGEM_PROB: f.get(CF_ORIGEM_PROB),
-            f"{CF_AREA_SOL}.value": get_nested(f, [CF_AREA_SOL, "value"]),
-            CF_SLA_SUP: f.get(CF_SLA_SUP),
-            CF_SLA_RES: f.get(CF_SLA_RES),
-        })
-    return pd.DataFrame(rows)
-
-def build_df_issues(df_flat: pd.DataFrame, projeto: str) -> pd.DataFrame:
-    df = df_flat.copy()
-    df["id_norm"] = df.get("key", df.get("id"))
-    df["created_norm"] = pd.to_datetime(df.get("created"), errors="coerce")
-    df["resolved_norm"] = pd.to_datetime(df.get("resolutiondate"), errors="coerce")
-
-    df["assunto_relacionado_norm"] = df[CF_ASSUNTO_REL].apply(first_option) if CF_ASSUNTO_REL in df else None
-    df["origem_problema_norm"] = df[CF_ORIGEM_PROB].apply(first_option) if CF_ORIGEM_PROB in df else None
-
-    projeto_up = str(projeto).upper()
-    use_sup = projeto_up in {"TDS", "TINE"}
-
-    def extract_sla_ms(row):
-        obj = row.get(CF_SLA_SUP) if use_sup else row.get(CF_SLA_RES)
-        ms = None
-        if isinstance(obj, dict):
-            ms = get_nested(obj, ["elapsedTime", "millis"]) or get_nested(obj, ["ongoingCycle", "elapsedTime", "millis"])
-        if ms is None and pd.notna(row.get("resolved_norm")) and pd.notna(row.get("created_norm")):
-            return (row["resolved_norm"] - row["created_norm"]).total_seconds() * 1000.0
-        return ensure_ms(ms)
-
-    df["sla_millis_norm"] = df.apply(extract_sla_ms, axis=1)
-    limite_ms = SLA_LIMITE.get(projeto_up, SLA_PADRAO_MILLIS)
-    df["dentro_sla_norm"] = df["sla_millis_norm"] <= limite_ms
-    df["mes_str_norm"] = df["created_norm"].dt.strftime("%b/%Y")
-
-    return df.rename(columns={
-        "id_norm": "id",
-        "created_norm": "created",
-        "resolved_norm": "resolved",
-        "sla_millis_norm": "sla_millis",
-        "dentro_sla_norm": "dentro_sla",
-        "mes_str_norm": "mes_str",
-        "assunto_relacionado_norm": "assunto_relacionado",
-        "origem_problema_norm": "origem_problema",
-    })
-
-def build_df_assunto(df_issues: pd.DataFrame) -> pd.DataFrame:
-    return (
-        df_issues.assign(Assunto=df_issues["assunto_relacionado"].fillna("—"))
-                 .groupby("Assunto").size().reset_index(name="Qtd")
-                 .sort_values("Qtd", ascending=False)
-    )
-
-def build_df_area(df_flat: pd.DataFrame) -> pd.DataFrame:
-    col = f"{CF_AREA_SOL}.value"
-    if col not in df_flat:
-        return pd.DataFrame({"Área": [], "Qtd": []})
-    return (
-        pd.DataFrame({"Área": df_flat[col].fillna("—")})
-        .groupby("Área").size().reset_index(name="Qtd")
-        .sort_values("Qtd", ascending=False)
-    )
-
-# =====================================================
-# RENDER
-# =====================================================
-st.title("📊 Painel de Indicadores — Jira")
+st.set_page_config(layout="wide")
+st.title("📊 Painel de Indicadores")
 
 # 🔄 Botão para atualizar dados do Jira manualmente
 if st.button("🔄 Atualizar dados"):
     st.cache_data.clear()
     st.rerun()
 
-# Seletor de projeto na própria página (sem sidebar)
-projeto = st.radio("Projeto", PROJETOS, index=0, horizontal=True)
+JIRA_URL = "https://tiendanube.atlassian.net"
+EMAIL = st.secrets['EMAIL']
+TOKEN = st.secrets['TOKEN']
+auth = HTTPBasicAuth(EMAIL, TOKEN)
 
-# JQL com período fixo (início) e fim = hoje
-jql = f'project = {projeto} AND created >= "{JQL_PERIOD_START}" AND created <= "{JQL_PERIOD_END}" ORDER BY created ASC'
+PROJETOS = ["TDS", "INT", "TINE", "INTEL"]
+TITULOS = {
+    "TDS": "Tech Support",
+    "INT": "Integrations",
+    "TINE": "IT Support NE",
+    "INTEL": "Intelligence"
+}
+SLA_CAMPOS = {
+    "TDS": "customfield_13744",
+    "TINE": "customfield_13744",
+    "INT": "customfield_13686",
+    "INTEL": "customfield_13686"
+}
+CAMPOS_ASSUNTO = {
+    "TDS": "customfield_13712",
+    "INT": "customfield_13643",
+    "TINE": "customfield_13699",
+    "INTEL": "issuetype"
+}
+CAMPO_AREA = "customfield_13719"
+CAMPO_N3 = "customfield_13659"
+SLA_METAS = {"TDS": 98, "INT": 96, "TINE": 96, "INTEL": 96}
+SLA_HORAS = {"TDS": 40, "INT": 40, "TINE": 40, "INTEL": 80}
 
-def load_and_render(projeto_sel: str):
-    fields = ["key", "created", "resolutiondate",
-              CF_ASSUNTO_REL, CF_ORIGEM_PROB, CF_AREA_SOL,
-              CF_SLA_SUP, CF_SLA_RES]
+def extrair_sla_millis(sla_field):
+    try:
+        if sla_field.get("completedCycles"):
+            return sla_field["completedCycles"][0].get("elapsedTime", {}).get("millis")
+        if sla_field.get("ongoingCycle"):
+            return sla_field["ongoingCycle"].get("elapsedTime", {}).get("millis")
+    except:
+        return None
+    return None
 
-    raw = jira_search_cached(JIRA_URL, EMAIL, TOKEN, jql, fields)
-    st.caption(f"Issues retornados: {len(raw)}")
-    if not raw:
-        st.warning("JQL não retornou issues. Ajuste período/permissões.")
-        return
+@st.cache_data(show_spinner="🔄 Buscando dados do Jira...")
+def buscar_issues():
+    todos = []
+    for projeto in PROJETOS:
+        start = 0
+        while True:
+            jql = f'project = "{projeto}" AND created >= "2024-01-01" ORDER BY created ASC'
+            params = {
+                "jql": jql,
+                "startAt": start,
+                "maxResults": 100,
+                "fields": "created,resolutiondate,status,issuetype," +
+                          f"{SLA_CAMPOS[projeto]},{CAMPOS_ASSUNTO[projeto]},{CAMPO_AREA},{CAMPO_N3}"
+            }
+            res = requests.get(f"{JIRA_URL}/rest/api/3/search", auth=auth, params=params)
+            if res.status_code != 200:
+                break
+            dados = res.json().get("issues", [])
+            if not dados:
+                break
+            for issue in dados:
+                f = issue["fields"]
+                sla_raw = f.get(SLA_CAMPOS[projeto], {})
+                todos.append({
+                    "projeto": projeto,
+                    "created": f.get("created"),
+                    "resolved": f.get("resolutiondate"),
+                    "status": f.get("status", {}).get("name"),
+                    "sla_millis": extrair_sla_millis(sla_raw),
+                    "area": f.get(CAMPO_AREA),
+                    "assunto": f.get(CAMPOS_ASSUNTO[projeto]),
+                    "issuetype": f.get("issuetype"),
+                    "n3": f.get(CAMPO_N3)
+                })
+            start += 100
+    return pd.DataFrame(todos)
 
-    df_flat = flatten_issues(raw)
-    df_issues = build_df_issues(df_flat, projeto_sel)
+# ===== CARREGAR DADOS =====
+df = buscar_issues()
+df["created"] = pd.to_datetime(df["created"])
+df["resolved"] = pd.to_datetime(df["resolved"])
+df["mes_created"] = df["created"].dt.to_period("M").dt.to_timestamp()
+df["mes_resolved"] = df["resolved"].dt.to_period("M").dt.to_timestamp()
 
-    # 🔧 Patch: tratar colunas duplicadas e garantir datetime
-    if getattr(df_issues.columns, "duplicated", lambda: np.array([]))().any():
-        df_issues = df_issues.loc[:, ~df_issues.columns.duplicated(keep="first")]
+# ===== VISUALIZAÇÃO DE DADOS =====
+tabs = st.tabs([TITULOS[p] for p in PROJETOS])
 
-    def _coerce_dt(df, col):
-        obj = df.loc[:, col]
-        if isinstance(obj, pd.DataFrame):
-            obj = obj.iloc[:, 0]
-        ser = pd.Series(obj, copy=False).astype(str)
-        ser = pd.to_datetime(ser, errors="coerce")
+for projeto, tab in zip(PROJETOS, tabs):
+    with tab:
+        st.subheader(f"📂 Projeto: {TITULOS[projeto]}")
+        dfp = df[df["projeto"] == projeto].copy()
+        sla_limite = SLA_HORAS[projeto] * 60 * 60 * 1000
+        sla_meta = SLA_METAS[projeto]
+
+        # ==============================================
+        # (1) 📈 Tickets Criados vs Resolvidos  — ANTES DO SLA
+        # ==============================================
+        st.markdown("### 📈 Tickets Criados vs Resolvidos")
+        anos_cr = sorted(dfp["mes_created"].dt.year.unique())
+        meses_cr = sorted(dfp["mes_created"].dt.month.unique())
+        col_cr1, col_cr2 = st.columns(2)
+        with col_cr1:
+            ano_cr = st.selectbox(f"Ano - {TITULOS[projeto]}", ["Todos"] + [str(a) for a in anos_cr], key=f"ano_cr_{projeto}")
+        with col_cr2:
+            mes_cr = st.selectbox(f"Mês - {TITULOS[projeto]}", ["Todos"] + [str(m).zfill(2) for m in meses_cr], key=f"mes_cr_{projeto}")
+        df_cr = dfp.copy()
+        if ano_cr != "Todos":
+            df_cr = df_cr[df_cr["mes_created"].dt.year == int(ano_cr)]
+        if mes_cr != "Todos":
+            df_cr = df_cr[df_cr["mes_created"].dt.month == int(mes_cr)]
+        criados = df_cr.groupby("mes_created").size().reset_index(name="Criados")
+        resolvidos = df_cr[df_cr["resolved"].notna()].groupby("mes_resolved").size().reset_index(name="Resolvidos")
+        criados.rename(columns={"mes_created": "mes_str"}, inplace=True)
+        resolvidos.rename(columns={"mes_resolved": "mes_str"}, inplace=True)
+        grafico = pd.merge(criados, resolvidos, how="outer", on="mes_str").fillna(0).sort_values("mes_str")
+        grafico["mes_str"] = grafico["mes_str"].dt.strftime("%b/%Y")
+        fig = px.bar(grafico, x="mes_str", y=["Criados", "Resolvidos"], barmode="group", text_auto=True, height=400)
+        st.plotly_chart(fig, use_container_width=True, key=f"crv_{projeto}")
+
+        # ==============================================
+        # (2) ⏱️ SLA  — DEPOIS de Criados vs Resolvidos
+        # ==============================================
+        st.markdown("### ⏱️ SLA")
+        # Filtros separados de ano e mês
+        anos_sla = sorted(dfp["mes_resolved"].dropna().dt.year.unique())
+        meses_sla = sorted(dfp["mes_resolved"].dropna().dt.month.unique())
+        col_sla1, col_sla2 = st.columns(2)
+        with col_sla1:
+            ano_sla = st.selectbox(f"Ano - {TITULOS[projeto]} (SLA)", ["Todos"] + [str(a) for a in anos_sla], key=f"ano_sla_{projeto}")
+        with col_sla2:
+            mes_sla = st.selectbox(f"Mês - {TITULOS[projeto]} (SLA)", ["Todos"] + [str(m).zfill(2) for m in meses_sla], key=f"mes_sla_{projeto}")
+
+        df_sla = dfp.copy()
+        if ano_sla != "Todos":
+            df_sla = df_sla[df_sla["mes_resolved"].dt.year == int(ano_sla)]
+        if mes_sla != "Todos":
+            df_sla = df_sla[df_sla["mes_resolved"].dt.month == int(mes_sla)]
+
+        df_sla = df_sla[df_sla["sla_millis"].notna()]
+        df_sla["mes_str"] = df_sla["mes_resolved"].dt.strftime("%b/%Y")
+        # ----- Garantia de variável `projeto` definida -----
         try:
-            ser = ser.dt.tz_localize(None)
-        except Exception:
-            pass
-        return ser
-
-    df_issues["created"] = _coerce_dt(df_issues, "created")
-    df_issues["resolved"] = _coerce_dt(df_issues, "resolved")
-
-    df_assunto = build_df_assunto(df_issues)
-    df_area = build_df_area(df_flat)
-
-    # =====================================================
-    # 1) Criados vs Resolvidos
-    # =====================================================
-    st.subheader(f"Criados vs Resolvidos — {projeto_sel}")
-
-    start, end = month_range_from_series(df_issues["created"])
-    if start is None or end is None:
-        st.warning("Não há datas de criação válidas para montar a série mensal.")
-        return
-
-    df_months = pd.DataFrame({"mes": pd.date_range(start=start, end=end, freq="MS")})
-
-    criadas = (
-        df_issues
-        .groupby(df_issues["created"].dt.to_period("M"))
-        .size()
-        .rename("Criados")
-    )
-    criadas.index = criadas.index.to_timestamp()
-
-    if df_issues["resolved"].notna().any():
-        resolvidas = (
-            df_issues.dropna(subset=["resolved"])
-                     .groupby(df_issues["resolved"].dt.to_period("M"))
-                     .size()
-                     .rename("Resolvidos")
-        )
-        resolvidas.index = resolvidas.index.to_timestamp()
-    else:
-        resolvidas = pd.Series(dtype=float, name="Resolvidos")
-
-    df_cr_res = (
-        df_months.set_index("mes")
-                 .join(criadas, how="left")
-                 .join(resolvidas, how="left")
-                 .fillna(0)
-                 .reset_index()
-    )
-    df_cr_res["mes_str"] = df_cr_res["mes"].dt.strftime("%b/%Y")
-    df_cr_res = ordenar_mes_str(df_cr_res, "mes_str")
-
-    fig_cr = px.bar(
-        df_cr_res,
-        x="mes_str",
-        y=["Criados", "Resolvidos"],
-        barmode="group",
-        title=f"Criados vs Resolvidos — {projeto_sel}",
-    )
-    st.plotly_chart(fig_cr, use_container_width=True)
-
-    st.markdown("---")
-
-    # =====================================================
-    # 2) SLA — Dentro x Fora (%)
-    # =====================================================
-    st.subheader(f"SLA — Dentro x Fora (%) — {projeto_sel}")
-
-    agrupado = (
-        df_issues
-        .groupby("mes_str")["dentro_sla"]
-        .value_counts(normalize=True)
-        .unstack(fill_value=0) * 100.0
-    )
-
-    cols_exist = [c for c in agrupado.columns if c in (True, False, "True", "False")]
-    agr_wide = agrupado.loc[:, cols_exist].copy() if cols_exist else agrupado.copy()
-    agr_wide.rename(columns={
-        True: "% Dentro SLA",
-        False: "% Fora SLA",
-        "True": "% Dentro SLA",
-        "False": "% Fora SLA",
-    }, inplace=True)
-
-    agr_wide = ordenar_mes_str(agr_wide.reset_index(), "mes_str")
-
-    fig_sla = px.bar(
-        agr_wide,
-        x="mes_str",
-        y=[c for c in ["% Dentro SLA", "% Fora SLA"] if c in agr_wide.columns],
-        barmode="group",
-        color_discrete_map={"% Dentro SLA": "green", "% Fora SLA": "red"},
-        title=f"Percentual dentro/fora do SLA — {projeto_sel}",
-    )
-    fig_sla.update_traces(texttemplate="%{y:.1f}%", textposition="outside")
-    fig_sla.update_yaxes(ticksuffix="%")
-    st.plotly_chart(fig_sla, use_container_width=True)
-
-    st.markdown("---")
-
-    # =====================================================
-    # 3) Assunto Relacionado
-    # =====================================================
-    st.subheader("🧾 Assunto Relacionado")
-    st.dataframe(df_assunto, use_container_width=True, hide_index=True)
-
-    st.markdown("---")
-
-    # =====================================================
-    # 4) Área Solicitante
-    # =====================================================
-    st.subheader("📦 Área Solicitante")
-    st.dataframe(df_area, use_container_width=True, hide_index=True)
-
-    st.markdown("---")
-
-    # =====================================================
-    # 5) TDS • APP NE (apenas quando projeto = TDS)
-    # =====================================================
-    if projeto_sel.upper() == "TDS":
-        with st.expander("📱 TDS • APP NE — Detalhe", expanded=False):
-            df_app = df_issues[df_issues["assunto_relacionado"] == ASSUNTO_ALVO_APPNE].copy()
-
-            if df_app.empty:
-                st.info(f"Não há chamados para '{ASSUNTO_ALVO_APPNE}' no período selecionado.")
+            _ = projeto  # verifica se já existe
+        except NameError:
+            try:
+                import streamlit as st
+            except Exception:
+                st = None
+            projetos_disponiveis = list(SLA_LIMITE.keys()) if isinstance(SLA_LIMITE, dict) and len(SLA_LIMITE) > 0 else ['TDS']
+            if st:
+                projeto = st.sidebar.selectbox('Projeto', projetos_disponiveis, index=0)
             else:
-                df_app = ordenar_mes_str(df_app, "mes_str")
+                projeto = projetos_disponiveis[0]
+        # ----- fim da garantia de `projeto` -----
+        df_sla["dentro_sla"] = df_sla["sla_millis"] <= SLA_LIMITE[projeto]
+        agrupado = df_sla.groupby("mes_str")["dentro_sla"].value_counts(normalize=True).unstack(fill_value=0) * 100
+        agrupado = agrupado.rename(columns={True: "% Dentro SLA", False: "% Fora SLA"}).reset_index()
+        agrupado = agrupado.sort_values("mes_str")
 
-                total_app = len(df_app)
-                por_origem = df_app["origem_problema"].value_counts(dropna=False).to_dict()
-                k1, k2, k3 = st.columns(3)
-                k1.metric("Total de chamados (APP NE/EN)", total_app)
-                k2.metric("APP NE", por_origem.get("APP NE", 0))
-                k3.metric("APP EN", por_origem.get("APP EN", 0))
+        # Cálculo do OKR
+        total_chamados = len(df_sla)
+        percentual_sla = (df_sla["dentro_sla"].sum() / total_chamados) * 100 if total_chamados > 0 else 0
+        sla_meta = SLA_METAS[projeto]
+        okr_label = f"🎯 OKR: {percentual_sla:.1f}% - Meta: {sla_meta:.1f}%"
 
-                df_app_mes = (
-                    df_app
-                    .groupby(["mes_str", "origem_problema"])
-                    .size()
-                    .reset_index(name="Qtd")
-                )
-                df_app_mes = ordenar_mes_str(df_app_mes, "mes_str")
+        # --- Plotly Express (corrigido: usar formato long) ---
+        if 'agrupado' in locals() and hasattr(agrupado, 'empty') and not agrupado.empty:
+            # Mantém apenas colunas booleanas esperadas (True/False), se existirem
+            colunas_validas = [c for c in agrupado.columns if c in [True, False, 'True', 'False']]
+            if colunas_validas:
+                agrupado_use = agrupado[colunas_validas].copy()
+            else:
+                agrupado_use = agrupado.copy()
 
-                fig_app = px.bar(
-                    df_app_mes,
-                    x="mes_str",
-                    y="Qtd",
-                    color="origem_problema",
-                    barmode="group",
-                    title="APP NE — Volumes por mês e origem",
-                    color_discrete_map={"APP NE": "#2ca02c", "APP EN": "#1f77b4"},
-                )
-                st.plotly_chart(fig_app, use_container_width=True)
+            agrupado_long = agrupado_use.reset_index().melt(
+                id_vars='mes_str',
+                var_name='dentro_sla',
+                value_name='percentual'
+            )
+            # ---- Ordenação cronológica do eixo X (sem alterar estilo/cores) ----
+            try:
+                agrupado_long["mes_data"] = pd.to_datetime(agrupado_long["mes_str"], format="%b/%Y")
+            except Exception:
+                agrupado_long["mes_data"] = pd.to_datetime(agrupado_long["mes_str"], errors="coerce")
+            agrupado_long = agrupado_long.sort_values("mes_data")
+            agrupado_long["mes_str"] = agrupado_long["mes_data"].dt.strftime("%b/%Y")
+            categorias_mes = agrupado_long["mes_str"].dropna().unique().tolist()
+            agrupado_long["mes_str"] = pd.Categorical(agrupado_long["mes_str"], categories=categorias_mes, ordered=True)
+            # ------------------------------------------
+            agrupado_long['dentro_sla'] = agrupado_long['dentro_sla'].map(
+                lambda x: True if x is True or x == 'True' else (False if x is False or x == 'False' else x)
+            )
+            agrupado_long['percentual'] = pd.to_numeric(agrupado_long['percentual'], errors='coerce').fillna(0)
 
-                st.subheader("Chamados — Detalhe")
-                st.dataframe(
-                    df_app[["id", "mes_str", "assunto_relacionado", "origem_problema"]],
-                    use_container_width=True,
-                    hide_index=True,
-                )
+            # Gráfico SLA (duas séries lado a lado, cores corretas)
+            cols_bool = []
+            if True in agrupado.columns: cols_bool.append(True)
+            if False in agrupado.columns: cols_bool.append(False)
+            agr_wide = (agrupado[cols_bool].copy() if cols_bool else agrupado.copy())
+            rename_map = {True: "% Dentro SLA", False: "% Fora SLA"}
+            agr_wide.rename(columns=rename_map, inplace=True)
+            agr_wide = agr_wide.reset_index()
+            try:
+                agr_wide["mes_data"] = pd.to_datetime(agr_wide["mes_str"], format="%b/%Y")
+            except Exception:
+                agr_wide["mes_data"] = pd.to_datetime(agr_wide["mes_str"], errors="coerce")
+            agr_wide = agr_wide.sort_values("mes_data")
+            agr_wide["mes_str"] = agr_wide["mes_data"].dt.strftime("%b/%Y")
+            cats = agr_wide["mes_str"].dropna().unique().tolist()
+            agr_wide["mes_str"] = pd.Categorical(agr_wide["mes_str"], categories=cats, ordered=True)
 
-# ============================
-# CARREGAMENTO AUTOMÁTICO
-# ============================
-# Na primeira renderização, carrega automaticamente o projeto selecionado
-if "auto_loaded" not in st.session_state:
-    st.session_state.auto_loaded = True
-    load_and_render(projeto)
-else:
-    load_and_render(projeto)
+            y_cols = [c for c in ["% Dentro SLA", "% Fora SLA"] if c in agr_wide.columns]
+            fig_sla = px.bar(
+                agr_wide,
+                x="mes_str",
+                y=y_cols,
+                barmode="group",
+                title=okr_label,
+                color_discrete_map={"% Dentro SLA": "green", "% Fora SLA": "red"}
+            )
+            fig_sla.update_traces(texttemplate="%{y:.1f}%", textposition="outside")
+            fig_sla.update_yaxes(ticksuffix="%")
+        else:
+            fig_sla = px.bar(title=okr_label)
+
+        fig_sla.update_traces(textposition="outside")
+        fig_sla.update_layout(yaxis_title="%", xaxis_title="Mês")
+        st.plotly_chart(fig_sla, use_container_width=True, key=f"sla_{projeto}")
+
+        # ==============================================
+        # (3) 🧾 Assunto Relacionado
+        # ==============================================
+        st.markdown("### 🧾 Assunto Relacionado")
+        anos_ass = sorted(dfp["mes_created"].dt.year.unique())
+        meses_ass = sorted(dfp["mes_created"].dt.month.unique())
+        col_ass1, col_ass2 = st.columns(2)
+        with col_ass1:
+            ano_ass = st.selectbox(f"Ano - {TITULOS[projeto]} (Assunto)", ["Todos"] + [str(a) for a in anos_ass], key=f"ano_ass_{projeto}")
+        with col_ass2:
+            mes_ass = st.selectbox(f"Mês - {TITULOS[projeto]} (Assunto)", ["Todos"] + [str(m).zfill(2) for m in meses_ass], key=f"mes_ass_{projeto}")
+        df_ass = dfp.copy()
+        if ano_ass != "Todos":
+            df_ass = df_ass[df_ass["mes_created"].dt.year == int(ano_ass)]
+        if mes_ass != "Todos":
+            df_ass = df_ass[df_ass["mes_created"].dt.month == int(mes_ass)]
+        if CAMPOS_ASSUNTO[projeto] == "issuetype":
+            df_ass["assunto_nome"] = df_ass["issuetype"].apply(lambda x: x.get("name") if isinstance(x, dict) else str(x))
+        else:
+            df_ass["assunto_nome"] = df_ass["assunto"].apply(lambda x: x.get("value") if isinstance(x, dict) else str(x))
+        assunto_count = df_ass["assunto_nome"].value_counts().reset_index()
+        assunto_count.columns = ["Assunto", "Qtd"]
+        st.dataframe(assunto_count)
+
+        # ==============================================
+        # (4) 📦 Área Solicitante (continua igual: oculta para INTEL)
+        # ==============================================
+        if projeto != "INTEL":
+            st.markdown("### 📦 Área Solicitante")
+            anos_area = sorted(dfp["mes_created"].dt.year.unique())
+            meses_area = sorted(dfp["mes_created"].dt.month.unique())
+            col_ar1, col_ar2 = st.columns(2)
+            with col_ar1:
+                ano_area = st.selectbox(f"Ano - {TITULOS[projeto]} (Área)", ["Todos"] + [str(a) for a in anos_area], key=f"ano_area_{projeto}")
+            with col_ar2:
+                mes_area = st.selectbox(f"Mês - {TITULOS[projeto]} (Área)", ["Todos"] + [str(m).zfill(2) for m in meses_area], key=f"mes_area_{projeto}")
+            df_area = dfp.copy()
+            if ano_area != "Todos":
+                df_area = df_area[df_area["mes_created"].dt.year == int(ano_area)]
+            if mes_area != "Todos":
+                df_area = df_area[df_area["mes_created"].dt.month == int(mes_area)]
+            df_area["area_nome"] = df_area["area"].apply(lambda x: x.get("value") if isinstance(x, dict) else str(x))
+            area_count = df_area["area_nome"].value_counts().reset_index()
+            area_count.columns = ["Área", "Qtd"]
+            st.dataframe(area_count)
+
+        # ==============================================
+        # (5) 🔄 Encaminhamentos — mostrar só para TDS e INT
+        # ==============================================
+        if projeto in ("TDS", "INT"):
+            st.markdown("### 🔄 Encaminhamentos")
+            anos_enc = sorted(dfp["mes_created"].dt.year.unique())
+            meses_enc = sorted(dfp["mes_created"].dt.month.unique())
+            col_en1, col_en2 = st.columns(2)
+            with col_en1:
+                ano_enc = st.selectbox(f"Ano - {TITULOS[projeto]} (Encaminhamentos)", ["Todos"] + [str(a) for a in anos_enc], key=f"ano_enc_{projeto}")
+            with col_en2:
+                mes_enc = st.selectbox(f"Mês - {TITULOS[projeto]} (Encaminhamentos)", ["Todos"] + [str(m).zfill(2) for m in meses_enc], key=f"mes_enc_{projeto}")
+            df_enc = dfp.copy()
+            if ano_enc != "Todos":
+                df_enc = df_enc[df_enc["mes_created"].dt.year == int(ano_enc)]
+            if mes_enc != "Todos":
+                df_enc = df_enc[df_enc["mes_created"].dt.month == int(mes_enc)]
+            col1, col2 = st.columns(2)
+            with col1:
+                count_prod = df_enc["status"].str.contains("Produto", case=False, na=False).sum()
+                st.metric("Encaminhados Produto", count_prod)
+            with col2:
+                df_enc["n3_valor"] = df_enc["n3"].apply(lambda x: x.get("value") if isinstance(x, dict) else None)
+                st.metric("Encaminhados N3", (df_enc["n3_valor"] == "Sim").sum())
