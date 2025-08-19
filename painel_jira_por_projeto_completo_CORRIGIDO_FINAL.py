@@ -469,13 +469,13 @@ for projeto, tab in zip(PROJETOS, tabs):
 
                 st.markdown("---")
 
-                # Gráfico mensal — Clientes Novos com OBG (×1,35) e variação MoM
+                # Gráfico mensal — Clientes Novos com OBG (×1,35) e variação MoM (sem sobrepor)
                 df_cli = df_onb[df_onb["assunto_nome"] == ASSUNTO_CLIENTE_NOVO].copy()
                 if not df_cli.empty:
                     serie_cli = (
                         df_cli.groupby(df_cli["mes_created"].dt.to_period("M"))
-                        .size()
-                        .reset_index(name="ClientesNovos")
+                              .size()
+                              .reset_index(name="ClientesNovos")
                     )
                     serie_cli["mes_dt"] = serie_cli["mes_created"].dt.to_timestamp()
                     serie_cli = serie_cli.sort_values("mes_dt")
@@ -489,33 +489,52 @@ for projeto, tab in zip(PROJETOS, tabs):
                         y="ClientesNovos",
                         title="Tickets - Cliente novo",
                         text="ClientesNovos",
-                        height=360,
+                        height=380,
                     )
                     fig_cli.update_traces(texttemplate="%{text}", textposition="outside", textfont_size=14, cliponaxis=False)
-                    y_top = (serie_cli["ClientesNovos"].max() * 1.45) if len(serie_cli) else 10
+
+                    # Mais folga no topo para não colidir com OBG/MoM
+                    y_top = (serie_cli["ClientesNovos"].max() * 1.80) if len(serie_cli) else 10
                     fig_cli.update_yaxes(range=[0, y_top])
-                    for _, r in serie_cli.iterrows():
+
+                    # Anotações sem sobreposição: offsets verticais + xshift alternado
+                    for i, r in serie_cli.reset_index(drop=True).iterrows():
                         x = r["mes_str"]
-                        yb = r["ClientesNovos"]
-                        # OBG acima da barra
+                        yb = float(r["ClientesNovos"])
+                        xshift_obg = -12 if i % 2 == 0 else 12   # alterna esquerda/direita
+                        xshift_mom = -xshift_obg                  # alterna oposto
+
+                        # 1) OBG um pouco acima da barra
                         fig_cli.add_annotation(
-                            x=x, y=yb + (y_top * 0.05),
-                            text=f"OBG {r['OBG_Rotulo']}",
+                            x=x, y=yb + (y_top * 0.06),
+                            text=f"OBG {int(r['OBG_Rotulo'])}",
                             showarrow=False,
                             font=dict(size=12, color="#6b7280"),
+                            xshift=xshift_obg,
                         )
-                        # Variação MoM com setas
+
+                        # 2) Variação MoM (se existir) ainda mais acima
                         if pd.notna(r["MoM"]):
-                            up = r["MoM"] >= 0
-                            arrow = "▲" if up else "▼"
-                            color = "#2563eb" if up else "#dc2626"
-                            fig_cli.add_annotation(
-                                x=x, y=yb + (y_top * 0.12),
-                                text=f"{arrow} {abs(r['MoM']):.0f}%",
-                                showarrow=False,
-                                font=dict(size=12, color=color),
-                            )
-                    fig_cli.update_layout(margin=dict(t=50, r=20, b=30, l=40), bargap=0.18)
+                            mom_abs = abs(r["MoM"])
+                            # esconde variações muito pequenas (<1%) para evitar poluição visual
+                            if mom_abs >= 1:
+                                up = r["MoM"] >= 0
+                                arrow = "▲" if up else "▼"
+                                color = "#2563eb" if up else "#dc2626"
+                                fig_cli.add_annotation(
+                                    x=x, y=yb + (y_top * 0.14),
+                                    text=f"{arrow} {mom_abs:.0f}%",
+                                    showarrow=False,
+                                    font=dict(size=12, color=color),
+                                    xshift=xshift_mom,
+                                )
+
+                    fig_cli.update_layout(
+                        margin=dict(t=50, r=20, b=35, l=40),
+                        bargap=0.18,
+                        xaxis_title=None, yaxis_title="ClientesNovos",
+                        uniformtext_mode="show", uniformtext_minsize=12,
+                    )
                     st.plotly_chart(fig_cli, use_container_width=True)
 
                 st.markdown("---")
@@ -534,21 +553,26 @@ for projeto, tab in zip(PROJETOS, tabs):
                 st.write("**Tabela — Receita por ticket (se disponível nos dados)**")
                 st.dataframe(df_tabela[["Chave", "Status", "Assunto", "Receita"]], use_container_width=True, hide_index=True)
 
+                # --- Dinheiro perdido (simulação) — clientes = Possíveis clientes
                 st.markdown("---")
                 st.subheader("💸 Dinheiro perdido (simulação)")
+
                 c_left, c_right = st.columns([1, 1])
                 with c_left:
-                    clientes_sim = st.number_input(
+                    clientes_sim = int(possiveis_clientes)  # igual ao "Possíveis clientes"
+                    st.number_input(
                         "Cliente novos (simulação)",
-                        min_value=0, step=1, value=int(total_clientes_novos),
-                        key=f"sim_clientes_{projeto}",
+                        value=clientes_sim,
+                        disabled=True,          # bloqueia edição
+                        key=f"sim_clientes_{projeto}"
                     )
                 with c_right:
                     receita_cliente = st.slider(
                         "Cenário Receita por Cliente (R$)",
                         min_value=0, max_value=100000, step=500, value=20000,
-                        key=f"sim_receita_{projeto}",
+                        key=f"sim_receita_{projeto}"
                     )
+
                 dinheiro_perdido = float(clientes_sim) * float(receita_cliente)
                 st.markdown(
                     f"### **R$ {dinheiro_perdido:,.2f}**",
