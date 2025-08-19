@@ -301,7 +301,7 @@ for projeto, tab in zip(PROJETOS, tabs):
                             title="APP NE — Volumes por mês e Origem do problema",
                             color_discrete_map={"APP NE": "#2ca02c", "APP EN": "#1f77b4"},
                             text="Qtd",
-                            height=800,
+                            height=700,
                         )
                         fig_app.update_traces(
                             texttemplate="%{text:.0f}",
