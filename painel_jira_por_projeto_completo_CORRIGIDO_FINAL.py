@@ -397,3 +397,155 @@ for projeto, tab in zip(PROJETOS, tabs):
                             lambda x: x.get("value") if isinstance(x, dict) else None
                         )
                         st.metric("Encaminhados N3", (df_enc["n3_valor"] == "Sim").sum())
+
+                            # ======================
+                            # 6) Onboarding (somente INT) — Submenu completo
+                            # ======================
+                            if projeto == "INT":
+                            with st.expander("🧭 Onboarding", expanded=False):
+                
+                                # --- Parâmetros e listas de referência ---
+                                ASSUNTO_CLIENTE_NOVO = "Nova integração - Cliente novo"
+                                ASSUNTOS_ERROS = [
+                                    "Erro durante Onboarding - Frete",
+                                    "Erro durante Onboarding - Pedido",
+                                    "Erro durante Onboarding - Rastreio",
+                                    "Erro durante Onboarding - Teste",
+                                ]
+                                STATUS_PENDENCIAS = [
+                                    "Aguardando informações adicionais",
+                                    "Em andamento",
+                                    "Aguardando pendências da Triagem",
+                                    "Aguardando validação do cliente",
+                                    "Aguardando Comercial",
+                                ]
+                
+                                # Garantir 'assunto_nome'
+                                if "assunto_nome" not in dfp.columns:
+                                    if CAMPOS_ASSUNTO[projeto] == "issuetype":
+                                        dfp["assunto_nome"] = dfp["issuetype"].apply(
+                                            lambda x: x.get("name") if isinstance(x, dict) else (str(x) if x is not None else "—")
+                                        )
+                                    else:
+                                        dfp["assunto_nome"] = dfp["assunto"].apply(
+                                            lambda x: x.get("value") if isinstance(x, dict) else (str(x) if x is not None else "—")
+                                        )
+                
+                                # Filtros Ano/Mês (padrão do app)
+                                anos_ob = sorted(dfp["mes_created"].dt.year.dropna().unique())
+                                meses_ob = sorted(dfp["mes_created"].dt.month.dropna().unique())
+                                col_ob1, col_ob2 = st.columns(2)
+                                with col_ob1:
+                                    ano_ob = st.selectbox("Ano (Onboarding)", ["Todos"] + [str(a) for a in anos_ob], key=f"ano_onb_{projeto}")
+                                with col_ob2:
+                                    mes_ob = st.selectbox("Mês (Onboarding)", ["Todos"] + [str(m).zfill(2) for m in meses_ob], key=f"mes_onb_{projeto}")
+                
+                                df_onb = dfp.copy()
+                                if ano_ob != "Todos":
+                                    df_onb = df_onb[df_onb["mes_created"].dt.year == int(ano_ob)]
+                                if mes_ob != "Todos":
+                                    df_onb = df_onb[df_onb["mes_created"].dt.month == int(mes_ob)]
+                
+                                # --- Métricas principais ---
+                                total_clientes_novos = (df_onb["assunto_nome"] == ASSUNTO_CLIENTE_NOVO).sum()
+                                df_erros = df_onb[df_onb["assunto_nome"].isin(ASSUNTOS_ERROS)].copy()
+                
+                                # Tickets com pendências e possíveis clientes (mesma lista de status)
+                                pend_mask = df_onb["status"].isin(STATUS_PENDENCIAS)
+                                tickets_pendencias = pend_mask.sum()
+                                possiveis_clientes = pend_mask.sum()
+                
+                                m1, m2, m3, m4 = st.columns(4)
+                                m1.metric("Tickets clientes novos", total_clientes_novos)
+                                m2.metric("Erros onboarding", len(df_erros))
+                                m3.metric("Tickets com pendências", tickets_pendencias)
+                                m4.metric("Possíveis clientes", possiveis_clientes)
+                
+                                st.markdown("---")
+                
+                                # --- Erros Onboarding (gráfico horizontal com rótulos) ---
+                                if df_erros.empty:
+                                    st.info("Sem erros de Onboarding no período/filtros selecionados.")
+                                else:
+                                    cont_erros = (
+                                        df_erros["assunto_nome"].value_counts()
+                                        .reindex(ASSUNTOS_ERROS, fill_value=0)
+                                        .reset_index()
+                                    )
+                                    cont_erros.columns = ["Categoria", "Qtd"]
+                
+                                    fig_onb = px.bar(
+                                        cont_erros,
+                                        x="Qtd",
+                                        y="Categoria",
+                                        orientation="h",
+                                        text="Qtd",
+                                        title="Erros Onboarding",
+                                        height=420,
+                                    )
+                                    fig_onb.update_traces(texttemplate="%{text:.0f}", textposition="outside", textfont_size=16, cliponaxis=False)
+                                    max_q = int(cont_erros["Qtd"].max()) if not cont_erros.empty else 0
+                                    if max_q > 0:
+                                        fig_onb.update_xaxes(range=[0, max_q * 1.25])
+                                    fig_onb.update_layout(
+                                        margin=dict(t=50, r=20, b=30, l=10),
+                                        uniformtext_mode="show",
+                                        uniformtext_minsize=14,
+                                        bargap=0.25,
+                                        xaxis_title="Qtd",
+                                        yaxis_title=None,
+                                    )
+                                    st.plotly_chart(fig_onb, use_container_width=True)
+                
+                                st.markdown("---")
+                
+                                # --- Tabela (campo 'Receita', se existir) ---
+                                # Tentativa de detecção automática de coluna de receita
+                                col_receita = None
+                                for c in df_onb.columns:
+                                    if "receita" in str(c).lower():
+                                        col_receita = c
+                                        break
+                
+                                # Tabela focada em clientes novos (igual à imagem)
+                                df_tabela = df_onb[df_onb["assunto_nome"] == ASSUNTO_CLIENTE_NOVO].copy()
+                                df_tabela["Assunto"] = df_tabela["assunto_nome"]
+                                df_tabela["Status"] = df_tabela["status"]
+                                df_tabela["Chave"] = df_tabela["key"]
+                                if col_receita is not None:
+                                    df_tabela["Receita"] = df_tabela[col_receita]
+                                else:
+                                    df_tabela["Receita"] = pd.NA
+                
+                                # Campos finais para exibir
+                                cols_show = ["Chave", "Status", "Assunto", "Receita"]
+                                st.write("**Tabela — Receita por ticket (se disponível nos dados)**")
+                                st.dataframe(df_tabela[cols_show], use_container_width=True, hide_index=True)
+                
+                                if col_receita is None:
+                                    st.caption("ℹ️ Não encontrei uma coluna de Receita nos dados. Se houver um custom field no Jira, me diga o ID que eu incluo na coleta.")
+                
+                                # --- Dinheiro perdido (simulador) ---
+                                st.markdown("---")
+                                st.subheader("💸 Dinheiro perdido (simulação)")
+                
+                                c_left, c_right = st.columns([1, 1])
+                                with c_left:
+                                    clientes_sim = st.number_input(
+                                        "Cliente novos (simulação)",
+                                        min_value=0, step=1, value=int(total_clientes_novos),
+                                        key=f"sim_clientes_{projeto}"
+                                    )
+                                with c_right:
+                                    receita_cliente = st.number_input(
+                                        "Cenário Receita por Cliente (R$)",
+                                        min_value=0.0, step=1000.0, value=20000.0,
+                                        key=f"sim_receita_{projeto}"
+                                    )
+                
+                                dinheiro_perdido = float(clientes_sim) * float(receita_cliente)
+                                st.markdown(
+                                    f"### **R$ {dinheiro_perdido:,.2f}**",
+                                    help="Cálculo: Cliente novos (simulação) × Cenário Receita por Cliente",
+                                )
+                 
