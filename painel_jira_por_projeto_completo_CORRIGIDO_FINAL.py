@@ -327,13 +327,73 @@ for projeto, tab in zip(PROJETOS, tabs):
                         cols_show = [c for c in cols_show if c in df_app_f.columns]
                         st.dataframe(df_app_f[cols_show], use_container_width=True, hide_index=True)
 
-        # ======================
-        # 4) Área Solicitante (COM FILTROS, exceto INTEL)
-        # ======================
-        if projeto != "INTEL":
-            st.markdown("### 📦 Área Solicitante")
-            anos_area = sorted(dfp["mes_created"].dt.year.dropna().unique())
-            meses_area = sorted(dfp["mes_created"].dt.month.dropna().unique())
-            col_ar1, col_ar2 = st.columns(2)
-            with col_ar1:
-                ano_area = st.selectbox(f"Ano - {TITULOS[projeto]} (Área)", ["Todos"] + [
+               # ======================
+                # 4) Área Solicitante (COM FILTROS, exceto INTEL)
+                # ======================
+                if projeto != "INTEL":
+                    st.markdown("### 📦 Área Solicitante")
+                    anos_area = sorted(dfp["mes_created"].dt.year.dropna().unique())
+                    meses_area = sorted(dfp["mes_created"].dt.month.dropna().unique())
+                    col_ar1, col_ar2 = st.columns(2)
+                    with col_ar1:
+                        ano_area = st.selectbox(
+                            f"Ano - {TITULOS[projeto]} (Área)",
+                            ["Todos"] + [str(a) for a in anos_area],
+                            key=f"ano_area_{projeto}"
+                        )
+                    with col_ar2:
+                        mes_area = st.selectbox(
+                            f"Mês - {TITULOS[projeto]} (Área)",
+                            ["Todos"] + [str(m).zfill(2) for m in meses_area],
+                            key=f"mes_area_{projeto}"
+                        )
+        
+                    df_area = dfp.copy()
+                    if ano_area != "Todos":
+                        df_area = df_area[df_area["mes_created"].dt.year == int(ano_area)]
+                    if mes_area != "Todos":
+                        df_area = df_area[df_area["mes_created"].dt.month == int(mes_area)]
+        
+                    df_area["area_nome"] = df_area["area"].apply(
+                        lambda x: x.get("value") if isinstance(x, dict) else str(x)
+                    )
+                    area_count = df_area["area_nome"].value_counts().reset_index()
+                    area_count.columns = ["Área", "Qtd"]
+                    st.dataframe(area_count, use_container_width=True)
+        
+                # ======================
+                # 5) Encaminhamentos (só TDS e INT) — COM FILTROS
+                # ======================
+                if projeto in ("TDS", "INT"):
+                    st.markdown("### 🔄 Encaminhamentos")
+                    anos_enc = sorted(dfp["mes_created"].dt.year.dropna().unique())
+                    meses_enc = sorted(dfp["mes_created"].dt.month.dropna().unique())
+                    col_en1, col_en2 = st.columns(2)
+                    with col_en1:
+                        ano_enc = st.selectbox(
+                            f"Ano - {TITULOS[projeto]} (Encaminhamentos)",
+                            ["Todos"] + [str(a) for a in anos_enc],
+                            key=f"ano_enc_{projeto}"
+                        )
+                    with col_en2:
+                        mes_enc = st.selectbox(
+                            f"Mês - {TITULOS[projeto]} (Encaminhamentos)",
+                            ["Todos"] + [str(m).zfill(2) for m in meses_enc],
+                            key=f"mes_enc_{projeto}"
+                        )
+        
+                    df_enc = dfp.copy()
+                    if ano_enc != "Todos":
+                        df_enc = df_enc[df_enc["mes_created"].dt.year == int(ano_enc)]
+                    if mes_enc != "Todos":
+                        df_enc = df_enc[df_enc["mes_created"].dt.month == int(mes_enc)]
+        
+                    col1, col2 = st.columns(2)
+                    with col1:
+                        count_prod = df_enc["status"].str.contains("Produto", case=False, na=False).sum()
+                        st.metric("Encaminhados Produto", count_prod)
+                    with col2:
+                        df_enc["n3_valor"] = df_enc["n3"].apply(
+                            lambda x: x.get("value") if isinstance(x, dict) else None
+                        )
+                        st.metric("Encaminhados N3", (df_enc["n3_valor"] == "Sim").sum())
