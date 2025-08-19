@@ -215,7 +215,8 @@ for projeto, tab in zip(PROJETOS, tabs):
                 text_auto=True,
                 height=440,
             )
-            fig.update_traces(textfont_size=14, cliponaxis=False)
+            # 🔧 valores dos rótulos na horizontal
+            fig.update_traces(textangle=0, textfont_size=14, cliponaxis=False)
             fig.update_layout(margin=dict(t=40, r=20, b=50, l=40))
             st.plotly_chart(fig, use_container_width=True, key=f"crv_{projeto}")
 
@@ -469,7 +470,7 @@ for projeto, tab in zip(PROJETOS, tabs):
 
                 st.markdown("---")
 
-                # Gráfico mensal — Clientes Novos com OBG (×1,35) e variação MoM (sem sobrepor)
+                # Gráfico mensal — Clientes Novos com OBG e variação MoM (sem sobrepor)
                 df_cli = df_onb[df_onb["assunto_nome"] == ASSUNTO_CLIENTE_NOVO].copy()
                 if not df_cli.empty:
                     serie_cli = (
@@ -493,40 +494,37 @@ for projeto, tab in zip(PROJETOS, tabs):
                     )
                     fig_cli.update_traces(texttemplate="%{text}", textposition="outside", textfont_size=14, cliponaxis=False)
 
-                    # Mais folga no topo para não colidir com OBG/MoM
-                    y_top = (serie_cli["ClientesNovos"].max() * 1.80) if len(serie_cli) else 10
+                    # 👉 Mais folga no topo (aumentado) para separar OBG e MoM de vez
+                    y_top = (serie_cli["ClientesNovos"].max() * 2.2) if len(serie_cli) else 10
                     fig_cli.update_yaxes(range=[0, y_top])
 
-                    # Anotações sem sobreposição: offsets verticais + xshift alternado
-                    for i, r in serie_cli.reset_index(drop=True).iterrows():
+                    # OBG logo acima da barra e MoM lá no topo (sem sobreposição)
+                    for _, r in serie_cli.iterrows():
                         x = r["mes_str"]
                         yb = float(r["ClientesNovos"])
-                        xshift_obg = -12 if i % 2 == 0 else 12   # alterna esquerda/direita
-                        xshift_mom = -xshift_obg                  # alterna oposto
 
-                        # 1) OBG um pouco acima da barra
+                        # OBG (próximo da barra)
                         fig_cli.add_annotation(
-                            x=x, y=yb + (y_top * 0.06),
+                            x=x, y=yb + (y_top * 0.05),
                             text=f"OBG {int(r['OBG_Rotulo'])}",
                             showarrow=False,
                             font=dict(size=12, color="#6b7280"),
-                            xshift=xshift_obg,
+                            align="center",
                         )
 
-                        # 2) Variação MoM (se existir) ainda mais acima
+                        # MoM (bem mais alto)
                         if pd.notna(r["MoM"]):
                             mom_abs = abs(r["MoM"])
-                            # esconde variações muito pequenas (<1%) para evitar poluição visual
                             if mom_abs >= 1:
                                 up = r["MoM"] >= 0
                                 arrow = "▲" if up else "▼"
                                 color = "#2563eb" if up else "#dc2626"
                                 fig_cli.add_annotation(
-                                    x=x, y=yb + (y_top * 0.14),
+                                    x=x, y=yb + (y_top * 0.20),
                                     text=f"{arrow} {mom_abs:.0f}%",
                                     showarrow=False,
                                     font=dict(size=12, color=color),
-                                    xshift=xshift_mom,
+                                    align="center",
                                 )
 
                     fig_cli.update_layout(
