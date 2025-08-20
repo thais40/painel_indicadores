@@ -5,7 +5,7 @@ import requests
 from requests.auth import HTTPBasicAuth
 
 # ======================
-# Configuração geral
+# 0) Configuração geral
 # ======================
 st.set_page_config(layout="wide")
 st.title("📊 Painel de Indicadores — Jira")
@@ -16,7 +16,7 @@ if st.button("🔄 Atualizar dados"):
     st.rerun()
 
 # ======================
-# Conexão Jira (secrets)
+# 1) Conexão Jira (secrets)
 # ======================
 JIRA_URL = "https://tiendanube.atlassian.net"
 EMAIL = st.secrets["EMAIL"]
@@ -24,7 +24,7 @@ TOKEN = st.secrets["TOKEN"]
 auth = HTTPBasicAuth(EMAIL, TOKEN)
 
 # ======================
-# Parâmetros por projeto
+# 2) Parâmetros por projeto
 # ======================
 PROJETOS = ["TDS", "INT", "TINE", "INTEL"]
 TITULOS = {
@@ -61,7 +61,7 @@ SLA_LIMITE = {
 }
 
 # ======================
-# Funções auxiliares
+# 3) Funções auxiliares
 # ======================
 def extrair_sla_millis(sla_field: dict):
     """Extrai o elapsedTime.millis do SLA (ciclo completo ou em andamento)."""
@@ -146,12 +146,12 @@ def buscar_issues() -> pd.DataFrame:
     return df_all
 
 # ======================
-# Carregar dados
+# 4) Carregar dados
 # ======================
 df = buscar_issues()
 
 # ======================
-# UI por projeto (abas)
+# 5) UI por projeto (abas)
 # ======================
 tabs = st.tabs([TITULOS[p] for p in PROJETOS])
 
@@ -166,9 +166,9 @@ for projeto, tab in zip(PROJETOS, tabs):
         # Garante coluna assunto_nome
         dfp = ensure_assunto_nome(dfp, projeto)
 
-        # ======================
-        # 1) Criados vs Resolvidos (ANTES do SLA)
-        # ======================
+        # ---------------------------------------------------
+        # 5.1) Criados vs Resolvidos (ANTES do SLA)
+        # ---------------------------------------------------
         st.markdown("### 📈 Tickets Criados vs Resolvidos")
         anos_cr = sorted(dfp["mes_created"].dt.year.dropna().unique())
         meses_cr = sorted(dfp["mes_created"].dt.month.dropna().unique())
@@ -215,14 +215,14 @@ for projeto, tab in zip(PROJETOS, tabs):
                 text_auto=True,
                 height=440,
             )
-            # 🔧 valores dos rótulos na horizontal
+            # 👉 rótulos deitados (horizontal)
             fig.update_traces(textangle=0, textfont_size=14, cliponaxis=False)
             fig.update_layout(margin=dict(t=40, r=20, b=50, l=40))
             st.plotly_chart(fig, use_container_width=True, key=f"crv_{projeto}")
 
-        # ======================
-        # 2) SLA
-        # ======================
+        # ---------------------------------------------------
+        # 5.2) SLA
+        # ---------------------------------------------------
         st.markdown("### ⏱️ SLA")
         anos_sla = sorted(dfp["mes_resolved"].dropna().dt.year.unique())
         meses_sla = sorted(dfp["mes_resolved"].dropna().dt.month.unique())
@@ -259,7 +259,7 @@ for projeto, tab in zip(PROJETOS, tabs):
             ).rename(columns={True: "% Dentro SLA", False: "% Fora SLA"})
 
             agr_wide = agrup.reset_index().copy()
-            # ordenar meses
+            # ordenar meses corretamente
             try:
                 agr_wide["mes_data"] = pd.to_datetime(agr_wide["mes_str"], format="%b/%Y")
             except Exception:
@@ -269,7 +269,6 @@ for projeto, tab in zip(PROJETOS, tabs):
             cats = agr_wide["mes_str"].dropna().unique().tolist()
             agr_wide["mes_str"] = pd.Categorical(agr_wide["mes_str"], categories=cats, ordered=True)
 
-            # safe numeric
             for c in ["% Dentro SLA", "% Fora SLA"]:
                 if c in agr_wide.columns:
                     agr_wide[c] = pd.to_numeric(agr_wide[c], errors="coerce").fillna(0)
@@ -289,9 +288,9 @@ for projeto, tab in zip(PROJETOS, tabs):
             fig_sla.update_layout(margin=dict(t=60, r=20, b=50, l=40))
             st.plotly_chart(fig_sla, use_container_width=True, key=f"sla_{projeto}")
 
-        # ======================
-        # 3) Assunto Relacionado
-        # ======================
+        # ---------------------------------------------------
+        # 5.3) Assunto Relacionado
+        # ---------------------------------------------------
         st.markdown("### 🧾 Assunto Relacionado")
         anos_ass = sorted(dfp["mes_created"].dt.year.dropna().unique())
         meses_ass = sorted(dfp["mes_created"].dt.month.dropna().unique())
@@ -324,9 +323,9 @@ for projeto, tab in zip(PROJETOS, tabs):
         assunto_count.columns = ["Assunto", "Qtd"]
         st.dataframe(assunto_count, use_container_width=True, hide_index=True)
 
-        # ======================
-        # 4) Área Solicitante (exceto INTEL)
-        # ======================
+        # ---------------------------------------------------
+        # 5.4) Área Solicitante (exceto INTEL)
+        # ---------------------------------------------------
         if projeto != "INTEL":
             st.markdown("### 📦 Área Solicitante")
             anos_area = sorted(dfp["mes_created"].dt.year.dropna().unique())
@@ -356,9 +355,9 @@ for projeto, tab in zip(PROJETOS, tabs):
             area_count.columns = ["Área", "Qtd"]
             st.dataframe(area_count, use_container_width=True, hide_index=True)
 
-        # ======================
-        # 5) Encaminhamentos (TDS e INT)
-        # ======================
+        # ---------------------------------------------------
+        # 5.5) Encaminhamentos (TDS e INT)
+        # ---------------------------------------------------
         if projeto in ("TDS", "INT"):
             st.markdown("### 🔄 Encaminhamentos")
             anos_enc = sorted(dfp["mes_created"].dt.year.dropna().unique())
@@ -391,9 +390,9 @@ for projeto, tab in zip(PROJETOS, tabs):
                 df_enc["n3_valor"] = df_enc["n3"].apply(lambda x: safe_get_value(x, "value", None))
                 st.metric("Encaminhados N3", (df_enc["n3_valor"] == "Sim").sum())
 
-        # ======================
-        # 6) Onboarding (somente INT) — no final
-        # ======================
+        # ---------------------------------------------------
+        # 5.6) Onboarding (somente INT) — no final
+        # ---------------------------------------------------
         if projeto == "INT":
             with st.expander("🧭 Onboarding", expanded=False):
                 ASSUNTO_CLIENTE_NOVO = "Nova integração - Cliente novo"
@@ -470,7 +469,7 @@ for projeto, tab in zip(PROJETOS, tabs):
 
                 st.markdown("---")
 
-                # Gráfico mensal — Clientes Novos com OBG e variação MoM (sem sobrepor)
+                # Gráfico mensal — Clientes Novos com variação MoM (sem OBG)
                 df_cli = df_onb[df_onb["assunto_nome"] == ASSUNTO_CLIENTE_NOVO].copy()
                 if not df_cli.empty:
                     serie_cli = (
@@ -481,7 +480,6 @@ for projeto, tab in zip(PROJETOS, tabs):
                     serie_cli["mes_dt"] = serie_cli["mes_created"].dt.to_timestamp()
                     serie_cli = serie_cli.sort_values("mes_dt")
                     serie_cli["mes_str"] = serie_cli["mes_dt"].dt.strftime("%Y %b")
-                    serie_cli["OBG_Rotulo"] = (serie_cli["ClientesNovos"] * 1.35).round(0).astype(int)
                     serie_cli["MoM"] = serie_cli["ClientesNovos"].pct_change() * 100
 
                     fig_cli = px.bar(
@@ -494,25 +492,14 @@ for projeto, tab in zip(PROJETOS, tabs):
                     )
                     fig_cli.update_traces(texttemplate="%{text}", textposition="outside", textfont_size=14, cliponaxis=False)
 
-                    # 👉 Mais folga no topo (aumentado) para separar OBG e MoM de vez
+                    # Mais folga no topo para separar os percentuais
                     y_top = (serie_cli["ClientesNovos"].max() * 2.2) if len(serie_cli) else 10
                     fig_cli.update_yaxes(range=[0, y_top])
 
-                    # OBG logo acima da barra e MoM lá no topo (sem sobreposição)
+                    # Apenas percentuais (▲ / ▼), sem OBG
                     for _, r in serie_cli.iterrows():
                         x = r["mes_str"]
                         yb = float(r["ClientesNovos"])
-
-                        # OBG (próximo da barra)
-                        fig_cli.add_annotation(
-                            x=x, y=yb + (y_top * 0.05),
-                            text=f"OBG {int(r['OBG_Rotulo'])}",
-                            showarrow=False,
-                            font=dict(size=12, color="#6b7280"),
-                            align="center",
-                        )
-
-                        # MoM (bem mais alto)
                         if pd.notna(r["MoM"]):
                             mom_abs = abs(r["MoM"])
                             if mom_abs >= 1:
@@ -551,17 +538,16 @@ for projeto, tab in zip(PROJETOS, tabs):
                 st.write("**Tabela — Receita por ticket (se disponível nos dados)**")
                 st.dataframe(df_tabela[["Chave", "Status", "Assunto", "Receita"]], use_container_width=True, hide_index=True)
 
-                # --- Dinheiro perdido (simulação) — clientes = Possíveis clientes
+                # Dinheiro perdido (simulação) — clientes = Possíveis clientes
                 st.markdown("---")
                 st.subheader("💸 Dinheiro perdido (simulação)")
-
                 c_left, c_right = st.columns([1, 1])
                 with c_left:
                     clientes_sim = int(possiveis_clientes)  # igual ao "Possíveis clientes"
                     st.number_input(
                         "Cliente novos (simulação)",
                         value=clientes_sim,
-                        disabled=True,          # bloqueia edição
+                        disabled=True,
                         key=f"sim_clientes_{projeto}"
                     )
                 with c_right:
@@ -570,16 +556,15 @@ for projeto, tab in zip(PROJETOS, tabs):
                         min_value=0, max_value=100000, step=500, value=20000,
                         key=f"sim_receita_{projeto}"
                     )
-
                 dinheiro_perdido = float(clientes_sim) * float(receita_cliente)
                 st.markdown(
                     f"### **R$ {dinheiro_perdido:,.2f}**",
                     help="Cálculo: Cliente novos (simulação) × Cenário Receita por Cliente",
                 )
 
-        # ======================
-        # 7) APP NE — só TDS (no final)
-        # ======================
+        # ---------------------------------------------------
+        # 5.7) APP NE — só TDS (no final)
+        # ---------------------------------------------------
         if projeto == "TDS":
             with st.expander("📱 APP NE — Origem do problema", expanded=False):
                 # filtro robusto do assunto alvo
