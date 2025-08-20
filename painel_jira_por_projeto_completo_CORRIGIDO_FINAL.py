@@ -8,7 +8,7 @@ from requests.auth import HTTPBasicAuth
 # 0) Configuração geral
 # ======================
 st.set_page_config(layout="wide")
-st.title("📊 Painel de Indicadores — Jira")
+st.title("📊 Painel de Indicadores")
 
 # 🔄 Botão para atualizar dados do Jira manualmente
 if st.button("🔄 Atualizar dados"):
@@ -58,6 +58,14 @@ SLA_LIMITE = {
     "INT": 40 * 60 * 60 * 1000,
     "TINE": 40 * 60 * 60 * 1000,
     "INTEL": 80 * 60 * 60 * 1000, # 80h
+}
+
+# Metas para o título do SLA (OKR)
+META_SLA = {
+    "TDS": 98.0,
+    "INT": 98.0,
+    "TINE": 98.0,
+    "INTEL": 95.0,
 }
 
 # ======================
@@ -274,12 +282,18 @@ for projeto, tab in zip(PROJETOS, tabs):
                     agr_wide[c] = pd.to_numeric(agr_wide[c], errors="coerce").fillna(0)
 
             y_cols = [c for c in ["% Dentro SLA", "% Fora SLA"] if c in agr_wide.columns]
+
+            # 🎯 OKR e Meta no título
+            okr = agr_wide["% Dentro SLA"].mean() if "% Dentro SLA" in agr_wide else 0.0
+            meta = META_SLA.get(projeto, 98.0)
+            titulo_sla = f"🎯 OKR: {okr:.1f}% — Meta: {meta:.1f}%"
+
             fig_sla = px.bar(
                 agr_wide,
                 x="mes_str",
                 y=y_cols,
                 barmode="group",
-                title=f"SLA — {TITULOS[projeto]}",
+                title=titulo_sla,
                 color_discrete_map={"% Dentro SLA": "green", "% Fora SLA": "red"},
                 height=440,
             )
@@ -566,7 +580,7 @@ for projeto, tab in zip(PROJETOS, tabs):
         # 5.7) APP NE — só TDS (no final)
         # ---------------------------------------------------
         if projeto == "TDS":
-            with st.expander("📱 APP NE — Origem do problema", expanded=False):
+            with st.expander("📱 APP NE", expanded=False):
                 # filtro robusto do assunto alvo
                 s_ass = dfp["assunto_nome"].astype(str).str.strip()
                 alvo = ASSUNTO_ALVO_APPNE.strip().casefold()
