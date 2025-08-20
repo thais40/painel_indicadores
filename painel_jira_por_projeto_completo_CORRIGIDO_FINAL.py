@@ -3,17 +3,27 @@ import pandas as pd
 import plotly.express as px
 import requests
 from requests.auth import HTTPBasicAuth
+from datetime import datetime
 
 # ======================
 # 0) Configuração geral
 # ======================
 st.set_page_config(layout="wide")
-st.title("📊 Painel de Indicadores")
+st.title("📊 Painel de Indicadores — Jira")
 
-# 🔄 Botão para atualizar dados do Jira manualmente
-if st.button("🔄 Atualizar dados"):
-    st.cache_data.clear()
-    st.rerun()
+# 👉 inicializa timestamp da última atualização (primeiro carregamento)
+if "last_update" not in st.session_state:
+    st.session_state["last_update"] = datetime.now().strftime("%d/%m/%Y %H:%M:%S")
+
+# 🔄 Botão para atualizar dados do Jira manualmente + registro de horário
+col_btn, col_info = st.columns([0.2, 0.8])
+with col_btn:
+    if st.button("🔄 Atualizar dados"):
+        st.cache_data.clear()
+        st.session_state["last_update"] = datetime.now().strftime("%d/%m/%Y %H:%M:%S")
+        st.rerun()
+with col_info:
+    st.caption(f"🕒 Última atualização: {st.session_state['last_update']}")
 
 # ======================
 # 1) Conexão Jira (secrets)
@@ -229,7 +239,7 @@ for projeto, tab in zip(PROJETOS, tabs):
             st.plotly_chart(fig, use_container_width=True, key=f"crv_{projeto}")
 
         # ---------------------------------------------------
-        # 5.2) SLA
+        # 5.2) SLA (com título OKR + Meta)
         # ---------------------------------------------------
         st.markdown("### ⏱️ SLA")
         anos_sla = sorted(dfp["mes_resolved"].dropna().dt.year.unique())
@@ -580,7 +590,7 @@ for projeto, tab in zip(PROJETOS, tabs):
         # 5.7) APP NE — só TDS (no final)
         # ---------------------------------------------------
         if projeto == "TDS":
-            with st.expander("📱 APP NE", expanded=False):
+            with st.expander("📱 APP NE — Origem do problema", expanded=False):
                 # filtro robusto do assunto alvo
                 s_ass = dfp["assunto_nome"].astype(str).str.strip()
                 alvo = ASSUNTO_ALVO_APPNE.strip().casefold()
