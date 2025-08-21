@@ -53,7 +53,7 @@ def _render_logo_and_title():
         unsafe_allow_html=True,
     )
     if logo_bytes:
-        st.image(logo_bytes, width=220)  # você pode ajustar o width aqui
+        st.image(logo_bytes, width=300)  # você pode ajustar o width aqui
         st.markdown(
             '<span style="color:#111827;font-weight:600;font-size:15px;">Painel interno</span>',
             unsafe_allow_html=True,
