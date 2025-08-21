@@ -418,7 +418,7 @@ for projeto, tab in zip(PROJETOS, tabs):
 
         # --- APP NE (somente TDS) ---
         if projeto == "TDS":
-            with st.expander("📱 APP NE — Origem do problema", expanded=False):
+            with st.expander("📱 APP NE", expanded=False):
                 s_ass = dfp["assunto_nome"].astype(str).str.strip()
                 alvo = ASSUNTO_ALVO_APPNE.strip().casefold()
                 mask_assunto = s_ass.str.casefold().eq(alvo)
