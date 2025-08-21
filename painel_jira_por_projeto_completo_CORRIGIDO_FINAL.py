@@ -33,20 +33,39 @@ h1 { letter-spacing: .2px; }
 """, unsafe_allow_html=True)
 
 # --- Brand bar com logo (opcional via st.secrets["LOGO_URL"]) ---
-LOGO_URL = st.secrets.get("LOGO_URL", None)
-if LOGO_URL:
-    try:
+# --- Brand bar com logo robusto (prioriza base64) ---
+import base64
+
+def _render_logo_and_title():
+    logo_bytes = None
+
+    # Opção A: base64 nos secrets (mais estável)
+    b64 = st.secrets.get("LOGO_B64")
+    if b64:
+        try:
+            logo_bytes = base64.b64decode(b64)
+        except Exception:
+            logo_bytes = None
+
+    # Render
+    st.markdown(
+        '<div style="display:flex;align-items:center;gap:10px;margin:8px 0 20px 0;">',
+        unsafe_allow_html=True,
+    )
+    if logo_bytes:
+        st.image(logo_bytes, width=160)  # você pode ajustar o width aqui
         st.markdown(
-            f"""
-            <div style="display:flex;align-items:center;gap:10px;margin:8px 0 20px 0;">
-              <img src="{LOGO_URL}" alt="Nuvemshop" style="height:28px;">
-              <span style="color:#111827;font-weight:600;font-size:15px;">Painel interno</span>
-            </div>
-            """,
+            '<span style="color:#111827;font-weight:600;font-size:15px;">Painel interno</span>',
             unsafe_allow_html=True,
         )
-    except Exception:
-        pass  # se a URL falhar, não quebra o app
+    else:
+        st.markdown(
+            '<span style="color:#111827;font-weight:600;font-size:15px;">Nuvemshop · Painel interno</span>',
+            unsafe_allow_html=True,
+        )
+    st.markdown('</div>', unsafe_allow_html=True)
+
+_render_logo_and_title()
 
 st.title("📊 Painel de Indicadores")
 
