@@ -48,7 +48,7 @@ if LOGO_URL:
     except Exception:
         pass  # se a URL falhar, não quebra o app
 
-st.title("📊 Painel de Indicadores — Jira")
+st.title("📊 Painel de Indicadores")
 
 # função de horário em Brasília
 TZ_BR = ZoneInfo("America/Sao_Paulo")
