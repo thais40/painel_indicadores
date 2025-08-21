@@ -1,4 +1,3 @@
-
 import streamlit as st
 import pandas as pd
 import plotly.express as px
@@ -15,41 +14,39 @@ st.set_page_config(layout="wide")
 # ===== Estilo Nuvemshop (leve) =====
 st.markdown("""
 <style>
-/* fonte limpa */
 html, body, [class*="css"] {
   font-family: Inter, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, "Apple Color Emoji","Segoe UI Emoji" !important;
 }
-
-/* tokens simples */
 :root {
-  --ns-primary: #2E7DFF;   /* azul */
-  --ns-accent:  #00C2A8;   /* turquesa */
-  --ns-muted:   #6B7280;   /* cinza texto secundário */
+  --ns-primary: #2E7DFF;
+  --ns-muted:   #6B7280;
 }
-
 h1 { letter-spacing: .2px; }
-
-/* botão */
 .stButton > button {
   border-radius: 10px;
   border: 1px solid #e6e8ee;
   box-shadow: 0 1px 2px rgba(16,24,40,.04);
 }
-
-/* linha do botão + legenda */
 .update-row { display: inline-flex; align-items: center; gap: 12px; }
 .update-caption { color: var(--ns-muted); font-size: 0.85rem; }
 </style>
 """, unsafe_allow_html=True)
 
-# --- Brand bar com logo Nuvemshop ---
-LOGO_URL = "https://seeklogo.com/images/N/nuvemshop-logo-7F11B7C2B6-seeklogo.com.png"
-st.markdown(f"""
-  <div class="brandbar" style="display:flex;align-items:center;gap:10px;margin:8px 0 20px 0;">
-    <img src="{LOGO_URL}" alt="Nuvemshop" style="height:28px;">
-    <span style="color:#111827;font-weight:600;font-size:15px;">Painel interno</span>
-  </div>
-""", unsafe_allow_html=True)
+# --- Brand bar com logo (opcional via st.secrets["LOGO_URL"]) ---
+LOGO_URL = st.secrets.get("LOGO_URL", None)
+if LOGO_URL:
+    try:
+        st.markdown(
+            f"""
+            <div style="display:flex;align-items:center;gap:10px;margin:8px 0 20px 0;">
+              <img src="{LOGO_URL}" alt="Nuvemshop" style="height:28px;">
+              <span style="color:#111827;font-weight:600;font-size:15px;">Painel interno</span>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+    except Exception:
+        pass  # se a URL falhar, não quebra o app
 
 st.title("📊 Painel de Indicadores — Jira")
 
@@ -135,9 +132,11 @@ def buscar_issues() -> pd.DataFrame:
             params = {"jql": jql, "startAt": start, "maxResults": 100,
                       "fields": f"created,resolutiondate,status,issuetype,{SLA_CAMPOS[projeto]},{CAMPOS_ASSUNTO[projeto]},{CAMPO_AREA},{CAMPO_N3},{CAMPO_ORIGEM}"}
             resp = requests.get(f"{JIRA_URL}/rest/api/3/search", auth=auth, params=params)
-            if resp.status_code != 200: break
+            if resp.status_code != 200:
+                break
             issues = resp.json().get("issues", [])
-            if not issues: break
+            if not issues:
+                break
             for it in issues:
                 f = it.get("fields", {})
                 sla_raw = f.get(SLA_CAMPOS[projeto], {})
@@ -156,12 +155,31 @@ def buscar_issues() -> pd.DataFrame:
                 })
             start += 100
     df_all = pd.DataFrame(todos)
-    if df_all.empty: return df_all
+    if df_all.empty:
+        return df_all
     df_all["created"] = pd.to_datetime(df_all["created"], errors="coerce")
     df_all["resolved"] = pd.to_datetime(df_all["resolutiondate"], errors="coerce")
     df_all["mes_created"] = df_all["created"].dt.to_period("M").dt.to_timestamp()
     df_all["mes_resolved"] = df_all["resolved"].dt.to_period("M").dt.to_timestamp()
     return df_all
+
+def filtros_ano_mes(prefixo: str, serie_dt: pd.Series):
+    anos = sorted(pd.Series(serie_dt.dt.year.dropna().unique()).astype(int).tolist())
+    meses = sorted(pd.Series(serie_dt.dt.month.dropna().unique()).astype(int).tolist())
+    col1, col2 = st.columns(2)
+    with col1:
+        ano = st.selectbox(f"Ano - {prefixo}", ["Todos"] + [str(a) for a in anos], key=f"ano_{prefixo}")
+    with col2:
+        mes = st.selectbox(f"Mês - {prefixo}", ["Todos"] + [str(m).zfill(2) for m in meses], key=f"mes_{prefixo}")
+    return ano, mes
+
+def aplicar_filtro(df_in: pd.DataFrame, col_dt: str, ano: str, mes: str) -> pd.DataFrame:
+    out = df_in.copy()
+    if ano != "Todos":
+        out = out[out[col_dt].dt.year == int(ano)]
+    if mes != "Todos":
+        out = out[out[col_dt].dt.month == int(mes)]
+    return out
 
 # ======================
 # 4) Carregar
@@ -184,35 +202,69 @@ for projeto, tab in zip(PROJETOS, tabs):
 
         # --- Criados vs Resolvidos ---
         st.markdown("### 📈 Tickets Criados vs Resolvidos")
-        criados = dfp.groupby("mes_created").size().reset_index(name="Criados")
-        resolvidos = dfp[dfp["resolved"].notna()].groupby("mes_resolved").size().reset_index(name="Resolvidos")
+        ano_cv, mes_cv = filtros_ano_mes(f"{TITULOS[projeto]}", dfp["mes_created"])
+        df_cv = aplicar_filtro(dfp, "mes_created", ano_cv, mes_cv)
+
+        criados = df_cv.groupby("mes_created").size().reset_index(name="Criados")
+        resolvidos = df_cv[df_cv["resolved"].notna()].groupby("mes_resolved").size().reset_index(name="Resolvidos")
+
         criados.rename(columns={"mes_created":"mes_str"}, inplace=True)
         resolvidos.rename(columns={"mes_resolved":"mes_str"}, inplace=True)
-        grafico = pd.merge(criados,resolvidos,how="outer",on="mes_str").fillna(0).sort_values("mes_str")
-        grafico["mes_str"] = grafico["mes_str"].dt.strftime("%b/%Y")
-        fig = px.bar(grafico, x="mes_str", y=["Criados","Resolvidos"], barmode="group", text_auto=True, height=440)
-        fig.update_traces(textangle=0, textfont_size=14, cliponaxis=False)
-        st.plotly_chart(fig, use_container_width=True)
+        grafico = pd.merge(criados, resolvidos, how="outer", on="mes_str").fillna(0).sort_values("mes_str")
+        if not grafico.empty:
+            grafico["mes_str"] = grafico["mes_str"].dt.strftime("%b/%Y")
+            fig = px.bar(grafico, x="mes_str", y=["Criados","Resolvidos"], barmode="group", text_auto=True, height=440)
+            fig.update_traces(textangle=0, textfont_size=14, cliponaxis=False)
+            st.plotly_chart(fig, use_container_width=True)
+        else:
+            st.info("Sem dados para os filtros selecionados.")
 
         # --- SLA ---
         st.markdown("### ⏱️ SLA")
-        df_sla = dfp[dfp["sla_millis"].notna()].copy()
-        df_sla["mes_str"] = df_sla["mes_resolved"].dt.strftime("%b/%Y")
+        ano_sla, mes_sla = filtros_ano_mes(f"{TITULOS[projeto]} (SLA)", dfp["mes_resolved"])
+        df_sla = aplicar_filtro(dfp[dfp["sla_millis"].notna()], "mes_resolved", ano_sla, mes_sla).copy()
+
         if not df_sla.empty:
+            df_sla["mes_str"] = df_sla["mes_resolved"].dt.strftime("%b/%Y")
             df_sla["dentro_sla"] = df_sla["sla_millis"] <= SLA_LIMITE[projeto]
-            agrup = df_sla.groupby("mes_str")["dentro_sla"].value_counts(normalize=True).unstack(fill_value=0)*100
+
+            agrup = df_sla.groupby("mes_str")["dentro_sla"].value_counts(normalize=True).unstack(fill_value=0) * 100.0
+            if True not in agrup.columns:
+                agrup[True] = 0.0
+            if False not in agrup.columns:
+                agrup[False] = 0.0
             agrup = agrup.rename(columns={True:"% Dentro SLA", False:"% Fora SLA"}).reset_index()
-            try: agrup["mes_data"]=pd.to_datetime(agrup["mes_str"],format="%b/%Y")
-            except: agrup["mes_data"]=pd.to_datetime(agrup["mes_str"],errors="coerce")
-            agrup = agrup.sort_values("mes_data"); agrup["mes_str"]=agrup["mes_data"].dt.strftime("%b/%Y")
-            okr = agrup["% Dentro SLA"].mean()
-            meta = META_SLA.get(projeto,98.0)
+
+            try:
+                agrup["mes_data"] = pd.to_datetime(agrup["mes_str"], format="%b/%Y")
+            except Exception:
+                agrup["mes_data"] = pd.to_datetime(agrup["mes_str"], errors="coerce")
+            agrup = agrup.sort_values("mes_data")
+            agrup["mes_str"] = agrup["mes_data"].dt.strftime("%b/%Y")
+
+            for col in ["% Dentro SLA", "% Fora SLA"]:
+                agrup[col] = pd.to_numeric(agrup[col], errors="coerce").fillna(0.0)
+
+            okr = agrup["% Dentro SLA"].mean() if not agrup.empty else 0.0
+            meta = META_SLA.get(projeto, 98.0)
             titulo_sla = f"🎯 OKR: {okr:.1f}% — Meta: {meta:.1f}%"
-            fig_sla = px.bar(agrup,x="mes_str",y=["% Dentro SLA","% Fora SLA"],barmode="group",title=titulo_sla,
-                             color_discrete_map={"% Dentro SLA":"green","% Fora SLA":"red"},height=440)
-            fig_sla.update_traces(texttemplate="%{y:.1f}%", textposition="outside", textfont_size=14, cliponaxis=False)
-            fig_sla.update_yaxes(ticksuffix="%")
-            st.plotly_chart(fig_sla,use_container_width=True)
+
+            if not agrup.empty:
+                fig_sla = px.bar(
+                    agrup, x="mes_str",
+                    y=["% Dentro SLA","% Fora SLA"],
+                    barmode="group",
+                    title=titulo_sla,
+                    color_discrete_map={"% Dentro SLA":"green","% Fora SLA":"red"},
+                    height=440
+                )
+                fig_sla.update_traces(texttemplate="%{y:.1f}%", textposition="outside", textfont_size=14, cliponaxis=False)
+                fig_sla.update_yaxes(ticksuffix="%")
+                st.plotly_chart(fig_sla, use_container_width=True)
+            else:
+                st.info("Sem dados de SLA para os filtros selecionados.")
+        else:
+            st.info("Sem dados de SLA para os filtros selecionados.")
 
         # --- Assunto Relacionado ---
         st.markdown("### 🧾 Assunto Relacionado")
@@ -266,7 +318,6 @@ for projeto, tab in zip(PROJETOS, tabs):
 
                 df_onb = dfp.copy()
 
-                # Métricas
                 total_clientes_novos = (df_onb["assunto_nome"] == ASSUNTO_CLIENTE_NOVO).sum()
                 df_erros = df_onb[df_onb["assunto_nome"].isin(ASSUNTOS_ERROS)].copy()
                 pend_mask = df_onb["status"].isin(STATUS_PENDENCIAS)
@@ -281,7 +332,6 @@ for projeto, tab in zip(PROJETOS, tabs):
 
                 st.markdown("---")
 
-                # Erros Onboarding — horizontal
                 if df_erros.empty:
                     st.info("Sem erros de Onboarding no período.")
                 else:
@@ -293,13 +343,8 @@ for projeto, tab in zip(PROJETOS, tabs):
                     )
                     cont_erros.columns = ["Categoria", "Qtd"]
                     fig_onb = px.bar(
-                        cont_erros,
-                        x="Qtd",
-                        y="Categoria",
-                        orientation="h",
-                        text="Qtd",
-                        title="Erros Onboarding",
-                        height=420,
+                        cont_erros, x="Qtd", y="Categoria", orientation="h",
+                        text="Qtd", title="Erros Onboarding", height=420,
                     )
                     fig_onb.update_traces(texttemplate="%{text:.0f}", textposition="outside", textfont_size=16, cliponaxis=False)
                     max_q = int(cont_erros["Qtd"].max()) if not cont_erros.empty else 0
@@ -310,13 +355,10 @@ for projeto, tab in zip(PROJETOS, tabs):
 
                 st.markdown("---")
 
-                # Gráfico mensal — Clientes Novos com MoM (sem "OBG")
                 df_cli = df_onb[df_onb["assunto_nome"] == ASSUNTO_CLIENTE_NOVO].copy()
                 if not df_cli.empty:
                     serie_cli = (
-                        df_cli.groupby(df_cli["mes_created"].dt.to_period("M"))
-                              .size()
-                              .reset_index(name="ClientesNovos")
+                        df_cli.groupby(df_cli["mes_created"].dt.to_period("M")).size().reset_index(name="ClientesNovos")
                     )
                     serie_cli["mes_dt"] = serie_cli["mes_created"].dt.to_timestamp()
                     serie_cli = serie_cli.sort_values("mes_dt")
@@ -324,22 +366,16 @@ for projeto, tab in zip(PROJETOS, tabs):
                     serie_cli["MoM"] = serie_cli["ClientesNovos"].pct_change() * 100
 
                     fig_cli = px.bar(
-                        serie_cli,
-                        x="mes_str",
-                        y="ClientesNovos",
-                        title="Tickets - Cliente novo",
-                        text="ClientesNovos",
-                        height=380,
+                        serie_cli, x="mes_str", y="ClientesNovos",
+                        title="Tickets - Cliente novo", text="ClientesNovos", height=380,
                     )
                     fig_cli.update_traces(texttemplate="%{text}", textposition="outside", textfont_size=14, cliponaxis=False)
 
                     y_top = (serie_cli["ClientesNovos"].max() * 2.2) if len(serie_cli) else 10
                     fig_cli.update_yaxes(range=[0, y_top])
 
-                    # Percentuais ▲/▼ apenas
                     for _, r in serie_cli.iterrows():
-                        x = r["mes_str"]
-                        yb = float(r["ClientesNovos"])
+                        x = r["mes_str"]; yb = float(r["ClientesNovos"])
                         if pd.notna(r["MoM"]):
                             mom_abs = abs(r["MoM"])
                             if mom_abs >= 1:
@@ -349,22 +385,14 @@ for projeto, tab in zip(PROJETOS, tabs):
                                 fig_cli.add_annotation(
                                     x=x, y=yb + (y_top * 0.20),
                                     text=f"{arrow} {mom_abs:.0f}%",
-                                    showarrow=False,
-                                    font=dict(size=12, color=color),
-                                    align="center",
+                                    showarrow=False, font=dict(size=12, color=color), align="center",
                                 )
-
-                    fig_cli.update_layout(
-                        margin=dict(t=50, r=20, b=35, l=40),
-                        bargap=0.18,
-                        xaxis_title=None, yaxis_title="ClientesNovos",
-                        uniformtext_mode="show", uniformtext_minsize=12,
-                    )
+                    fig_cli.update_layout(margin=dict(t=50, r=20, b=35, l=40), bargap=0.18, xaxis_title=None, yaxis_title="ClientesNovos")
                     st.plotly_chart(fig_cli, use_container_width=True)
 
                 st.markdown("---")
 
-                # Tabela (Receita se existir)
+                # Tabela Receita (se existir)
                 col_receita = None
                 for c in df_onb.columns:
                     if "receita" in str(c).lower():
@@ -377,7 +405,6 @@ for projeto, tab in zip(PROJETOS, tabs):
                 st.write("**Tabela — Receita por ticket (se disponível nos dados)**")
                 st.dataframe(df_tabela[["Chave", "Status", "Assunto", "Receita"]], use_container_width=True, hide_index=True)
 
-                # Dinheiro perdido (simulação) — clientes = Possíveis clientes
                 st.markdown("---")
                 st.subheader("💸 Dinheiro perdido (simulação)")
                 c_left, c_right = st.columns([1, 1])
@@ -396,7 +423,7 @@ for projeto, tab in zip(PROJETOS, tabs):
                 alvo = ASSUNTO_ALVO_APPNE.strip().casefold()
                 mask_assunto = s_ass.str.casefold().eq(alvo)
                 if not mask_assunto.any():
-                    mask_assunto = s_ass.str.contains(r"app\\s*ne", case=False, regex=True)
+                    mask_assunto = s_ass.str.contains(r"app\s*ne", case=False, regex=True)
 
                 df_app = dfp[mask_assunto].copy()
                 if df_app.empty:
@@ -430,10 +457,7 @@ for projeto, tab in zip(PROJETOS, tabs):
                         m3.metric("APP EN", contagem.get("APP EN", 0))
 
                         serie = (
-                            df_app_f.groupby(["mes_dt", "origem_nome"])
-                            .size()
-                            .reset_index(name="Qtd")
-                            .sort_values("mes_dt")
+                            df_app_f.groupby(["mes_dt", "origem_nome"]).size().reset_index(name="Qtd").sort_values("mes_dt")
                         )
                         serie["mes_str"] = serie["mes_dt"].dt.strftime("%b/%Y")
                         cats = serie["mes_str"].dropna().unique().tolist()
@@ -449,11 +473,8 @@ for projeto, tab in zip(PROJETOS, tabs):
                         max_qtd = int(serie["Qtd"].max()) if not serie.empty else 0
                         if max_qtd > 0:
                             fig_app.update_yaxes(range=[0, max_qtd * 1.25])
-                        fig_app.update_layout(
-                            yaxis_title="Qtd", xaxis_title="Mês",
-                            uniformtext_minsize=14, uniformtext_mode="show",
-                            bargap=0.15, margin=dict(t=70, r=20, b=60, l=50),
-                        )
+                        fig_app.update_layout(yaxis_title="Qtd", xaxis_title="Mês", uniformtext_minsize=14, uniformtext_mode="show",
+                                              bargap=0.15, margin=dict(t=70, r=20, b=60, l=50))
                         st.plotly_chart(fig_app, use_container_width=True)
 
                         df_app_f["mes_str"] = df_app_f["mes_dt"].dt.strftime("%b/%Y")
