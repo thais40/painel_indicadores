@@ -468,19 +468,23 @@ for projeto, tab in zip(PROJETOS, tabs):
                     if df_app_f.empty:
                         st.info("Sem dados para exibir com os filtros selecionados.")
                     else:
-                        
-                    # --- Normalização de origem (APP NE/EN) ---
-                    def normaliza_origem(s: str) -> str:
-                        if s is None or str(s).strip() == "" or str(s).lower() in ("nan", "none"):
+                        df_app["origem_nome"] = df_app["origem"].apply(lambda x: safe_get_value(x, "value"))
+                        df_app["mes_dt"] = df_app["mes_created"].dt.to_period("M").dt.to_timestamp()
+                    
+                        # --- Normalização de origem (APP NE/EN) ---
+                        def normaliza_origem(s: str) -> str:
+                            if s is None or str(s).strip() == "" or str(s).lower() in ("nan", "none"):
+                                return "Outros/Não informado"
+                            t = str(s).strip().lower().replace("-", " ").replace("_", " ")
+                            t = " ".join(t.split())
+                            if "app" in t and "ne" in t:
+                                return "APP NE"
+                            if "app" in t and ("en" in t or "eng" in t):
+                                return "APP EN"
                             return "Outros/Não informado"
-                        t = str(s).strip().lower().replace("-", " ").replace("_", " ")
-                        t = " ".join(t.split())
-                        if "app" in t and "ne" in t:
-                            return "APP NE"
-                        if "app" in t and ("en" in t or "eng" in t):
-                            return "APP EN"
-                        return "Outros/Não informado"
-                    df_app_f["origem_cat"] = df_app_f["origem_nome"].apply(normaliza_origem)
+                    
+                        df_app_f = df_app.copy()
+                        df_app_f["origem_cat"] = df_app_f["origem_nome"].apply(normaliza_origem)
 
                         total_app = len(df_app_f)
                         contagem = df_app_f["origem_cat"].value_counts()
