@@ -274,7 +274,7 @@ for projeto, tab in zip(PROJETOS, tabs):
                     y=["% Dentro SLA","% Fora SLA"],
                     barmode="group",
                     title=titulo_sla,
-                    color_discrete_map={"% Dentro SLA":"green","% Fora SLA":"red"},
+                    color_discrete_map={"APP NE": "#2ca02c", "APP EN": "#1f77b4", "Outros/Não informado": "#9ca3af"},
                     height=440
                 )
                 fig_sla.update_traces(texttemplate="%{y:.1f}%", textposition="outside", textfont_size=14, cliponaxis=False)
@@ -468,24 +468,38 @@ for projeto, tab in zip(PROJETOS, tabs):
                     if df_app_f.empty:
                         st.info("Sem dados para exibir com os filtros selecionados.")
                     else:
+                        
+                    # --- Normalização de origem (APP NE/EN) ---
+                    def normaliza_origem(s: str) -> str:
+                        if s is None or str(s).strip() == "" or str(s).lower() in ("nan", "none"):
+                            return "Outros/Não informado"
+                        t = str(s).strip().lower().replace("-", " ").replace("_", " ")
+                        t = " ".join(t.split())
+                        if "app" in t and "ne" in t:
+                            return "APP NE"
+                        if "app" in t and ("en" in t or "eng" in t):
+                            return "APP EN"
+                        return "Outros/Não informado"
+                    df_app_f["origem_cat"] = df_app_f["origem_nome"].apply(normaliza_origem)
+
                         total_app = len(df_app_f)
-                        contagem = df_app_f["origem_nome"].value_counts(dropna=False).to_dict()
+                        contagem = df_app_f["origem_cat"].value_counts()
                         m1, m2, m3 = st.columns(3)
                         m1.metric("Total (APP NE/EN)", total_app)
                         m2.metric("APP NE", contagem.get("APP NE", 0))
                         m3.metric("APP EN", contagem.get("APP EN", 0))
 
                         serie = (
-                            df_app_f.groupby(["mes_dt", "origem_nome"]).size().reset_index(name="Qtd").sort_values("mes_dt")
+                            df_app_f.groupby(["mes_dt", "origem_cat"]).size().reset_index(name="Qtd").sort_values("mes_dt")
                         )
                         serie["mes_str"] = serie["mes_dt"].dt.strftime("%b/%Y")
                         cats = serie["mes_str"].dropna().unique().tolist()
                         serie["mes_str"] = pd.Categorical(serie["mes_str"], categories=cats, ordered=True)
 
                         fig_app = px.bar(
-                            serie, x="mes_str", y="Qtd", color="origem_nome",
+                            serie, x="mes_str", y="Qtd", color="origem_cat",
                             barmode="group", title="APP NE — Volumes por mês e Origem do problema",
-                            color_discrete_map={"APP NE": "#2ca02c", "APP EN": "#1f77b4"},
+                            color_discrete_map={"APP NE": "#2ca02c", "APP EN": "#1f77b4", "Outros/Não informado": "#9ca3af"},
                             text="Qtd", height=460,
                         )
                         fig_app.update_traces(texttemplate="%{text:.0f}", textposition="outside", textfont_size=16, cliponaxis=False)
