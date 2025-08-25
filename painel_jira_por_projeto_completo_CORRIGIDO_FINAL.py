@@ -58,7 +58,7 @@ def _render_logo_and_title():
 
 
 _render_logo_and_title()
-st.title("📊 Painel de Indicadores")
+st.title("📊 Painel de Indicadores — Jira")
 
 
 # ============================
@@ -126,7 +126,7 @@ CAMPO_ORIGEM = "customfield_13628"  # Origem do problema (TDS/TINE)
 ASSUNTO_ALVO_APPNE = "Problemas no App NE - App EN"
 
 # Metas por projeto (exibição) — corrigidas
-META_SLA = {"TDS": 98.0, "INT": 96.0, "TINE": 96.0, "INTEL": 96.0}
+META_SLA = {"TDS": 98.0, "INT": 96.0, "TINE": 96.0, "INTEL": 95.0}
 
 
 # ============================
@@ -275,20 +275,45 @@ st.markdown('<div class="section-spacer"></div>', unsafe_allow_html=True)
 # ============================
 def render_criados_resolvidos(dfp, ano_global, mes_global):
     st.markdown("### 📈 Tickets Criados vs Resolvidos")
-    df_cv = aplicar_filtro_global(dfp, "mes_created", ano_global, mes_global)
 
-    criados = df_cv.groupby("mes_created").size().reset_index(name="Criados")
-    resolvidos = df_cv[df_cv["resolved"].notna()].groupby("mes_resolved").size().reset_index(name="Resolvidos")
+    # CRIADOS → filtra por mês de criação
+    df_cr = aplicar_filtro_global(dfp.copy(), "mes_created", ano_global, mes_global)
+    criados = (
+        df_cr.groupby("mes_created")
+        .size()
+        .reset_index(name="Criados")
+        .rename(columns={"mes_created": "mes_ts"})
+    )
 
-    criados.rename(columns={"mes_created": "mes_ts"}, inplace=True)
-    resolvidos.rename(columns={"mes_resolved": "mes_ts"}, inplace=True)
+    # RESOLVIDOS → filtra por mês de resolução
+    df_res = dfp[dfp["resolved"].notna()].copy()
+    df_res["mes_resolved"] = df_res["resolved"].dt.to_period("M").dt.to_timestamp()
+    df_res = aplicar_filtro_global(df_res, "mes_resolved", ano_global, mes_global)
+    resolvidos = (
+        df_res.groupby("mes_resolved")
+        .size()
+        .reset_index(name="Resolvidos")
+        .rename(columns={"mes_resolved": "mes_ts"})
+    )
+
+    # Junta séries e ordena
     grafico = pd.merge(criados, resolvidos, how="outer", on="mes_ts").fillna(0).sort_values("mes_ts")
     if grafico.empty:
         st.info("Sem dados para os filtros selecionados.")
         return
+
+    grafico["Criados"] = grafico["Criados"].astype(int)
+    grafico["Resolvidos"] = grafico["Resolvidos"].astype(int)
     grafico["mes_str"] = grafico["mes_ts"].dt.strftime("%b/%Y")
 
-    fig = px.bar(grafico, x="mes_str", y=["Criados", "Resolvidos"], barmode="group", text_auto=True, height=440)
+    fig = px.bar(
+        grafico,
+        x="mes_str",
+        y=["Criados", "Resolvidos"],
+        barmode="group",
+        text_auto=True,
+        height=440,
+    )
     fig.update_traces(textangle=0, textfont_size=14, cliponaxis=False)
     st.plotly_chart(fig, use_container_width=True)
 
@@ -599,19 +624,13 @@ for projeto, tab in zip(PROJETOS, tabs):
             # Visão Geral — ordem dos blocos
             render_criados_resolvidos(dfp, ano_global, mes_global)
             render_sla(dfp, projeto, ano_global, mes_global)
-            # (Você pode acrescentar as seções Assunto/Área/Encaminhamentos aqui se já tiver no seu layout)
-            # Assunto
             render_assunto(dfp, projeto, ano_global, mes_global)
-            # Área Solicitante (exceto INTEL)
             if projeto != "INTEL":
                 render_area(dfp, ano_global, mes_global)
-            # Encaminhamentos (TDS e INT)
             if projeto in ("TDS", "INT"):
                 render_encaminhamentos(dfp, ano_global, mes_global)
-            # APP NE ao final do Geral (TDS)
             if projeto == "TDS":
                 render_app_ne(dfp, ano_global, mes_global)
-            # Onboarding ao final do Geral (INT) — em sub-menu (expander)
             if projeto == "INT":
                 with st.expander("🧭 Onboarding"):
                     render_onboarding(dfp, ano_global, mes_global)
