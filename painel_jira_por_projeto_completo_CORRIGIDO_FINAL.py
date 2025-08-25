@@ -58,7 +58,7 @@ def _render_logo_and_title():
 
 
 _render_logo_and_title()
-st.title("📊 Painel de Indicadores — Jira")
+st.title("📊 Painel de Indicadores")
 
 
 # ============================
