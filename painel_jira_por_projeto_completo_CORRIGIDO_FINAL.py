@@ -126,7 +126,7 @@ CAMPO_ORIGEM = "customfield_13628"  # Origem do problema (TDS/TINE)
 ASSUNTO_ALVO_APPNE = "Problemas no App NE - App EN"
 
 # Metas por projeto (exibição)
-META_SLA = {"TDS": 98.0, "INT": 98.0, "TINE": 98.0, "INTEL": 95.0}
+META_SLA = {"TDS": 98.0, "INT": 96.0, "TINE": 96.0, "INTEL": 96.0}
 
 
 # ============================
