@@ -482,7 +482,7 @@ def render_onboarding(dfp, ano_global, mes_global):
 
 
 def render_app_ne(dfp, ano_global, mes_global):
-    st.markdown("### 📱 APP NE — Origem do problema")
+    st.markdown("### 📱 APP NE")
     s_ass = dfp["assunto_nome"].astype(str).str.strip()
     alvo = ASSUNTO_ALVO_APPNE.strip().casefold()
     mask_assunto = s_ass.str.casefold().eq(alvo)
