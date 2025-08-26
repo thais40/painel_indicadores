@@ -343,28 +343,23 @@ def render_criados_resolvidos(dfp: pd.DataFrame, ano_global: str, mes_global: st
     if mes_global != "Todos":
         dfm = dfm[dfm["mes"] == int(mes_global)]
 
-    # 🔒 filtro à prova de bala: se mês e ano foram escolhidos,
-    # força o período exato (primeiro dia do mês BRT)
+    # 🔒 filtro FINAL por Período (100% à prova de vazamento)
     if ano_global != "Todos" and mes_global != "Todos":
-        yr = int(ano_global)
-        mo = int(mes_global)
-        alvo = pd.Timestamp(year=yr, month=mo, day=1)
-        dfm = dfm[dfm["period_ts"] == alvo]
+        alvo_period = pd.Period(f"{int(ano_global)}-{int(mes_global):02d}", freq="M")
+        dfm = dfm[dfm["period"] == alvo_period]
 
     if dfm.empty:
         st.info("Sem dados para os filtros selecionados.")
         return
 
-    dfm = dfm[["mes_str", "period_ts", "Criados", "Resolvidos"]].sort_values("period_ts")
-    dfm["Criados"] = dfm["Criados"].astype(int)
-    dfm["Resolvidos"] = dfm["Resolvidos"].astype(int)
+    dfm = dfm.sort_values("period_ts")
+    show = dfm[["mes_str", "period_ts", "Criados", "Resolvidos"]].copy()
+    show["Criados"] = show["Criados"].astype(int)
+    show["Resolvidos"] = show["Resolvidos"].astype(int)
 
-    fig = px.bar(dfm, x="mes_str", y=["Criados", "Resolvidos"], barmode="group", text_auto=True, height=440)
+    fig = px.bar(show, x="mes_str", y=["Criados", "Resolvidos"], barmode="group", text_auto=True, height=440)
     fig.update_traces(textangle=0, textfont_size=14, cliponaxis=False)
-
-    # trava o eixo X na(s) categoria(s) restantes
-    unico = dfm["mes_str"].unique().tolist()
-    fig.update_xaxes(categoryorder="array", categoryarray=unico)
+    fig.update_xaxes(categoryorder="array", categoryarray=show["mes_str"].tolist())
 
     st.plotly_chart(fig, use_container_width=True)
 
@@ -377,12 +372,10 @@ def render_sla(dfp, projeto, ano_global, mes_global):
     if mes_global != "Todos":
         dfm = dfm[dfm["mes"] == int(mes_global)]
 
-    # 🔒 garante o mês exato
+    # 🔒 filtro FINAL por Período (igual ao de cima)
     if ano_global != "Todos" and mes_global != "Todos":
-        yr = int(ano_global)
-        mo = int(mes_global)
-        alvo = pd.Timestamp(year=yr, month=mo, day=1)
-        dfm = dfm[dfm["period_ts"] == alvo]
+        alvo_period = pd.Period(f"{int(ano_global)}-{int(mes_global):02d}", freq="M")
+        dfm = dfm[dfm["period"] == alvo_period]
 
     if dfm.empty:
         st.info("Sem dados de SLA para os filtros selecionados.")
@@ -406,9 +399,7 @@ def render_sla(dfp, projeto, ano_global, mes_global):
     )
     fig_sla.update_traces(texttemplate="%{y:.2f}%", textposition="outside", textfont_size=14, cliponaxis=False)
     fig_sla.update_yaxes(ticksuffix="%")
-
-    unico = show["mes_str"].unique().tolist()
-    fig_sla.update_xaxes(categoryorder="array", categoryarray=unico)
+    fig_sla.update_xaxes(categoryorder="array", categoryarray=show["mes_str"].tolist())
 
     st.plotly_chart(fig_sla, use_container_width=True)
 
