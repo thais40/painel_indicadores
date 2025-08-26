@@ -335,54 +335,38 @@ def render_criados_resolvidos(dfp: pd.DataFrame, ano_global: str, mes_global: st
     st.markdown("### 📈 Tickets Criados vs Resolvidos")
 
     projeto = dfp["projeto"].iat[0]
-
-    # 1) Seleciona apenas as linhas do projeto
     dfm = df_monthly[df_monthly["projeto"] == projeto].copy()
 
-    # 2) Aplica filtro DURO (ano/mes) com tipos explícitos
+    # filtros gerais
     if ano_global != "Todos":
-        yr = int(ano_global)
-        dfm = dfm[dfm["ano"] == yr]
-
+        dfm = dfm[dfm["ano"] == int(ano_global)]
     if mes_global != "Todos":
+        dfm = dfm[dfm["mes"] == int(mes_global)]
+
+    # 🔒 filtro à prova de bala: se mês e ano foram escolhidos,
+    # força o período exato (primeiro dia do mês BRT)
+    if ano_global != "Todos" and mes_global != "Todos":
+        yr = int(ano_global)
         mo = int(mes_global)
-        dfm = dfm[dfm["mes"] == mo]
+        alvo = pd.Timestamp(year=yr, month=mo, day=1)
+        dfm = dfm[dfm["period_ts"] == alvo]
 
     if dfm.empty:
         st.info("Sem dados para os filtros selecionados.")
         return
 
-    # 3) Garante ordenação temporal
-    dfm = dfm.sort_values("period_ts")
+    dfm = dfm[["mes_str", "period_ts", "Criados", "Resolvidos"]].sort_values("period_ts")
+    dfm["Criados"] = dfm["Criados"].astype(int)
+    dfm["Resolvidos"] = dfm["Resolvidos"].astype(int)
 
-    # 4) Apenas as colunas que vamos plotar
-    show = dfm[["mes_str", "period_ts", "Criados", "Resolvidos"]].copy()
-    show["Criados"] = show["Criados"].astype(int)
-    show["Resolvidos"] = show["Resolvidos"].astype(int)
-
-    # 5) Plota
-    fig = px.bar(
-        show,
-        x="mes_str",
-        y=["Criados", "Resolvidos"],
-        barmode="group",
-        text_auto=True,
-        height=440
-    )
+    fig = px.bar(dfm, x="mes_str", y=["Criados", "Resolvidos"], barmode="group", text_auto=True, height=440)
     fig.update_traces(textangle=0, textfont_size=14, cliponaxis=False)
 
-    # 6) Se filtrou mês + ano, TRAVA o eixo X em UMA ÚNICA categoria
-    if ano_global != "Todos" and mes_global != "Todos":
-        unico = show["mes_str"].unique().tolist()
-        fig.update_xaxes(categoryorder="array", categoryarray=unico)
+    # trava o eixo X na(s) categoria(s) restantes
+    unico = dfm["mes_str"].unique().tolist()
+    fig.update_xaxes(categoryorder="array", categoryarray=unico)
 
     st.plotly_chart(fig, use_container_width=True)
-
-    # 7) 🔎 Debug opcional
-    with st.expander("🔎 Debug (Criados vs Resolvidos)"):
-        st.write("Projeto:", projeto)
-        st.write("Ano filtro:", ano_global, "| Mês filtro:", mes_global)
-        st.dataframe(show, use_container_width=True, hide_index=True)
 
 def render_sla(dfp, projeto, ano_global, mes_global):
     st.markdown("### ⏱️ SLA")
@@ -392,6 +376,13 @@ def render_sla(dfp, projeto, ano_global, mes_global):
         dfm = dfm[dfm["ano"] == int(ano_global)]
     if mes_global != "Todos":
         dfm = dfm[dfm["mes"] == int(mes_global)]
+
+    # 🔒 garante o mês exato
+    if ano_global != "Todos" and mes_global != "Todos":
+        yr = int(ano_global)
+        mo = int(mes_global)
+        alvo = pd.Timestamp(year=yr, month=mo, day=1)
+        dfm = dfm[dfm["period_ts"] == alvo]
 
     if dfm.empty:
         st.info("Sem dados de SLA para os filtros selecionados.")
@@ -416,16 +407,10 @@ def render_sla(dfp, projeto, ano_global, mes_global):
     fig_sla.update_traces(texttemplate="%{y:.2f}%", textposition="outside", textfont_size=14, cliponaxis=False)
     fig_sla.update_yaxes(ticksuffix="%")
 
-    if ano_global != "Todos" and mes_global != "Todos":
-        unico = show["mes_str"].unique().tolist()
-        fig_sla.update_xaxes(categoryorder="array", categoryarray=unico)
+    unico = show["mes_str"].unique().tolist()
+    fig_sla.update_xaxes(categoryorder="array", categoryarray=unico)
 
     st.plotly_chart(fig_sla, use_container_width=True)
-
-    with st.expander("🔎 Debug (SLA)"):
-        st.write("Projeto:", projeto)
-        st.write("Ano filtro:", ano_global, "| Mês filtro:", mes_global)
-        st.dataframe(show, use_container_width=True, hide_index=True)
 
 def render_assunto(dfp, projeto, ano_global, mes_global):
     st.markdown("### 🧾 Assunto Relacionado")
