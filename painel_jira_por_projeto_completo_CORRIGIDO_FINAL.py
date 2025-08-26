@@ -268,32 +268,45 @@ st.markdown('<div class="section-spacer"></div>', unsafe_allow_html=True)
 # ============================
 # RENDERIZADORES
 # ============================
-def render_criados_resolvidos(dfp, ano_global, mes_global):
+def render_criados_resolvidos(dfp: pd.DataFrame, ano_global: str, mes_global: str):
     st.markdown("### 📈 Tickets Criados vs Resolvidos")
 
-    # CRIADOS → filtra por mês de criação
-    df_cr = aplicar_filtro_global(dfp.copy(), "mes_created", ano_global, mes_global)
+    # ---------- 1) Série de CRIADOS (mês de criação)
+    df_cr = dfp.copy()
+    if ano_global != "Todos":
+        df_cr = df_cr[df_cr["mes_created"].dt.year == int(ano_global)]
+    if mes_global != "Todos":
+        df_cr = df_cr[df_cr["mes_created"].dt.month == int(mes_global)]
+
     criados = (
-        df_cr.groupby("mes_created")
+        df_cr.groupby(df_cr["mes_created"].dt.to_period("M"))
         .size()
         .reset_index(name="Criados")
-        .rename(columns={"mes_created": "mes_ts"})
     )
+    criados["mes_ts"] = criados["mes_created"].dt.to_timestamp()
+    criados = criados[["mes_ts", "Criados"]]
 
-    # RESOLVIDOS → filtra por mês de resolução (independente de quando foi criado)
+    # ---------- 2) Série de RESOLVIDOS (mês de resolução)
     df_res = dfp[dfp["resolved"].notna()].copy()
-    df_res = aplicar_filtro_global(df_res, "mes_resolved", ano_global, mes_global)
+    if ano_global != "Todos":
+        df_res = df_res[df_res["mes_resolved"].dt.year == int(ano_global)]
+    if mes_global != "Todos":
+        df_res = df_res[df_res["mes_resolved"].dt.month == int(mes_global)]
+
     resolvidos = (
-        df_res.groupby("mes_resolved")
+        df_res.groupby(df_res["mes_resolved"].dt.to_period("M"))
         .size()
         .reset_index(name="Resolvidos")
-        .rename(columns={"mes_resolved": "mes_ts"})
     )
+    resolvidos["mes_ts"] = resolvidos["mes_resolved"].dt.to_timestamp()
+    resolvidos = resolvidos[["mes_ts", "Resolvidos"]]
 
-    # Junta séries e ordena
-    grafico = pd.merge(criados, resolvidos, how="outer", on="mes_ts").fillna(0).sort_values("mes_ts")
+    # ---------- 3) Junta as séries e GARANTE dtype datetime p/ filtrar
+    grafico = pd.merge(criados, resolvidos, how="outer", on="mes_ts").fillna(0)
+    grafico["mes_ts"] = pd.to_datetime(grafico["mes_ts"], errors="coerce")
+    grafico = grafico.sort_values("mes_ts")
 
-    # 🔒 garante que só o mês/ano selecionado apareça
+    # 🔒 Se filtro de mês/ano foi escolhido, EXIBE APENAS esse mês/ano
     if ano_global != "Todos":
         grafico = grafico[grafico["mes_ts"].dt.year == int(ano_global)]
     if mes_global != "Todos":
@@ -307,6 +320,10 @@ def render_criados_resolvidos(dfp, ano_global, mes_global):
     grafico["Resolvidos"] = grafico["Resolvidos"].astype(int)
     grafico["mes_str"] = grafico["mes_ts"].dt.strftime("%b/%Y")
 
+    categorias = sorted(grafico["mes_str"].unique().tolist())
+    if ano_global != "Todos" and mes_global != "Todos" and len(categorias) == 1:
+        categorias = categorias
+
     fig = px.bar(
         grafico,
         x="mes_str",
@@ -316,6 +333,8 @@ def render_criados_resolvidos(dfp, ano_global, mes_global):
         height=440,
     )
     fig.update_traces(textangle=0, textfont_size=14, cliponaxis=False)
+    if categorias:
+        fig.update_xaxes(categoryorder="array", categoryarray=categorias)
     st.plotly_chart(fig, use_container_width=True)
 
 def render_sla(dfp, projeto, ano_global, mes_global):
