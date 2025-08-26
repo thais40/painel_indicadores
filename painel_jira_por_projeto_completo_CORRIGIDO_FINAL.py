@@ -1,4 +1,8 @@
 # -*- coding: utf-8 -*-
+# ============================================================
+# Painel de Indicadores — Jira (Nuvemshop)
+# ============================================================
+
 import base64
 from datetime import datetime
 from zoneinfo import ZoneInfo
@@ -9,9 +13,10 @@ import requests
 import streamlit as st
 from requests.auth import HTTPBasicAuth
 
-# ============================
-# CONFIGURAÇÃO / ESTILO
-# ============================
+
+# --------------------------
+# Aparência / Layout
+# --------------------------
 st.set_page_config(layout="wide")
 
 st.markdown(
@@ -21,7 +26,7 @@ html, body, [class*="css"] { font-family: Inter, system-ui, -apple-system, Segoe
 :root { --ns-muted:#6B7280; }
 h1 { letter-spacing:.2px; }
 .stButton > button{ border-radius:10px; border:1px solid #e6e8ee; box-shadow:0 1px 2px rgba(16,24,40,.04); }
-.update-row{ display:inline-flex; align-items:center; gap:12px; }
+.update-row{ display:inline-flex; align-items:center; gap:12px; margin-bottom:.5rem; }
 .update-caption{ color:var(--ns-muted); font-size:.85rem; }
 .section-spacer{ height:10px; }
 </style>
@@ -29,7 +34,9 @@ h1 { letter-spacing:.2px; }
     unsafe_allow_html=True,
 )
 
+
 def _render_logo_and_title():
+    """Mostra logo (se LOGO_B64 em st.secrets) e subtítulo 'Painel interno'."""
     logo_bytes = None
     b64 = st.secrets.get("LOGO_B64")
     if b64:
@@ -54,16 +61,20 @@ def _render_logo_and_title():
         )
     st.markdown("</div>", unsafe_allow_html=True)
 
+
 _render_logo_and_title()
 st.title("📊 Painel de Indicadores — Jira")
 
-# ============================
-# ATUALIZAÇÃO / HORÁRIO (BRT)
-# ============================
+
+# --------------------------
+# Atualização / Horário BRT
+# --------------------------
 TZ_BR = ZoneInfo("America/Sao_Paulo")
+
 
 def now_br_str():
     return datetime.now(TZ_BR).strftime("%d/%m/%Y %H:%M:%S")
+
 
 if "last_update" not in st.session_state:
     st.session_state["last_update"] = now_br_str()
@@ -79,23 +90,19 @@ st.markdown(
 )
 st.markdown("</div>", unsafe_allow_html=True)
 
-# ============================
-# PARÂMETROS / CAMPOS
-# ============================
+
+# --------------------------
+# Parâmetros / Campos Jira
+# --------------------------
 JIRA_URL = "https://tiendanube.atlassian.net"
 EMAIL = st.secrets["EMAIL"]
 TOKEN = st.secrets["TOKEN"]
 auth = HTTPBasicAuth(EMAIL, TOKEN)
 
 PROJETOS = ["TDS", "INT", "TINE", "INTEL"]
-TITULOS = {
-    "TDS": "Tech Support",
-    "INT": "Integrations",
-    "TINE": "IT Support NE",
-    "INTEL": "Intelligence",
-}
+TITULOS = {"TDS": "Tech Support", "INT": "Integrations", "TINE": "IT Support NE", "INTEL": "Intelligence"}
 
-# Campo SLA por projeto (JSM)
+# Campo SLA (JSM) por projeto
 SLA_CAMPOS = {
     "TDS": "customfield_13744",  # SLA resolução (SUP)
     "TINE": "customfield_13744",
@@ -103,40 +110,43 @@ SLA_CAMPOS = {
     "INTEL": "customfield_13686",
 }
 
-# Assunto por projeto
+# Campo "Assunto relacionado" (ou issuetype p/ INTEL)
 CAMPOS_ASSUNTO = {
     "TDS": "customfield_13712",
     "INT": "customfield_13643",
     "TINE": "customfield_13699",
-    "INTEL": "issuetype",  # usa issuetype.name
+    "INTEL": "issuetype",
 }
 
 CAMPO_AREA = "customfield_13719"
 CAMPO_N3 = "customfield_13659"
-CAMPO_ORIGEM = "customfield_13628"  # Origem do problema (TDS/TINE)
+CAMPO_ORIGEM = "customfield_13628"  # TDS/TINE
 
-# App NE alvo
-ASSUNTO_ALVO_APPNE = "Problemas no App NE - App EN"
-
-# Metas por projeto — corrigidas
+# Metas por projeto (corrigidas)
 META_SLA = {"TDS": 98.0, "INT": 96.0, "TINE": 96.0, "INTEL": 95.0}
 
-# ============================
-# HELPERS
-# ============================
+# APP NE
+ASSUNTO_ALVO_APPNE = "Problemas no App NE - App EN"
+
+
+# --------------------------
+# Helpers
+# --------------------------
 def safe_get_value(x, key="value", fallback="—"):
     if isinstance(x, dict):
         return x.get(key, fallback)
     return x if x is not None else fallback
 
+
 def ensure_assunto_nome(df_proj: pd.DataFrame, projeto: str) -> pd.DataFrame:
-    """Cria 'assunto_nome' para cada projeto."""
+    """Garante a coluna 'assunto_nome' para todos os projetos."""
     if "assunto_nome" not in df_proj.columns:
         if CAMPOS_ASSUNTO[projeto] == "issuetype":
             df_proj["assunto_nome"] = df_proj["issuetype"].apply(lambda x: safe_get_value(x, "name"))
         else:
             df_proj["assunto_nome"] = df_proj["assunto"].apply(lambda x: safe_get_value(x, "value"))
     return df_proj
+
 
 def normaliza_origem(s: str) -> str:
     if s is None or str(s).strip() == "" or str(s).lower() in ("nan", "none"):
@@ -149,12 +159,9 @@ def normaliza_origem(s: str) -> str:
         return "APP EN"
     return "Outros/Não informado"
 
-# ============ SLA fiel ao Jira ============
+
+# SLA fiel ao Jira: usa breached ou elapsed <= goal
 def dentro_sla_from_raw(sla_raw: dict) -> bool | None:
-    """
-    Retorna True se o SLA foi cumprido (breached=False) no ciclo concluído.
-    Fallback: elapsed <= goal. None se não der para inferir.
-    """
     try:
         if not sla_raw or not isinstance(sla_raw, dict):
             return None
@@ -171,9 +178,19 @@ def dentro_sla_from_raw(sla_raw: dict) -> bool | None:
     except Exception:
         return None
 
-# ============================
-# BUSCA DE DADOS (Jira)
-# ============================
+
+def aplicar_filtro_global(df_in: pd.DataFrame, col_dt: str, ano: str, mes: str) -> pd.DataFrame:
+    out = df_in.copy()
+    if ano != "Todos":
+        out = out[out[col_dt].dt.year == int(ano)]
+    if mes != "Todos":
+        out = out[out[col_dt].dt.month == int(mes)]
+    return out
+
+
+# --------------------------
+# Busca de Issues (Jira)
+# --------------------------
 @st.cache_data(show_spinner="🔄 Buscando dados do Jira...")
 def buscar_issues() -> pd.DataFrame:
     todos = []
@@ -199,7 +216,6 @@ def buscar_issues() -> pd.DataFrame:
 
             for it in issues:
                 f = it.get("fields", {})
-                sla_field = f.get(SLA_CAMPOS[projeto], {})
                 todos.append(
                     {
                         "projeto": projeto,
@@ -207,7 +223,7 @@ def buscar_issues() -> pd.DataFrame:
                         "created": f.get("created"),
                         "resolutiondate": f.get("resolutiondate"),
                         "status": safe_get_value(f.get("status"), "name"),
-                        "sla_raw": sla_field,
+                        "sla_raw": f.get(SLA_CAMPOS[projeto], {}),
                         "issuetype": f.get("issuetype"),
                         "assunto": f.get(CAMPOS_ASSUNTO[projeto]),
                         "area": f.get(CAMPO_AREA),
@@ -221,34 +237,80 @@ def buscar_issues() -> pd.DataFrame:
     if df_all.empty:
         return df_all
 
-    # 🔧 UTC → BRT antes de criar os meses (corrige vazamento Jul→Ago)
+    # UTC → BRT antes de gerar mês/ano (evita “vazamento” Jul→Ago)
     df_all["created"] = (
-        pd.to_datetime(df_all["created"], errors="coerce", utc=True)
-          .dt.tz_convert(TZ_BR)
-          .dt.tz_localize(None)
+        pd.to_datetime(df_all["created"], errors="coerce", utc=True).dt.tz_convert(TZ_BR).dt.tz_localize(None)
     )
     df_all["resolved"] = (
-        pd.to_datetime(df_all["resolutiondate"], errors="coerce", utc=True)
-          .dt.tz_convert(TZ_BR)
-          .dt.tz_localize(None)
+        pd.to_datetime(df_all["resolutiondate"], errors="coerce", utc=True).dt.tz_convert(TZ_BR).dt.tz_localize(None)
     )
 
     df_all["mes_created"] = df_all["created"].dt.to_period("M").dt.to_timestamp()
     df_all["mes_resolved"] = df_all["resolved"].dt.to_period("M").dt.to_timestamp()
     return df_all
 
-def aplicar_filtro_global(df_in: pd.DataFrame, col_dt: str, ano: str, mes: str) -> pd.DataFrame:
-    out = df_in.copy()
-    if ano != "Todos":
-        out = out[out[col_dt].dt.year == int(ano)]
-    if mes != "Todos":
-        out = out[out[col_dt].dt.month == int(mes)]
-    return out
 
-# ============================
-# DADOS + FILTRO GLOBAL
-# ============================
+@st.cache_data(show_spinner=False)
+def build_monthly_tables(df_all: pd.DataFrame) -> pd.DataFrame:
+    """
+    Pré-agrega por projeto e mês (BRT):
+      - Criados (mês de criação)
+      - Resolvidos (mês de resolução)
+      - Dentro/Fora do SLA
+
+    Tabela mensal estável que alimenta os gráficos (acaba com “vazamento” de mês).
+    """
+    if df_all.empty:
+        return df_all
+
+    base = df_all.copy()
+    base["per_created"] = base["created"].dt.to_period("M")
+    base["per_resolved"] = base["resolved"].dt.to_period("M")
+
+    # Criados por mês de criação
+    created = base.groupby(["projeto", "per_created"]).size().reset_index(name="Criados")
+    created = created.rename(columns={"per_created": "period"})
+
+    # Resolvidos + SLA por mês de resolução
+    res = base[base["resolved"].notna()].copy()
+    res["dentro_sla"] = res["sla_raw"].apply(dentro_sla_from_raw).fillna(False)
+    resolved = (
+        res.groupby(["projeto", "per_resolved"])
+        .agg(Resolvidos=("key", "count"), Dentro=("dentro_sla", "sum"))
+        .reset_index()
+        .rename(columns={"per_resolved": "period"})
+    )
+
+    # Full outer
+    monthly = pd.merge(created, resolved, how="outer", on=["projeto", "period"]).fillna(0)
+
+    monthly["period"] = monthly["period"].astype("period[M]")
+    monthly["period_ts"] = monthly["period"].dt.to_timestamp()
+    monthly["ano"] = monthly["period"].dt.year.astype(int)
+    monthly["mes"] = monthly["period"].dt.month.astype(int)
+    monthly["mes_str"] = monthly["period_ts"].dt.strftime("%b/%Y")
+
+    monthly["Dentro"] = monthly["Dentro"].astype(int)
+    monthly["Resolvidos"] = monthly["Resolvidos"].astype(int)
+    monthly["Fora"] = (monthly["Resolvidos"] - monthly["Dentro"]).clip(lower=0)
+
+    monthly["pct_dentro"] = monthly.apply(
+        lambda r: (r["Dentro"] / r["Resolvidos"] * 100.0) if r["Resolvidos"] > 0 else 0.0, axis=1
+    )
+    monthly["pct_fora"] = monthly.apply(
+        lambda r: (r["Fora"] / r["Resolvidos"] * 100.0) if r["Resolvidos"] > 0 else 0.0, axis=1
+    )
+
+    monthly = monthly.sort_values(["projeto", "period"])
+    return monthly
+
+
+# --------------------------
+# Dados + Filtros Globais
+# --------------------------
 df = buscar_issues()
+df_monthly = build_monthly_tables(df)
+
 st.markdown("### 🔍 Filtros Globais")
 if df.empty:
     st.warning("Sem dados retornados do Jira.")
@@ -265,113 +327,61 @@ with c2:
 
 st.markdown('<div class="section-spacer"></div>', unsafe_allow_html=True)
 
-# ============================
-# RENDERIZADORES
-# ============================
+
+# --------------------------
+# Renderizadores
+# --------------------------
 def render_criados_resolvidos(dfp: pd.DataFrame, ano_global: str, mes_global: str):
     st.markdown("### 📈 Tickets Criados vs Resolvidos")
 
-    # ---------- 1) Série de CRIADOS (mês de criação)
-    df_cr = dfp.copy()
+    projeto = dfp["projeto"].iat[0]
+    dfm = df_monthly[df_monthly["projeto"] == projeto].copy()
+
     if ano_global != "Todos":
-        df_cr = df_cr[df_cr["mes_created"].dt.year == int(ano_global)]
+        dfm = dfm[dfm["ano"] == int(ano_global)]
     if mes_global != "Todos":
-        df_cr = df_cr[df_cr["mes_created"].dt.month == int(mes_global)]
+        dfm = dfm[dfm["mes"] == int(mes_global)]
 
-    criados = (
-        df_cr.groupby(df_cr["mes_created"].dt.to_period("M"))
-        .size()
-        .reset_index(name="Criados")
-    )
-    criados["mes_ts"] = criados["mes_created"].dt.to_timestamp()
-    criados = criados[["mes_ts", "Criados"]]
-
-    # ---------- 2) Série de RESOLVIDOS (mês de resolução)
-    df_res = dfp[dfp["resolved"].notna()].copy()
-    if ano_global != "Todos":
-        df_res = df_res[df_res["mes_resolved"].dt.year == int(ano_global)]
-    if mes_global != "Todos":
-        df_res = df_res[df_res["mes_resolved"].dt.month == int(mes_global)]
-
-    resolvidos = (
-        df_res.groupby(df_res["mes_resolved"].dt.to_period("M"))
-        .size()
-        .reset_index(name="Resolvidos")
-    )
-    resolvidos["mes_ts"] = resolvidos["mes_resolved"].dt.to_timestamp()
-    resolvidos = resolvidos[["mes_ts", "Resolvidos"]]
-
-    # ---------- 3) Junta as séries e GARANTE dtype datetime p/ filtrar
-    grafico = pd.merge(criados, resolvidos, how="outer", on="mes_ts").fillna(0)
-    grafico["mes_ts"] = pd.to_datetime(grafico["mes_ts"], errors="coerce")
-    grafico = grafico.sort_values("mes_ts")
-
-    # 🔒 Se filtro de mês/ano foi escolhido, EXIBE APENAS esse mês/ano
-    if ano_global != "Todos":
-        grafico = grafico[grafico["mes_ts"].dt.year == int(ano_global)]
-    if mes_global != "Todos":
-        grafico = grafico[grafico["mes_ts"].dt.month == int(mes_global)]
-
-    if grafico.empty:
+    if dfm.empty:
         st.info("Sem dados para os filtros selecionados.")
         return
 
-    grafico["Criados"] = grafico["Criados"].astype(int)
-    grafico["Resolvidos"] = grafico["Resolvidos"].astype(int)
-    grafico["mes_str"] = grafico["mes_ts"].dt.strftime("%b/%Y")
+    dfm = dfm[["mes_str", "period_ts", "Criados", "Resolvidos"]].sort_values("period_ts")
+    dfm["Criados"] = dfm["Criados"].astype(int)
+    dfm["Resolvidos"] = dfm["Resolvidos"].astype(int)
 
-    categorias = sorted(grafico["mes_str"].unique().tolist())
-    if ano_global != "Todos" and mes_global != "Todos" and len(categorias) == 1:
-        categorias = categorias
-
-    fig = px.bar(
-        grafico,
-        x="mes_str",
-        y=["Criados", "Resolvidos"],
-        barmode="group",
-        text_auto=True,
-        height=440,
-    )
+    fig = px.bar(dfm, x="mes_str", y=["Criados", "Resolvidos"], barmode="group", text_auto=True, height=440)
     fig.update_traces(textangle=0, textfont_size=14, cliponaxis=False)
-    if categorias:
-        fig.update_xaxes(categoryorder="array", categoryarray=categorias)
+
+    if ano_global != "Todos" and mes_global != "Todos":
+        único = dfm["mes_str"].unique().tolist()
+        fig.update_xaxes(categoryorder="array", categoryarray=único)
+
     st.plotly_chart(fig, use_container_width=True)
 
+
 def render_sla(dfp, projeto, ano_global, mes_global):
-    """SLA: usa resolvidos do mês e cumpre/fura via 'breached' do SLA do Jira."""
     st.markdown("### ⏱️ SLA")
 
-    df_sla = dfp[dfp["resolved"].notna()].copy()
-    df_sla = aplicar_filtro_global(df_sla, "mes_resolved", ano_global, mes_global)
-    if df_sla.empty:
+    dfm = df_monthly[df_monthly["projeto"] == projeto].copy()
+    if ano_global != "Todos":
+        dfm = dfm[dfm["ano"] == int(ano_global)]
+    if mes_global != "Todos":
+        dfm = dfm[dfm["mes"] == int(mes_global)]
+
+    if dfm.empty:
         st.info("Sem dados de SLA para os filtros selecionados.")
         return
 
-    # Dentro/Fora a partir do JSON do campo SLA
-    df_sla["dentro_sla"] = df_sla["sla_raw"].apply(dentro_sla_from_raw)
-    df_sla["dentro_sla"] = df_sla["dentro_sla"].fillna(False)  # conservador
-
-    agr = (
-        df_sla.groupby(df_sla["mes_resolved"].dt.strftime("%b/%Y"))
-        .agg(total=("dentro_sla", "size"), dentro=("dentro_sla", "sum"))
-        .reset_index()
-        .rename(columns={"mes_resolved": "mes_str"})
-    )
-    agr["fora"] = (agr["total"] - agr["dentro"]).astype(int)
-
-    agr["% Dentro SLA"] = (agr["dentro"].astype(float) / agr["total"].astype(float)) * 100.0
-    agr["% Fora SLA"] = (agr["fora"].astype(float) / agr["total"].astype(float)) * 100.0
-
-    agr["mes_data"] = pd.to_datetime(agr["mes_str"], format="%b/%Y")
-    agr = agr.sort_values("mes_data")
-    agr["mes_str"] = agr["mes_data"].dt.strftime("%b/%Y")
-
-    okr = agr["% Dentro SLA"].mean() if not agr.empty else 0.0
+    okr = dfm["pct_dentro"].mean() if not dfm.empty else 0.0
     meta = META_SLA.get(projeto, 98.0)
     titulo = f"OKR: {okr:.2f}% — Meta: {meta:.2f}%".replace(".", ",")
 
+    show = dfm[["mes_str", "period_ts", "pct_dentro", "pct_fora"]].sort_values("period_ts")
+    show = show.rename(columns={"pct_dentro": "% Dentro SLA", "pct_fora": "% Fora SLA"})
+
     fig_sla = px.bar(
-        agr,
+        show,
         x="mes_str",
         y=["% Dentro SLA", "% Fora SLA"],
         barmode="group",
@@ -381,7 +391,13 @@ def render_sla(dfp, projeto, ano_global, mes_global):
     )
     fig_sla.update_traces(texttemplate="%{y:.2f}%", textposition="outside", textfont_size=14, cliponaxis=False)
     fig_sla.update_yaxes(ticksuffix="%")
+
+    if ano_global != "Todos" and mes_global != "Todos":
+        único = show["mes_str"].unique().tolist()
+        fig_sla.update_xaxes(categoryorder="array", categoryarray=único)
+
     st.plotly_chart(fig_sla, use_container_width=True)
+
 
 def render_assunto(dfp, projeto, ano_global, mes_global):
     st.markdown("### 🧾 Assunto Relacionado")
@@ -394,6 +410,7 @@ def render_assunto(dfp, projeto, ano_global, mes_global):
     assunto_count.columns = ["Assunto", "Qtd"]
     st.dataframe(assunto_count, use_container_width=True, hide_index=True)
 
+
 def render_area(dfp, ano_global, mes_global):
     st.markdown("### 📦 Área Solicitante")
     df_area = aplicar_filtro_global(dfp.copy(), "mes_created", ano_global, mes_global)
@@ -401,6 +418,7 @@ def render_area(dfp, ano_global, mes_global):
     area_count = df_area["area_nome"].value_counts().reset_index()
     area_count.columns = ["Área", "Qtd"]
     st.dataframe(area_count, use_container_width=True, hide_index=True)
+
 
 def render_encaminhamentos(dfp, ano_global, mes_global):
     st.markdown("### 🔄 Encaminhamentos")
@@ -413,8 +431,10 @@ def render_encaminhamentos(dfp, ano_global, mes_global):
         df_enc["n3_valor"] = df_enc["n3"].apply(lambda x: safe_get_value(x, "value", None))
         st.metric("Encaminhados N3", int((df_enc["n3_valor"] == "Sim").sum()))
 
+
 def render_onboarding(dfp, ano_global, mes_global):
     st.markdown("### 🧭 Onboarding")
+
     ASSUNTO_CLIENTE_NOVO = "Nova integração - Cliente novo"
     ASSUNTOS_ERROS = [
         "Erro durante Onboarding - Frete",
@@ -466,13 +486,10 @@ def render_onboarding(dfp, ano_global, mes_global):
         fig_onb.update_layout(margin=dict(t=50, r=20, b=30, l=10), bargap=0.25)
         st.plotly_chart(fig_onb, use_container_width=True)
 
-    # Série mensal "Cliente novo"
     df_cli = df_onb[df_onb["assunto_nome"] == ASSUNTO_CLIENTE_NOVO].copy()
     if not df_cli.empty:
         serie_cli = (
-            df_cli.groupby(df_cli["mes_created"].dt.to_period("M"))
-            .size()
-            .reset_index(name="ClientesNovos")
+            df_cli.groupby(df_cli["mes_created"].dt.to_period("M")).size().reset_index(name="ClientesNovos")
         )
         serie_cli["mes_dt"] = serie_cli["mes_created"].dt.to_timestamp()
         serie_cli = serie_cli.sort_values("mes_dt")
@@ -487,7 +504,8 @@ def render_onboarding(dfp, ano_global, mes_global):
         fig_cli.update_yaxes(range=[0, y_top])
 
         for _, r in serie_cli.iterrows():
-            x = r["mes_str"]; yb = float(r["ClientesNovos"])
+            x = r["mes_str"]
+            yb = float(r["ClientesNovos"])
             if pd.notna(r["MoM"]):
                 mom_abs = abs(r["MoM"])
                 if mom_abs >= 1:
@@ -518,8 +536,10 @@ def render_onboarding(dfp, ano_global, mes_global):
         help="Cálculo: Clientes novos (simulação) × Cenário Receita por Cliente"
     )
 
+
 def render_app_ne(dfp, ano_global, mes_global):
     st.markdown("### 📱 APP NE — Origem do problema")
+
     s_ass = dfp["assunto_nome"].astype(str).str.strip()
     alvo = ASSUNTO_ALVO_APPNE.strip().casefold()
     mask_assunto = s_ass.str.casefold().eq(alvo)
@@ -547,9 +567,7 @@ def render_app_ne(dfp, ano_global, mes_global):
     m2.metric("APP NE", int(contagem.get("APP NE", 0)))
     m3.metric("APP EN", int(contagem.get("APP EN", 0)))
 
-    serie = (
-        df_app.groupby(["mes_dt", "origem_cat"]).size().reset_index(name="Qtd").sort_values("mes_dt")
-    )
+    serie = df_app.groupby(["mes_dt", "origem_cat"]).size().reset_index(name="Qtd").sort_values("mes_dt")
     serie["mes_str"] = serie["mes_dt"].dt.strftime("%b/%Y")
     cats = serie["mes_str"].dropna().unique().tolist()
     serie["mes_str"] = pd.Categorical(serie["mes_str"], categories=cats, ordered=True)
@@ -579,19 +597,20 @@ def render_app_ne(dfp, ano_global, mes_global):
     cols_show = ["key", "created", "mes_str", "assunto_nome", "origem_cat", "status"]
     st.dataframe(df_app[cols_show], use_container_width=True, hide_index=True)
 
-# ============================
-# ABAS POR PROJETO / VISÕES
-# ============================
+
+# --------------------------
+# Abas por Projeto / Visões
+# --------------------------
 tabs = st.tabs([TITULOS[p] for p in PROJETOS])
 
 for projeto, tab in zip(PROJETOS, tabs):
     with tab:
         st.subheader(f"📂 Projeto: {TITULOS[projeto]}")
+
         dfp = df[df["projeto"] == projeto].copy()
         if dfp.empty:
             st.info("Sem dados carregados.")
             continue
-
         dfp = ensure_assunto_nome(dfp, projeto)
 
         if projeto == "TDS":
@@ -633,7 +652,7 @@ for projeto, tab in zip(PROJETOS, tabs):
                 st.info("APP NE disponível somente para Tech Support.")
 
         else:
-            # Visão Geral — ordem dos blocos
+            # Geral (ordem combinada)
             render_criados_resolvidos(dfp, ano_global, mes_global)
             render_sla(dfp, projeto, ano_global, mes_global)
             render_assunto(dfp, projeto, ano_global, mes_global)
