@@ -609,7 +609,7 @@ def render_app_ne(dfp, ano_global, mes_global):
 def render_rotinas_manuais(dfp: pd.DataFrame, ano_global: str, mes_global: str):
     """
     Somatório mensal do campo 'Quantidade de encomendas' (customfield_13666).
-    Usa a data de criação do ticket ('created') para o bucket mensal.
+    Usa a data de RESOLUÇÃO do ticket ('resolved') para o bucket mensal.
     Respeita filtros globais (ano/mês) e trava o eixo X quando mês+ano são escolhidos.
     """
     COL_QTD = CAMPO_QTD_ENCOMENDAS  # "customfield_13666"
@@ -620,23 +620,27 @@ def render_rotinas_manuais(dfp: pd.DataFrame, ano_global: str, mes_global: str):
         st.info("Campo **Quantidade de encomendas** (customfield_13666) não está disponível nesta base.")
         return
 
-    base = dfp[["created", COL_QTD]].copy()
+    # Base com resolved + quantidade
+    base = dfp[["resolved", COL_QTD]].copy()
     base[COL_QTD] = pd.to_numeric(base[COL_QTD], errors="coerce")
+
+    # Filtra quantidade > 0 e resolved presente
     base = base[base[COL_QTD].notna() & (base[COL_QTD] > 0)]
+    base["resolved"] = pd.to_datetime(base["resolved"], errors="coerce")
+    base = base.dropna(subset=["resolved"])
 
     if base.empty:
         st.info("Sem dados de **Rotinas Manuais** (quantidades preenchidas) para os filtros selecionados.")
         return
 
-    base["created"] = pd.to_datetime(base["created"], errors="coerce")
-    base = base.dropna(subset=["created"])
-
-    base["period"] = base["created"].dt.to_period("M")
+    # Bucket por mês de resolved (BRT já aplicado na carga)
+    base["period"] = base["resolved"].dt.to_period("M")
     base["period_ts"] = base["period"].dt.to_timestamp()
     base["ano"] = base["period"].dt.year
     base["mes"] = base["period"].dt.month
     base["mes_str"] = base["period_ts"].dt.strftime("%b/%Y")
 
+    # Filtros globais
     if ano_global != "Todos":
         base = base[base["ano"] == int(ano_global)]
     if mes_global != "Todos":
@@ -650,6 +654,7 @@ def render_rotinas_manuais(dfp: pd.DataFrame, ano_global: str, mes_global: str):
         st.info("Sem dados de **Rotinas Manuais** para os filtros selecionados.")
         return
 
+    # Agregação mensal (soma de encomendas)
     agg = (
         base.groupby(["period", "period_ts", "mes_str"], as_index=False)[COL_QTD]
         .sum()
@@ -657,6 +662,7 @@ def render_rotinas_manuais(dfp: pd.DataFrame, ano_global: str, mes_global: str):
         .sort_values("period_ts")
     )
 
+    # Gráfico
     fig = px.bar(agg, x="mes_str", y="Qtd encomendas", text_auto=True, height=420)
     fig.update_traces(textangle=0, textfont_size=14, cliponaxis=False)
 
