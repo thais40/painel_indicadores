@@ -120,10 +120,11 @@ CAMPOS_ASSUNTO = {
 
 CAMPO_AREA = "customfield_13719"
 CAMPO_N3 = "customfield_13659"
-CAMPO_ORIGEM = "customfield_13628"  # TDS/TINE
+CAMPO_ORIGEM = "customfield_13628"       # TDS/TINE
+CAMPO_QTD_ENCOMENDAS = "customfield_13666"  # Quantidade de encomendas (Rotinas Manuais)
 
 # Metas por projeto (corrigidas)
-META_SLA = {"TDS": 98.0, "INT": 96.0, "TINE": 96.0, "INTEL": 96.0}
+META_SLA = {"TDS": 98.0, "INT": 96.0, "TINE": 96.0, "INTEL": 95.0}
 
 # APP NE
 ASSUNTO_ALVO_APPNE = "Problemas no App NE - App EN"
@@ -204,7 +205,8 @@ def buscar_issues() -> pd.DataFrame:
                 "maxResults": 100,
                 "fields": (
                     "created,resolutiondate,status,issuetype,"
-                    f"{SLA_CAMPOS[projeto]},{CAMPOS_ASSUNTO[projeto]},{CAMPO_AREA},{CAMPO_N3},{CAMPO_ORIGEM}"
+                    f"{SLA_CAMPOS[projeto]},{CAMPOS_ASSUNTO[projeto]},"
+                    f"{CAMPO_AREA},{CAMPO_N3},{CAMPO_ORIGEM},{CAMPO_QTD_ENCOMENDAS}"
                 ),
             }
             resp = requests.get(f"{JIRA_URL}/rest/api/3/search", auth=auth, params=params)
@@ -229,6 +231,7 @@ def buscar_issues() -> pd.DataFrame:
                         "area": f.get(CAMPO_AREA),
                         "n3": f.get(CAMPO_N3),
                         "origem": f.get(CAMPO_ORIGEM),
+                        CAMPO_QTD_ENCOMENDAS: f.get(CAMPO_QTD_ENCOMENDAS),
                     }
                 )
             start += 100
@@ -337,13 +340,12 @@ def render_criados_resolvidos(dfp: pd.DataFrame, ano_global: str, mes_global: st
     projeto = dfp["projeto"].iat[0]
     dfm = df_monthly[df_monthly["projeto"] == projeto].copy()
 
-    # filtros gerais
     if ano_global != "Todos":
         dfm = dfm[dfm["ano"] == int(ano_global)]
     if mes_global != "Todos":
         dfm = dfm[dfm["mes"] == int(mes_global)]
 
-    # 🔒 filtro FINAL por Período (100% à prova de vazamento)
+    # filtro FINAL por Período (100% à prova de vazamento)
     if ano_global != "Todos" and mes_global != "Todos":
         alvo_period = pd.Period(f"{int(ano_global)}-{int(mes_global):02d}", freq="M")
         dfm = dfm[dfm["period"] == alvo_period]
@@ -363,6 +365,7 @@ def render_criados_resolvidos(dfp: pd.DataFrame, ano_global: str, mes_global: st
 
     st.plotly_chart(fig, use_container_width=True)
 
+
 def render_sla(dfp, projeto, ano_global, mes_global):
     st.markdown("### ⏱️ SLA")
 
@@ -372,7 +375,7 @@ def render_sla(dfp, projeto, ano_global, mes_global):
     if mes_global != "Todos":
         dfm = dfm[dfm["mes"] == int(mes_global)]
 
-    # 🔒 filtro FINAL por Período (igual ao de cima)
+    # filtro FINAL por Período (igual ao de cima)
     if ano_global != "Todos" and mes_global != "Todos":
         alvo_period = pd.Period(f"{int(ano_global)}-{int(mes_global):02d}", freq="M")
         dfm = dfm[dfm["period"] == alvo_period]
@@ -402,6 +405,7 @@ def render_sla(dfp, projeto, ano_global, mes_global):
     fig_sla.update_xaxes(categoryorder="array", categoryarray=show["mes_str"].tolist())
 
     st.plotly_chart(fig_sla, use_container_width=True)
+
 
 def render_assunto(dfp, projeto, ano_global, mes_global):
     st.markdown("### 🧾 Assunto Relacionado")
@@ -602,6 +606,66 @@ def render_app_ne(dfp, ano_global, mes_global):
     st.dataframe(df_app[cols_show], use_container_width=True, hide_index=True)
 
 
+def render_rotinas_manuais(dfp: pd.DataFrame, ano_global: str, mes_global: str):
+    """
+    Somatório mensal do campo 'Quantidade de encomendas' (customfield_13666).
+    Usa a data de criação do ticket ('created') para o bucket mensal.
+    Respeita filtros globais (ano/mês) e trava o eixo X quando mês+ano são escolhidos.
+    """
+    COL_QTD = CAMPO_QTD_ENCOMENDAS  # "customfield_13666"
+
+    st.markdown("### 🛠️ Rotinas Manuais")
+
+    if COL_QTD not in dfp.columns:
+        st.info("Campo **Quantidade de encomendas** (customfield_13666) não está disponível nesta base.")
+        return
+
+    base = dfp[["created", COL_QTD]].copy()
+    base[COL_QTD] = pd.to_numeric(base[COL_QTD], errors="coerce")
+    base = base[base[COL_QTD].notna() & (base[COL_QTD] > 0)]
+
+    if base.empty:
+        st.info("Sem dados de **Rotinas Manuais** (quantidades preenchidas) para os filtros selecionados.")
+        return
+
+    base["created"] = pd.to_datetime(base["created"], errors="coerce")
+    base = base.dropna(subset=["created"])
+
+    base["period"] = base["created"].dt.to_period("M")
+    base["period_ts"] = base["period"].dt.to_timestamp()
+    base["ano"] = base["period"].dt.year
+    base["mes"] = base["period"].dt.month
+    base["mes_str"] = base["period_ts"].dt.strftime("%b/%Y")
+
+    if ano_global != "Todos":
+        base = base[base["ano"] == int(ano_global)]
+    if mes_global != "Todos":
+        if ano_global != "Todos":
+            alvo_period = pd.Period(f"{int(ano_global)}-{int(mes_global):02d}", freq="M")
+            base = base[base["period"] == alvo_period]
+        else:
+            base = base[base["mes"] == int(mes_global)]
+
+    if base.empty:
+        st.info("Sem dados de **Rotinas Manuais** para os filtros selecionados.")
+        return
+
+    agg = (
+        base.groupby(["period", "period_ts", "mes_str"], as_index=False)[COL_QTD]
+        .sum()
+        .rename(columns={COL_QTD: "Qtd encomendas"})
+        .sort_values("period_ts")
+    )
+
+    fig = px.bar(agg, x="mes_str", y="Qtd encomendas", text_auto=True, height=420)
+    fig.update_traces(textangle=0, textfont_size=14, cliponaxis=False)
+
+    if ano_global != "Todos" and mes_global != "Todos":
+        fig.update_xaxes(categoryorder="array", categoryarray=agg["mes_str"].tolist())
+
+    st.plotly_chart(fig, use_container_width=True)
+
+
 # --------------------------
 # Abas por Projeto / Visões
 # --------------------------
@@ -666,6 +730,9 @@ for projeto, tab in zip(PROJETOS, tabs):
                 render_encaminhamentos(dfp, ano_global, mes_global)
             if projeto == "TDS":
                 render_app_ne(dfp, ano_global, mes_global)
+                # 🔽 Novo submenu no final do TDS:
+                with st.expander("🛠️ Rotinas Manuais", expanded=False):
+                    render_rotinas_manuais(dfp, ano_global, mes_global)
             if projeto == "INT":
                 with st.expander("🧭 Onboarding"):
                     render_onboarding(dfp, ano_global, mes_global)
