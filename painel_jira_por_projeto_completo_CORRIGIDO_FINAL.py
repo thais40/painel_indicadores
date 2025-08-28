@@ -606,6 +606,7 @@ def render_app_ne(dfp, ano_global, mes_global):
     st.dataframe(df_app[cols_show], use_container_width=True, hide_index=True)
 
 
+
 def render_rotinas_manuais(dfp: pd.DataFrame, ano_global: str, mes_global: str):
     """
     Rotinas Manuais (TDS) — soma mensal do campo 'Quantidade de encomendas' (customfield_13666).
