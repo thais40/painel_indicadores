@@ -697,6 +697,97 @@ def render_rotinas_manuais(dfp: pd.DataFrame, ano_global: str, mes_global: str):
     if ano_global != "Todos" and mes_global != "Todos":
         fig.update_xaxes(categoryorder="array", categoryarray=agg["mes_str"].tolist())
 
+    st.plotly_chart(fig, use_container_width=True)def render_rotinas_manuais(dfp: pd.DataFrame, ano_global: str, mes_global: str):
+    """
+    Rotinas Manuais (TDS) — soma mensal do campo 'Quantidade de encomendas' (customfield_13666).
+    - Usa a data de RESOLUÇÃO ('resolved') como bucket.
+    - 1 linha por ticket (key): usa o último resolved.
+    - Faz parsing robusto (remove separadores, só dígitos).
+    - Descarta outliers > 100.000 (defensivo).
+    """
+    import re
+
+    COL_QTD = CAMPO_QTD_ENCOMENDAS  # "customfield_13666"
+    st.markdown("### 🛠️ Rotinas Manuais")
+
+    if COL_QTD not in dfp.columns or "resolved" not in dfp.columns or "key" not in dfp.columns:
+        st.info("Dados insuficientes para Rotinas Manuais (faltam 'key', 'resolved' ou o campo de quantidade).")
+        return
+
+    # ---- parser robusto
+    def _to_int(v):
+        if pd.isna(v):
+            return pd.NA
+        s = str(v).strip()
+        if not s:
+            return pd.NA
+        digits = re.sub(r"[^\d]", "", s)
+        return int(digits) if digits else pd.NA
+
+    base = dfp[["key", "resolved", COL_QTD]].copy()
+    base[COL_QTD] = base[COL_QTD].apply(_to_int).astype("Int64")
+    base["resolved"] = pd.to_datetime(base["resolved"], errors="coerce")
+    base = base.dropna(subset=["resolved"])
+    base = base[base[COL_QTD].notna() & (base[COL_QTD] > 0)]
+
+    if base.empty:
+        st.info("Sem dados de Rotinas Manuais.")
+        return
+
+    # 🔒 deduplicação: último registro por ticket
+    base = base.sort_values("resolved")
+    base = base.groupby("key", as_index=False).tail(1)
+
+    # remover outliers (>100k)
+    LIMITE = 100_000
+    outliers = base[base[COL_QTD] > LIMITE]
+    if not outliers.empty:
+        base = base[base[COL_QTD] <= LIMITE]
+        st.caption(f"ℹ️ {len(outliers)} registro(s) descartado(s) por > {LIMITE:,}".replace(",", "."))
+
+    # bucket mensal
+    base["period"]    = base["resolved"].dt.to_period("M")
+    base["period_ts"] = base["period"].dt.to_timestamp()
+    base["ano"]       = base["period"].dt.year
+    base["mes"]       = base["period"].dt.month
+    base["mes_str"]   = base["period_ts"].dt.strftime("%b/%Y")
+
+    # filtros globais
+    if ano_global != "Todos":
+        base = base[base["ano"] == int(ano_global)]
+    if mes_global != "Todos":
+        if ano_global != "Todos":
+            alvo = pd.Period(f"{int(ano_global)}-{int(mes_global):02d}", freq="M")
+            base = base[base["period"] == alvo]
+        else:
+            base = base[base["mes"] == int(mes_global)]
+
+    if base.empty:
+        st.info("Sem dados de Rotinas Manuais no período filtrado.")
+        return
+
+    # agregação mensal
+    agg = (
+        base.groupby(["period", "period_ts", "mes_str"], as_index=False)[COL_QTD]
+        .sum()
+        .rename(columns={COL_QTD: "Qtd encomendas"})
+        .sort_values("period_ts")
+    )
+
+    # rótulo formatado
+    agg["label"] = agg["Qtd encomendas"].map(lambda x: f"{x:,.0f}".replace(",", "."))
+
+    fig = px.bar(agg, x="mes_str", y="Qtd encomendas", text="label", height=420)
+    fig.update_traces(textangle=0, textfont_size=14, cliponaxis=False)
+    fig.update_yaxes(title_text="Qtd encomendas", tickformat=",")
+
+    top = int(agg["Qtd encomendas"].max()) if not agg.empty else 0
+    if top > 0:
+        fig.update_yaxes(range=[0, top * 1.15])
+
+    if ano_global != "Todos" and mes_global != "Todos":
+        fig.update_xaxes(categoryorder="array", categoryarray=agg["mes_str"].tolist())
+
     st.plotly_chart(fig, use_container_width=True)
 
 # --------------------------
