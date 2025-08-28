@@ -606,105 +606,15 @@ def render_app_ne(dfp, ano_global, mes_global):
     st.dataframe(df_app[cols_show], use_container_width=True, hide_index=True)
 
 
-
+# --------------------------
+# Rotinas Manuais (TDS) — versão final
+# --------------------------
 def render_rotinas_manuais(dfp: pd.DataFrame, ano_global: str, mes_global: str):
     """
     Rotinas Manuais (TDS) — soma mensal do campo 'Quantidade de encomendas' (customfield_13666).
     - Usa a data de RESOLUÇÃO ('resolved') como bucket.
-    - Garante 1 linha por ticket: pega só o último valor de 'Quantidade de encomendas' por key.
-    - Parsing robusto: remove separadores e mantém só dígitos.
-    - Descarta outliers (>100.000).
-    """
-    import re
-
-    COL_QTD = CAMPO_QTD_ENCOMENDAS
-    st.markdown("### 🛠️ Rotinas Manuais")
-
-    if COL_QTD not in dfp.columns or "resolved" not in dfp.columns or "key" not in dfp.columns:
-        st.info("Dados insuficientes para Rotinas Manuais.")
-        return
-
-    # ---- parser robusto
-    def _parse(v):
-        if pd.isna(v):
-            return pd.NA
-        s = str(v).strip()
-        if not s:
-            return pd.NA
-        digits = re.sub(r"[^\d]", "", s)
-        return int(digits) if digits else pd.NA
-
-    base = dfp[["key", "resolved", COL_QTD]].copy()
-    base[COL_QTD] = base[COL_QTD].apply(_parse).astype("Int64")
-    base["resolved"] = pd.to_datetime(base["resolved"], errors="coerce")
-    base = base.dropna(subset=["resolved"])
-    base = base[base[COL_QTD].notna() & (base[COL_QTD] > 0)]
-
-    if base.empty:
-        st.info("Sem dados de Rotinas Manuais.")
-        return
-
-    # 🔒 deduplicar por ticket: pega o último resolved
-    base = base.sort_values("resolved")
-    base = base.groupby("key").tail(1)
-
-    # remover outliers (>100k)
-    LIMITE = 100_000
-    outliers = base[base[COL_QTD] > LIMITE]
-    if not outliers.empty:
-        base = base[base[COL_QTD] <= LIMITE]
-        st.caption(f"ℹ️ {len(outliers)} registro(s) descartado(s) por > {LIMITE:,}".replace(",", "."))
-
-    # bucket mensal
-    base["period"]   = base["resolved"].dt.to_period("M")
-    base["period_ts"] = base["period"].dt.to_timestamp()
-    base["ano"]      = base["period"].dt.year
-    base["mes"]      = base["period"].dt.month
-    base["mes_str"]  = base["period_ts"].dt.strftime("%b/%Y")
-
-    # filtros globais
-    if ano_global != "Todos":
-        base = base[base["ano"] == int(ano_global)]
-    if mes_global != "Todos":
-        alvo = pd.Period(f"{int(ano_global)}-{int(mes_global):02d}", freq="M") if ano_global != "Todos" else None
-        if alvo:
-            base = base[base["period"] == alvo]
-        else:
-            base = base[base["mes"] == int(mes_global)]
-
-    if base.empty:
-        st.info("Sem dados de Rotinas Manuais no período filtrado.")
-        return
-
-    # agrega por mês
-    agg = (
-        base.groupby(["period", "period_ts", "mes_str"], as_index=False)[COL_QTD]
-        .sum()
-        .rename(columns={COL_QTD: "Qtd encomendas"})
-        .sort_values("period_ts")
-    )
-
-    # rótulo formatado
-    agg["label"] = agg["Qtd encomendas"].map(lambda x: f"{x:,.0f}".replace(",", "."))
-
-    fig = px.bar(agg, x="mes_str", y="Qtd encomendas", text="label", height=420)
-    fig.update_traces(textangle=0, textfont_size=14, cliponaxis=False)
-    fig.update_yaxes(title_text="Qtd encomendas", tickformat=",")
-
-    top = int(agg["Qtd encomendas"].max()) if not agg.empty else 0
-    if top > 0:
-        fig.update_yaxes(range=[0, top * 1.15])
-
-    if ano_global != "Todos" and mes_global != "Todos":
-        fig.update_xaxes(categoryorder="array", categoryarray=agg["mes_str"].tolist())
-
-    st.plotly_chart(fig, use_container_width=True)def render_rotinas_manuais(dfp: pd.DataFrame, ano_global: str, mes_global: str):
-    """
-    Rotinas Manuais (TDS) — soma mensal do campo 'Quantidade de encomendas' (customfield_13666).
-    - Usa a data de RESOLUÇÃO ('resolved') como bucket.
     - 1 linha por ticket (key): usa o último resolved.
-    - Faz parsing robusto (remove separadores, só dígitos).
-    - Descarta outliers > 100.000 (defensivo).
+    - Parsing robusto (remove separadores, só dígitos); descarta outliers > 100.000.
     """
     import re
 
@@ -715,7 +625,6 @@ def render_rotinas_manuais(dfp: pd.DataFrame, ano_global: str, mes_global: str):
         st.info("Dados insuficientes para Rotinas Manuais (faltam 'key', 'resolved' ou o campo de quantidade).")
         return
 
-    # ---- parser robusto
     def _to_int(v):
         if pd.isna(v):
             return pd.NA
@@ -735,39 +644,39 @@ def render_rotinas_manuais(dfp: pd.DataFrame, ano_global: str, mes_global: str):
         st.info("Sem dados de Rotinas Manuais.")
         return
 
-    # 🔒 deduplicação: último registro por ticket
+    # 🔒 deduplicação por ticket (último resolved)
     base = base.sort_values("resolved")
     base = base.groupby("key", as_index=False).tail(1)
 
-    # remover outliers (>100k)
+    # outliers defensivos
     LIMITE = 100_000
     outliers = base[base[COL_QTD] > LIMITE]
     if not outliers.empty:
         base = base[base[COL_QTD] <= LIMITE]
         st.caption(f"ℹ️ {len(outliers)} registro(s) descartado(s) por > {LIMITE:,}".replace(",", "."))
 
-    # bucket mensal
+    # Bucket mensal por resolved (BRT já aplicado na carga)
     base["period"]    = base["resolved"].dt.to_period("M")
     base["period_ts"] = base["period"].dt.to_timestamp()
     base["ano"]       = base["period"].dt.year
     base["mes"]       = base["period"].dt.month
     base["mes_str"]   = base["period_ts"].dt.strftime("%b/%Y")
 
-    # filtros globais
+    # Filtros globais (Ano/Mês)
     if ano_global != "Todos":
         base = base[base["ano"] == int(ano_global)]
     if mes_global != "Todos":
         if ano_global != "Todos":
-            alvo = pd.Period(f"{int(ano_global)}-{int(mes_global):02d}", freq="M")
-            base = base[base["period"] == alvo]
+            alvo_period = pd.Period(f"{int(ano_global)}-{int(mes_global):02d}", freq="M")
+            base = base[base["period"] == alvo_period]
         else:
             base = base[base["mes"] == int(mes_global)]
 
     if base.empty:
-        st.info("Sem dados de Rotinas Manuais no período filtrado.")
+        st.info("Sem dados de **Rotinas Manuais** para os filtros selecionados.")
         return
 
-    # agregação mensal
+    # Agregação mensal (soma de encomendas)
     agg = (
         base.groupby(["period", "period_ts", "mes_str"], as_index=False)[COL_QTD]
         .sum()
@@ -775,21 +684,24 @@ def render_rotinas_manuais(dfp: pd.DataFrame, ano_global: str, mes_global: str):
         .sort_values("period_ts")
     )
 
-    # rótulo formatado
+    # Rótulo com separador de milhar (pt-BR)
     agg["label"] = agg["Qtd encomendas"].map(lambda x: f"{x:,.0f}".replace(",", "."))
 
     fig = px.bar(agg, x="mes_str", y="Qtd encomendas", text="label", height=420)
     fig.update_traces(textangle=0, textfont_size=14, cliponaxis=False)
-    fig.update_yaxes(title_text="Qtd encomendas", tickformat=",")
 
+    # Eixo Y sem 'k'; formatação com milhar
+    fig.update_yaxes(title_text="Qtd encomendas", tickformat=",")
     top = int(agg["Qtd encomendas"].max()) if not agg.empty else 0
     if top > 0:
         fig.update_yaxes(range=[0, top * 1.15])
 
+    # Ordenação no caso de um único mês selecionado
     if ano_global != "Todos" and mes_global != "Todos":
         fig.update_xaxes(categoryorder="array", categoryarray=agg["mes_str"].tolist())
 
     st.plotly_chart(fig, use_container_width=True)
+
 
 # --------------------------
 # Abas por Projeto / Visões
@@ -806,6 +718,7 @@ for projeto, tab in zip(PROJETOS, tabs):
             continue
         dfp = ensure_assunto_nome(dfp, projeto)
 
+        # Opções de visão por projeto
         if projeto == "TDS":
             opcoes = ["Geral", "Criados vs Resolvidos", "SLA", "Assunto Relacionado", "Área Solicitante", "APP NE"]
         elif projeto == "INT":
@@ -817,6 +730,7 @@ for projeto, tab in zip(PROJETOS, tabs):
 
         visao = st.selectbox("Visão", opcoes, key=f"visao_{projeto}")
 
+        # ---- Renderizadores isolados
         if visao == "Criados vs Resolvidos":
             render_criados_resolvidos(dfp, ano_global, mes_global)
 
@@ -844,20 +758,34 @@ for projeto, tab in zip(PROJETOS, tabs):
             else:
                 st.info("APP NE disponível somente para Tech Support.")
 
+        # ---- Visão Geral (ordem e seções combinadas)
         else:
-            # Geral (ordem combinada)
+            # 1) Criados vs Resolvidos
             render_criados_resolvidos(dfp, ano_global, mes_global)
+
+            # 2) SLA
             render_sla(dfp, projeto, ano_global, mes_global)
+
+            # 3) Assunto Relacionado
             render_assunto(dfp, projeto, ano_global, mes_global)
+
+            # 4) Área Solicitante (exceto INTEL)
             if projeto != "INTEL":
                 render_area(dfp, ano_global, mes_global)
+
+            # 5) Encaminhamentos (TDS e INT)
             if projeto in ("TDS", "INT"):
                 render_encaminhamentos(dfp, ano_global, mes_global)
+
+            # 6) APP NE (TDS) — ao final da página, fora de sub-menu
             if projeto == "TDS":
                 render_app_ne(dfp, ano_global, mes_global)
-                # 🔽 Novo submenu no final do TDS:
+
+                # 7) Rotinas Manuais (TDS) — expander no fim
                 with st.expander("🛠️ Rotinas Manuais", expanded=False):
                     render_rotinas_manuais(dfp, ano_global, mes_global)
+
+            # 8) Onboarding (INT) — expander no fim
             if projeto == "INT":
-                with st.expander("🧭 Onboarding"):
+                with st.expander("🧭 Onboarding", expanded=False):
                     render_onboarding(dfp, ano_global, mes_global)
