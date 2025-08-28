@@ -608,35 +608,37 @@ def render_app_ne(dfp, ano_global, mes_global):
 
 def render_rotinas_manuais(dfp: pd.DataFrame, ano_global: str, mes_global: str):
     """
-    Rotinas Manuais (TDS) — soma mensal do campo 'Quantidade de encomendas' (customfield_13666).
+    Rotinas Manuais (TDS) — Soma mensal do campo 'Quantidade de encomendas' (customfield_13666).
     - Usa a data de RESOLUÇÃO do ticket ('resolved') para o bucket mensal.
-    - Faz parsing robusto do campo: remove separadores (ponto, vírgula, espaço) e mantém só dígitos.
-    - Ex.: '4.396' -> 4396 ; '12 488' -> 12488 ; '49,371' -> 49371
+    - Deduplica por issue (key/id), mantendo a ÚLTIMA resolução do ticket.
+    - Faz parsing robusto do campo (remove separadores e mantém só dígitos).
+    - Remove outliers individuais (> 100.000) para evitar inflar a soma por erro de digitação.
     """
     import re
 
     COL_QTD = CAMPO_QTD_ENCOMENDAS  # "customfield_13666"
     st.markdown("### 🛠️ Rotinas Manuais")
 
-    # Campo existe?
     if COL_QTD not in dfp.columns:
         st.info("Campo **Quantidade de encomendas** (customfield_13666) não está disponível nesta base.")
         return
 
-    # ---- Parser robusto: mantém apenas dígitos e converte para inteiro
+    # ---- id do ticket para deduplicar
+    id_col = "key" if "key" in dfp.columns else ("id" if "id" in dfp.columns else None)
+
+    # ---- parser robusto para quantidades
     def _parse_encomendas(v):
         if pd.isna(v):
             return pd.NA
         if isinstance(v, (int, float)) and not pd.isna(v):
             try:
-                # Se já for numérico (ex.: export CSV numérico), normaliza p/ int
                 return int(v)
             except Exception:
                 pass
         s = str(v).strip()
         if not s:
             return pd.NA
-        # remove tudo que não for dígito (., espaço, etc)
+        # remove tudo que não for dígito (ponto, vírgula, espaço etc.)
         digits = re.sub(r"[^\d]", "", s)
         if digits == "":
             return pd.NA
@@ -645,33 +647,50 @@ def render_rotinas_manuais(dfp: pd.DataFrame, ano_global: str, mes_global: str):
         except Exception:
             return pd.NA
 
-    # Base com resolved + quantidade
-    base = dfp[["resolved", COL_QTD]].copy()
-    base[COL_QTD] = base[COL_QTD].apply(_parse_encomendas).astype("Int64")
+    cols = ["resolved", COL_QTD] + ([id_col] if id_col else [])
+    base = dfp[cols].copy()
 
-    # Filtra quantidade > 0 e resolved presente
-    base = base[base[COL_QTD].notna() & (base[COL_QTD] > 0)]
+    # parsing da quantidade e da data
+    base[COL_QTD] = base[COL_QTD].apply(_parse_encomendas).astype("Int64")
     base["resolved"] = pd.to_datetime(base["resolved"], errors="coerce")
+
+    # mantemos somente linhas com resolved válido e quantidade > 0
     base = base.dropna(subset=["resolved"])
+    base = base[base[COL_QTD].notna() & (base[COL_QTD] > 0)]
+
+    # ---- deduplicação: mantém a ÚLTIMA resolução de cada ticket
+    if id_col:
+        base = base.sort_values(["resolved", id_col])
+        base = base.drop_duplicates(subset=[id_col], keep="last")
 
     if base.empty:
-        st.info("Sem dados de **Rotinas Manuais** (quantidades preenchidas) para os filtros selecionados.")
+        st.info("Sem dados de **Rotinas Manuais** para os filtros selecionados.")
         return
 
-    # Bucket por mês de resolved (BRT já aplicado na carga)
-    base["period"] = base["resolved"].dt.to_period("M")
-    base["period_ts"] = base["period"].dt.to_timestamp()
-    base["ano"] = base["period"].dt.year
-    base["mes"] = base["period"].dt.month
-    base["mes_str"] = base["period_ts"].dt.strftime("%b/%Y")
+    # ---- remoção de outliers (opcional, ajustável)
+    LIMITE_OUTLIER = 100_000
+    outliers = base[base[COL_QTD] > LIMITE_OUTLIER]
+    if not outliers.empty:
+        base = base[base[COL_QTD] <= LIMITE_OUTLIER]
+        st.caption(
+            f"ℹ️ {len(outliers)} registro(s) com quantidade > {LIMITE_OUTLIER:,} descartado(s) como outlier."
+            .replace(",", ".")
+        )
 
-    # Filtros globais (Ano/Mês)
+    # bucket mensal por resolved
+    base["period"]   = base["resolved"].dt.to_period("M")
+    base["period_ts"] = base["period"].dt.to_timestamp()
+    base["ano"]      = base["period"].dt.year
+    base["mes"]      = base["period"].dt.month
+    base["mes_str"]  = base["period_ts"].dt.strftime("%b/%Y")
+
+    # filtros globais
     if ano_global != "Todos":
         base = base[base["ano"] == int(ano_global)]
     if mes_global != "Todos":
         if ano_global != "Todos":
-            alvo_period = pd.Period(f"{int(ano_global)}-{int(mes_global):02d}", freq="M")
-            base = base[base["period"] == alvo_period]
+            alvo = pd.Period(f"{int(ano_global)}-{int(mes_global):02d}", freq="M")
+            base = base[base["period"] == alvo]
         else:
             base = base[base["mes"] == int(mes_global)]
 
@@ -679,7 +698,7 @@ def render_rotinas_manuais(dfp: pd.DataFrame, ano_global: str, mes_global: str):
         st.info("Sem dados de **Rotinas Manuais** para os filtros selecionados.")
         return
 
-    # Agregação mensal (soma de encomendas)
+    # agregação mensal
     agg = (
         base.groupby(["period", "period_ts", "mes_str"], as_index=False)[COL_QTD]
         .sum()
@@ -687,19 +706,19 @@ def render_rotinas_manuais(dfp: pd.DataFrame, ano_global: str, mes_global: str):
         .sort_values("period_ts")
     )
 
-    # Rótulo com separador de milhar (pt-BR)
+    # rótulo formatado
     agg["label"] = agg["Qtd encomendas"].map(lambda x: f"{x:,.0f}".replace(",", "."))
 
     fig = px.bar(agg, x="mes_str", y="Qtd encomendas", text="label", height=420)
     fig.update_traces(textangle=0, textfont_size=14, cliponaxis=False)
 
-    # Eixo Y sem 'k'; formatação com milhar
+    # eixo Y sem 'k' e com milhar
     fig.update_yaxes(title_text="Qtd encomendas", tickformat=",")
     top = int(agg["Qtd encomendas"].max()) if not agg.empty else 0
     if top > 0:
         fig.update_yaxes(range=[0, top * 1.15])
 
-    # Ordenação no caso de um único mês selecionado
+    # garante ordenação consistente quando filtra 1 mês
     if ano_global != "Todos" and mes_global != "Todos":
         fig.update_xaxes(categoryorder="array", categoryarray=agg["mes_str"].tolist())
 
