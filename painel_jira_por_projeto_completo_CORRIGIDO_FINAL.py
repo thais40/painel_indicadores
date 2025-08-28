@@ -609,10 +609,10 @@ def render_app_ne(dfp, ano_global, mes_global):
 def render_rotinas_manuais(dfp: pd.DataFrame, ano_global: str, mes_global: str):
     """
     Rotinas Manuais (TDS) — soma mensal do campo 'Quantidade de encomendas' (customfield_13666).
-    Usa a data de RESOLUÇÃO do ticket ('resolved') para o bucket mensal.
-    - Deduplica tickets: pega só a ÚLTIMA resolução de cada key.
-    - Faz parsing robusto do campo (remove separadores).
-    - Filtra outliers > 100.000 (descartados).
+    - Usa a data de RESOLUÇÃO ('resolved') como bucket.
+    - Garante 1 linha por ticket: pega só o último valor de 'Quantidade de encomendas' por key.
+    - Parsing robusto: remove separadores e mantém só dígitos.
+    - Descarta outliers (>100.000).
     """
     import re
 
@@ -623,8 +623,8 @@ def render_rotinas_manuais(dfp: pd.DataFrame, ano_global: str, mes_global: str):
         st.info("Dados insuficientes para Rotinas Manuais.")
         return
 
-    # parser robusto
-    def _parse_encomendas(v):
+    # ---- parser robusto
+    def _parse(v):
         if pd.isna(v):
             return pd.NA
         s = str(v).strip()
@@ -634,23 +634,25 @@ def render_rotinas_manuais(dfp: pd.DataFrame, ano_global: str, mes_global: str):
         return int(digits) if digits else pd.NA
 
     base = dfp[["key", "resolved", COL_QTD]].copy()
-    base[COL_QTD] = base[COL_QTD].apply(_parse_encomendas).astype("Int64")
+    base[COL_QTD] = base[COL_QTD].apply(_parse).astype("Int64")
     base["resolved"] = pd.to_datetime(base["resolved"], errors="coerce")
     base = base.dropna(subset=["resolved"])
-
-    # mantemos só quantidade > 0
     base = base[base[COL_QTD].notna() & (base[COL_QTD] > 0)]
 
-    # 🔒 deduplicação: último registro por key
-    base = base.sort_values("resolved")
-    base = base.drop_duplicates(subset=["key"], keep="last")
+    if base.empty:
+        st.info("Sem dados de Rotinas Manuais.")
+        return
 
-    # filtra outliers (>100k)
-    LIMITE_OUTLIER = 100_000
-    outliers = base[base[COL_QTD] > LIMITE_OUTLIER]
+    # 🔒 deduplicar por ticket: pega o último resolved
+    base = base.sort_values("resolved")
+    base = base.groupby("key").tail(1)
+
+    # remover outliers (>100k)
+    LIMITE = 100_000
+    outliers = base[base[COL_QTD] > LIMITE]
     if not outliers.empty:
-        base = base[base[COL_QTD] <= LIMITE_OUTLIER]
-        st.caption(f"ℹ️ {len(outliers)} registro(s) com quantidade > {LIMITE_OUTLIER:,} descartado(s).".replace(",", "."))
+        base = base[base[COL_QTD] <= LIMITE]
+        st.caption(f"ℹ️ {len(outliers)} registro(s) descartado(s) por > {LIMITE:,}".replace(",", "."))
 
     # bucket mensal
     base["period"]   = base["resolved"].dt.to_period("M")
@@ -670,9 +672,10 @@ def render_rotinas_manuais(dfp: pd.DataFrame, ano_global: str, mes_global: str):
             base = base[base["mes"] == int(mes_global)]
 
     if base.empty:
-        st.info("Sem dados para Rotinas Manuais no período filtrado.")
+        st.info("Sem dados de Rotinas Manuais no período filtrado.")
         return
 
+    # agrega por mês
     agg = (
         base.groupby(["period", "period_ts", "mes_str"], as_index=False)[COL_QTD]
         .sum()
@@ -680,6 +683,7 @@ def render_rotinas_manuais(dfp: pd.DataFrame, ano_global: str, mes_global: str):
         .sort_values("period_ts")
     )
 
+    # rótulo formatado
     agg["label"] = agg["Qtd encomendas"].map(lambda x: f"{x:,.0f}".replace(",", "."))
 
     fig = px.bar(agg, x="mes_str", y="Qtd encomendas", text="label", height=420)
