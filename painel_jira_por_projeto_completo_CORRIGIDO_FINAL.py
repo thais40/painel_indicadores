@@ -789,3 +789,169 @@ for projeto, tab in zip(PROJETOS, tabs):
             if projeto == "INT":
                 with st.expander("🧭 Onboarding", expanded=False):
                     render_onboarding(dfp, ano_global, mes_global)
+
+# ==========================================================
+# PATCH: ROTINAS MANUAIS — soma correta de "Quantidade de encomendas"
+# ==========================================================
+# Este bloco é autocontido e não altera as demais seções do seu painel.
+
+import pandas as pd
+import plotly.express as px
+import streamlit as st
+
+# --- Campos Jira usados nesta seção ---
+COL_KEY         = "key"                   # id único do ticket (já vem do Jira)
+COL_RESOLVED    = "resolved"              # data/hora de resolução (já vem do Jira)
+COL_QTD_ENCOM   = "customfield_13666"     # Quantidade de encomendas no Jira
+COL_QTD_NORM    = "qtd_encomendas_norm"   # coluna normalizada que vamos criar
+
+
+# ------------------ Utilitários do patch ------------------
+
+def _parse_quantidade_encomendas(v):
+    """
+    Converte o valor cru de 'Quantidade de encomendas' para INTEIRO.
+    Trata:
+      - lista -> usa o último valor não-nulo
+      - string PT-BR com milhar/decimal
+      - float/int
+      - None -> 0
+    """
+    if isinstance(v, list):
+        v = next((x for x in reversed(v) if x is not None and x != ""), None)
+
+    if v is None:
+        return 0
+
+    if isinstance(v, (int, float)):
+        try:
+            return int(round(float(v)))
+        except Exception:
+            return 0
+
+    if isinstance(v, str):
+        s = v.strip()
+        if s == "":
+            return 0
+        s = s.replace(".", "").replace(",", ".")
+        try:
+            return int(round(float(s)))
+        except Exception:
+            return 0
+
+    try:
+        return int(round(float(v)))
+    except Exception:
+        return 0
+
+
+def _dedupe_by_latest(df, key_col=COL_KEY, date_col=COL_RESOLVED):
+    """
+    Mantém APENAS 1 linha por issue (key), escolhendo a com RESOLVED mais recente.
+    Isso evita somas duplicadas quando o Jira retorna o mesmo ticket em múltiplas linhas.
+    """
+    if date_col in df.columns:
+        df = df.sort_values(date_col).drop_duplicates(subset=[key_col], keep="last")
+    else:
+        df = df.drop_duplicates(subset=[key_col], keep="last")
+    return df
+
+
+def prepare_rotinas_columns(dfp: pd.DataFrame) -> pd.DataFrame:
+    """
+    Aplica:
+      - deduplicação por key (último resolved)
+      - normalização de 'Quantidade de encomendas'
+      - colunas de período (ano/mes/mes_str)
+    Retorna um novo DF pronto para agregação.
+    """
+    if dfp is None or dfp.empty:
+        return pd.DataFrame()
+
+    # 1) Deduplica (seguro contra duplicatas do Jira)
+    base = _dedupe_by_latest(dfp.copy(), key_col=COL_KEY, date_col=COL_RESOLVED)
+
+    # 2) Normaliza quantidade
+    if COL_QTD_ENCOM in base.columns:
+        base[COL_QTD_NORM] = base[COL_QTD_ENCOM].apply(_parse_quantidade_encomendas)
+    else:
+        base[COL_QTD_NORM] = 0
+
+    # 3) Garante datas e colunas de período
+    base[COL_RESOLVED] = pd.to_datetime(base[COL_RESOLVED], errors="coerce")
+    base = base.dropna(subset=[COL_RESOLVED]).copy()
+    base["period"]    = base[COL_RESOLVED].dt.to_period("M")
+    base["period_ts"] = base["period"].dt.to_timestamp()
+    base["ano"]       = base[COL_RESOLVED].dt.year
+    base["mes"]       = base[COL_RESOLVED].dt.month
+    base["mes_str"]   = base["period_ts"].dt.strftime("%b/%Y")
+
+    return base
+
+
+def render_rotinas_manuais(dfp: pd.DataFrame, ano_global: str, mes_global: str):
+    """
+    Renderiza a seção 'Rotinas Manuais' no projeto TDS.
+    NÃO mexe em nenhum outro gráfico do painel.
+    """
+    st.markdown("### 🛠️ Rotinas Manuais")
+
+    if dfp is None or dfp.empty:
+        st.info("Sem dados do Jira para Rotinas Manuais.")
+        return
+
+    # Prepara (dedup + parse + período)
+    base = prepare_rotinas_columns(dfp)
+    if base.empty:
+        st.info("Sem dados válidos (após deduplicação/normalização).")
+        return
+
+    # 🔎 DEBUG opcional
+    with st.expander("🔎 Mostrar detalhes (debug)", expanded=False):
+        st.caption("Tickets já deduplicados (1 por key) com a quantidade normalizada.")
+        debug_ano = st.selectbox(
+            "Ano (debug)", ["Todos"] + sorted(base["ano"].dropna().unique().tolist()), index=0
+        )
+        debug_mes = st.selectbox(
+            "Mês (debug)", ["Todos"] + [f"{m:02d}" for m in range(1, 13)], index=0
+        )
+        df_dbg = base.copy()
+        if debug_ano != "Todos":
+            df_dbg = df_dbg[df_dbg["ano"] == int(debug_ano)]
+        if debug_mes != "Todos":
+            df_dbg = df_dbg[df_dbg["mes"] == int(debug_mes)]
+        st.write(
+            df_dbg[[COL_KEY, COL_RESOLVED, COL_QTD_NORM]]
+            .sort_values(COL_RESOLVED)
+            .head(200)
+        )
+
+    # 🎯 Filtro global (ano/mês) — usa exatamente os valores do seletor global
+    plot = base.copy()
+    if ano_global != "Todos":
+        plot = plot[plot["ano"] == int(ano_global)]
+    if mes_global != "Todos":
+        plot = plot[plot["mes"] == int(mes_global)]
+
+    if plot.empty:
+        st.info("Sem dados de Rotinas Manuais para o período selecionado.")
+        return
+
+    # 📊 Agrega por mês com SOMA simples (após dedupe já está 1 issue por key)
+    agg = (
+        plot.groupby(["period", "period_ts", "mes_str"], as_index=False)[COL_QTD_NORM]
+        .sum()
+        .rename(columns={COL_QTD_NORM: "qtd"})
+        .sort_values("period_ts")
+    )
+    agg["label"] = agg["qtd"].map(lambda x: f"{x:,.0f}".replace(",", "."))
+
+    fig = px.bar(agg, x="mes_str", y="qtd", text="label", height=430)
+    fig.update_traces(textangle=0, textfont_size=14, cliponaxis=False)
+    fig.update_yaxes(title_text="Qtd encomendas", tickformat=",")
+    fig.update_layout(margin=dict(l=10, r=10, t=10, b=10))
+
+    # Info de outliers (igual ao que você tinha: mostra quantos descartados se quiser)
+    # Se quiser reativar a remoção de outliers > 100k, basta filtrar antes de agrupar.
+    st.plotly_chart(fig, use_container_width=True)
+# ===================== FIM DO PATCH ======================
