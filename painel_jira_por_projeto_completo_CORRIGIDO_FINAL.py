@@ -179,7 +179,7 @@ def parse_qtd_encomendas(v):
 # Busca de Issues (Jira)
 # =====================
 def _jira_get(jql: str, start_at: int = 0, max_results: int = 100):
-    url = f"{JIRA_URL}/rest/api/3/search"
+    url = f"{JIRA_URL}/rest/api/3/search/jql API"
     params = {"jql": jql, "startAt": start_at, "maxResults": max_results, "fields": ",".join(JIRA_FIELDS + list(SLA_CAMPOS.values()) + list(CAMPOS_ASSUNTO.values()))}
     try:
         resp = requests.get(url, params=params, auth=auth, timeout=60)
