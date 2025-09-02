@@ -1,14 +1,13 @@
 # -*- coding: utf-8 -*-
 # ============================================================
 # Painel de Indicadores — Jira (Nuvemshop)
-# FULL layout com correções solicitadas por @thais.santos
+# FULL v13 — mesmo layout; apenas atualização do endpoint Jira:
+#   /rest/api/3/search  ->  /rest/api/3/search/jql (nextPageToken)
 # ============================================================
 
-import os
-import base64
 from datetime import datetime
 from zoneinfo import ZoneInfo
-
+import base64
 import pandas as pd
 import plotly.express as px
 import requests
@@ -93,8 +92,7 @@ def _render_logo_and_title():
     b64 = st.secrets.get("LOGO_B64")
     if b64:
         try:
-            import base64 as _b
-            logo_bytes = _b.b64decode(b64)
+            logo_bytes = base64.b64decode(b64)
         except Exception:
             logo_bytes = None
     st.markdown('<div style="display:flex;align-items:center;gap:10px;margin:8px 0 20px 0;">', unsafe_allow_html=True)
@@ -174,26 +172,43 @@ def parse_qtd_encomendas(v):
         return int(digits) if digits else 0
     except Exception:
         return 0
+# =====================
+# Busca de Issues (Jira) — NOVO ENDPOINT
+# =====================
+def _jira_get(jql: str, next_page_token: str | None = None, max_results: int = 100):
+    """
+    Usa o endpoint novo (enhanced search):
+      GET /rest/api/3/search/jql
+    Paginação por nextPageToken.
+    """
+    url = f"{JIRA_URL}/rest/api/3/search/jql"
 
-# =====================
-# Busca de Issues (Jira)
-# =====================
-def _jira_get(jql: str, start_at: int = 0, max_results: int = 100):
-    url = f"{JIRA_URL}/rest/api/3/search/"
-    params = {"jql": jql, "startAt": start_at, "maxResults": max_results, "fields": ",".join(JIRA_FIELDS + list(SLA_CAMPOS.values()) + list(CAMPOS_ASSUNTO.values()))}
+    fields_list = JIRA_FIELDS + list(SLA_CAMPOS.values()) + list(CAMPOS_ASSUNTO.values())
+    params = {
+        "jql": jql,
+        "maxResults": max_results,
+        "fields": ",".join(fields_list),
+    }
+    if next_page_token:
+        params["nextPageToken"] = next_page_token
+
     try:
         resp = requests.get(url, params=params, auth=auth, timeout=60)
     except Exception as e:
-        return {"error": str(e), "issues": []}
+        return {"error": str(e), "issues": [], "isLast": True}
+
     if resp.status_code != 200:
-        return {"error": f"{resp.status_code}: {resp.text[:400]}", "issues": []}
+        return {"error": f"{resp.status_code}: {resp.text[:400]}", "issues": [], "isLast": True}
+
     return resp.json()
+
 @st.cache_data(show_spinner="🔄 Buscando dados do Jira...", ttl=60*30)
 def buscar_issues(projeto: str, jql: str, max_pages: int = 200) -> pd.DataFrame:
-    todos, start, page, last_error = [], 0, 0, None
+    todos, page, last_error = [], 0, None
+    next_token = None
     while True:
         page += 1
-        data = _jira_get(jql, start_at=start, max_results=100)
+        data = _jira_get(jql, next_page_token=next_token, max_results=100)
         if "error" in data and data["error"]:
             last_error = data["error"]
             break
@@ -220,8 +235,11 @@ def buscar_issues(projeto: str, jql: str, max_pages: int = 200) -> pd.DataFrame:
                 "sla_raw": f.get(SLA_CAMPOS[projeto], {}),
             }
             todos.append(row)
-        start += len(issues)
-        if start >= data.get("total", 0) or page >= max_pages:
+
+        # paginação nova
+        next_token = data.get("nextPageToken")
+        is_last = bool(data.get("isLast", not bool(next_token)))
+        if is_last or page >= max_pages:
             break
 
     dfp = pd.DataFrame(todos)
@@ -233,7 +251,7 @@ def buscar_issues(projeto: str, jql: str, max_pages: int = 200) -> pd.DataFrame:
     if not dfp.empty:
         # Converte UTC -> BRT ANTES de derivar mês
         for c in ("created", "resolved", "resolutiondate", "updated"):
-            dfp[c] = pd.to_datetime(dfp[c], errors="coerce", utc=True).dt.tz_convert(TZ_BR).dt.tz_localize(None)
+            dfp[c] = pd.to_datetime(dfp[c], errors="coerce", utc=True).dt.tz_convert(ZoneInfo("America/Sao_Paulo")).dt.tz_localize(None)
         # Colunas mensais
         dfp["mes_created"]  = dfp["created"].dt.to_period("M").dt.to_timestamp()
         dfp["mes_resolved"] = dfp["resolved"].dt.to_period("M").dt.to_timestamp()
@@ -314,7 +332,7 @@ def build_monthly_tables(df_all: pd.DataFrame) -> pd.DataFrame:
     monthly["Resolvidos"] = monthly["Resolvidos"].astype(int)
     monthly["Fora"]       = (monthly["Resolvidos"] - monthly["Dentro"]).clip(lower=0)
 
-    # Percentuais com 2 casas (precisão exata solicitada)
+    # Percentuais com 2 casas
     monthly["pct_dentro"] = monthly.apply(
         lambda r: (r["Dentro"]/r["Resolvidos"]*100) if r["Resolvidos"]>0 else 0.0, axis=1
     ).round(2)
@@ -349,44 +367,32 @@ def ensure_assunto_nome(df_proj: pd.DataFrame, projeto: str) -> pd.DataFrame:
 
 def render_criados_resolvidos(dfp: pd.DataFrame, projeto: str, ano_global: str, mes_global: str):
     st.markdown("### 📈 Tickets Criados vs Resolvidos")
-
     dfm = df_monthly_all[df_monthly_all["projeto"] == projeto].copy()
     if dfm.empty:
         st.info("Sem dados para esta visão.")
         return
-
-    # aplica filtros globais
     if ano_global != "Todos":
         dfm = dfm[dfm["ano"] == int(ano_global)]
     if mes_global != "Todos":
         dfm = dfm[dfm["mes"] == int(mes_global)]
-
-    # se ano e mês selecionados, fixa no período exato (evita qualquer vazamento)
     if ano_global != "Todos" and mes_global != "Todos":
         alvo = pd.Period(f"{int(ano_global)}-{int(mes_global):02d}", freq="M")
         dfm = dfm[dfm["period"] == alvo]
-
     dfm = dfm.sort_values("period_ts")
     show = dfm[["mes_str","period_ts","Criados","Resolvidos"]].copy()
     show["Criados"] = show["Criados"].astype(int)
     show["Resolvidos"] = show["Resolvidos"].astype(int)
-
-    fig = px.bar(
-        show, x="mes_str", y=["Criados","Resolvidos"],
-        barmode="group", text_auto=True, height=440
-    )
+    fig = px.bar(show, x="mes_str", y=["Criados","Resolvidos"], barmode="group", text_auto=True, height=440)
     fig.update_traces(textangle=0, textfont_size=14, cliponaxis=False)
     fig.update_xaxes(categoryorder="array", categoryarray=show["mes_str"].tolist())
     st.plotly_chart(fig, use_container_width=True)
 
 def render_sla(dfp: pd.DataFrame, projeto: str, ano_global: str, mes_global: str):
     st.markdown("### ⏱️ SLA")
-
     dfm = df_monthly_all[df_monthly_all["projeto"] == projeto].copy()
     if dfm.empty:
         st.info("Sem dados de SLA.")
         return
-
     if ano_global != "Todos":
         dfm = dfm[dfm["ano"] == int(ano_global)]
     if mes_global != "Todos":
@@ -394,20 +400,13 @@ def render_sla(dfp: pd.DataFrame, projeto: str, ano_global: str, mes_global: str
     if ano_global != "Todos" and mes_global != "Todos":
         alvo = pd.Period(f"{int(ano_global)}-{int(mes_global):02d}", freq="M")
         dfm = dfm[dfm["period"] == alvo]
-
     okr = dfm["pct_dentro"].mean() if not dfm.empty else 0.0
     meta = META_SLA.get(projeto, 98.0)
     titulo = f"OKR: {okr:.2f}% — Meta: {meta:.2f}%".replace(".", ",")
-
     show = dfm[["mes_str","period_ts","pct_dentro","pct_fora"]].sort_values("period_ts")
     show = show.rename(columns={"pct_dentro": "% Dentro SLA", "pct_fora":"% Fora SLA"})
-
-    fig = px.bar(
-        show, x="mes_str", y=["% Dentro SLA","% Fora SLA"], barmode="group",
-        title=titulo,
-        color_discrete_map={"% Dentro SLA":"green","% Fora SLA":"red"},
-        height=440
-    )
+    fig = px.bar(show, x="mes_str", y=["% Dentro SLA","% Fora SLA"], barmode="group",
+                 title=titulo, color_discrete_map={"% Dentro SLA":"green","% Fora SLA":"red"}, height=440)
     fig.update_traces(texttemplate="%{y:.2f}%", textposition="outside", textfont_size=14, cliponaxis=False)
     fig.update_yaxes(ticksuffix="%")
     fig.update_xaxes(categoryorder="array", categoryarray=show["mes_str"].tolist())
@@ -419,12 +418,10 @@ def render_assunto(dfp: pd.DataFrame, projeto: str, ano_global: str, mes_global:
     if df_ass.empty:
         st.info("Sem dados para Assunto Relacionado nos filtros atuais.")
         return
-
     if CAMPOS_ASSUNTO[projeto] == "issuetype":
         df_ass["assunto_nome"] = df_ass["issuetype"].apply(lambda x: safe_get_value(x, "name"))
     else:
         df_ass["assunto_nome"] = df_ass["assunto"].apply(lambda x: safe_get_value(x, "value"))
-
     assunto_count = df_ass["assunto_nome"].value_counts().reset_index()
     assunto_count.columns = ["Assunto","Qtd"]
     st.dataframe(assunto_count, use_container_width=True, hide_index=True)
@@ -435,7 +432,6 @@ def render_area(dfp: pd.DataFrame, ano_global: str, mes_global: str):
     if df_area.empty:
         st.info("Sem dados para Área Solicitante nos filtros atuais.")
         return
-
     df_area["area_nome"] = df_area["area"].apply(lambda x: safe_get_value(x, "value"))
     area_count = df_area["area_nome"].value_counts().reset_index()
     area_count.columns = ["Área","Qtd"]
@@ -447,7 +443,6 @@ def render_encaminhamentos(dfp: pd.DataFrame, ano_global: str, mes_global: str):
     if df_enc.empty:
         st.info("Sem dados para Encaminhamentos nos filtros atuais.")
         return
-
     col1,col2 = st.columns(2)
     with col1:
         count_prod = df_enc["status"].astype(str).str.contains("Produto", case=False, na=False).sum()
@@ -460,48 +455,38 @@ def render_app_ne(dfp: pd.DataFrame, ano_global: str, mes_global: str):
     if dfp.empty:
         st.info("Sem dados para APP NE.")
         return
-
     dfp = ensure_assunto_nome(dfp.copy(), "TDS")
     s_ass = dfp["assunto_nome"].astype(str).str.strip()
     alvo = ASSUNTO_ALVO_APPNE.strip().casefold()
     mask_assunto = s_ass.str.casefold().eq(alvo)
     if not mask_assunto.any():
         mask_assunto = s_ass.str.contains(r"app\s*ne", case=False, regex=True)
-
     df_app = dfp[mask_assunto].copy()
     if df_app.empty:
         st.info(f"Não há chamados para '{ASSUNTO_ALVO_APPNE}'.")
         return
-
     df_app["origem_nome"] = df_app["origem"].apply(lambda x: safe_get_value(x, "value"))
     df_app["origem_cat"]  = df_app["origem_nome"].apply(normaliza_origem)
-
     df_app["mes_dt"] = df_app["mes_created"].dt.to_period("M").dt.to_timestamp()
     df_app = aplicar_filtro_global(df_app, "mes_dt", ano_global, mes_global)
     if df_app.empty:
         st.info("Sem dados para exibir com os filtros selecionados.")
         return
-
     total_app = int(len(df_app))
     contagem  = df_app["origem_cat"].value_counts()
-
     m1,m2,m3 = st.columns(3)
     m1.metric("Total (APP NE/EN)", total_app)
     m2.metric("APP NE", int(contagem.get("APP NE", 0)))
     m3.metric("APP EN", int(contagem.get("APP EN", 0)))
-
     serie = (df_app.groupby(["mes_dt","origem_cat"]).size()
              .reset_index(name="Qtd").sort_values("mes_dt"))
     serie["mes_str"] = serie["mes_dt"].dt.strftime("%b/%Y")
     cats = serie["mes_str"].dropna().unique().tolist()
     serie["mes_str"] = pd.Categorical(serie["mes_str"], categories=cats, ordered=True)
-
-    fig_app = px.bar(
-        serie, x="mes_str", y="Qtd", color="origem_cat", barmode="group",
-        title="APP NE — Volumes por mês e Origem do problema",
-        color_discrete_map={"APP NE":"#2ca02c","APP EN":"#1f77b4","Outros/Não informado":"#9ca3af"},
-        text="Qtd", height=460
-    )
+    fig_app = px.bar(serie, x="mes_str", y="Qtd", color="origem_cat", barmode="group",
+                     title="APP NE — Volumes por mês e Origem do problema",
+                     color_discrete_map={"APP NE":"#2ca02c","APP EN":"#1f77b4","Outros/Não informado":"#9ca3af"},
+                     text="Qtd", height=460)
     fig_app.update_traces(texttemplate="%{text:.0f}", textposition="outside", textfont_size=16, cliponaxis=False)
     max_qtd = int(serie["Qtd"].max()) if not serie.empty else 0
     if max_qtd > 0:
@@ -511,37 +496,26 @@ def render_app_ne(dfp: pd.DataFrame, ano_global: str, mes_global: str):
                           bargap=0.15, margin=dict(t=70, r=20, b=60, l=50))
     st.plotly_chart(fig_app, use_container_width=True)
 
-
 def render_rotinas_manuais(dfp: pd.DataFrame, ano_global: str, mes_global: str):
     st.markdown("### 🛠️ Rotinas Manuais")
     if dfp.empty:
         st.info("Sem dados do Jira para Rotinas Manuais.")
         return
-
     base = dfp[["key","resolved",CAMPO_QTD_ENCOMENDAS,"summary"]].copy()
-
-    # Filtra apenas tickets de rotina pelo título (mantido como combinamos)
-    base = base[base["summary"].astype(str).str.contains(TITULO_ROTINA, case=False, na=False)]
+    base = base[base["summary"].astype(str).str.Contains(TITULO_ROTINA, case=False, na=False)] if hasattr(pd.Series, "Contains") else base[base["summary"].astype(str).str.contains(TITULO_ROTINA, case=False, na=False)]
     if base.empty:
         st.info("Nenhum ticket de Rotinas Manuais encontrado (por título).")
         return
-
     base[CAMPO_QTD_ENCOMENDAS] = base[CAMPO_QTD_ENCOMENDAS].apply(parse_qtd_encomendas).astype("Int64")
     base["resolved"] = pd.to_datetime(base["resolved"], errors="coerce")
     base = base.dropna(subset=["resolved"])
     base = base[base[CAMPO_QTD_ENCOMENDAS].notna() & (base[CAMPO_QTD_ENCOMENDAS] > 0)]
-
-    # Dedup por key (último resolved)
     base = base.sort_values("resolved").drop_duplicates(subset=["key"], keep="last")
-
-    # Agregação por mês de resolved
     base["period"]    = base["resolved"].dt.to_period("M")
     base["period_ts"] = base["period"].dt.to_timestamp()
     base["ano"]       = base["period"].dt.year
     base["mes"]       = base["period"].dt.month
     base["mes_str"]   = base["period_ts"].dt.strftime("%b/%Y")
-
-    # Filtros globais aplicados
     if ano_global != "Todos":
         base = base[base["ano"] == int(ano_global)]
     if mes_global != "Todos":
@@ -550,95 +524,62 @@ def render_rotinas_manuais(dfp: pd.DataFrame, ano_global: str, mes_global: str):
             base = base[base["period"] == alvo]
         else:
             base = base[base["mes"] == int(mes_global)]
-
     if base.empty:
         st.info("Sem dados de Rotinas Manuais no período filtrado.")
         return
-
     agg = (base.groupby(["period","period_ts","mes_str"], as_index=False)[CAMPO_QTD_ENCOMENDAS]
            .sum().rename(columns={CAMPO_QTD_ENCOMENDAS:"Qtd encomendas"}).sort_values("period_ts"))
     agg["label"] = agg["Qtd encomendas"].map(lambda x: f"{x:,.0f}".replace(",", "."))
-
     fig = px.bar(agg, x="mes_str", y="Qtd encomendas", text="label", height=420)
     fig.update_traces(textangle=0, textfont_size=14, cliponaxis=False)
     fig.update_yaxes(title_text="Qtd encomendas", tickformat=",")
     st.plotly_chart(fig, use_container_width=True)
-
     with st.expander("🔎 Tickets usados (amostra)"):
         st.dataframe(base[["key","summary","resolved",CAMPO_QTD_ENCOMENDAS]]
                      .sort_values("resolved"), use_container_width=True, hide_index=True)
-
 
 def render_onboarding(dfp: pd.DataFrame, ano_global: str, mes_global: str):
     st.markdown("### 🧭 Onboarding")
     if dfp.empty:
         st.info("Sem dados de Onboarding.")
         return
-
     ASSUNTO_CLIENTE_NOVO = "Nova integração - Cliente novo"
-    ASSUNTOS_ERROS = [
-        "Erro durante Onboarding - Frete",
-        "Erro durante Onboarding - Pedido",
-        "Erro durante Onboarding - Rastreio",
-        "Erro durante Onboarding - Teste",
-    ]
-    STATUS_PENDENCIAS = [
-        "Aguardando informações adicionais",
-        "Em andamento",
-        "Aguardando pendências da Triagem",
-        "Aguardando validação do cliente",
-        "Aguardando Comercial",
-    ]
-
+    ASSUNTOS_ERROS = ["Erro durante Onboarding - Frete","Erro durante Onboarding - Pedido","Erro durante Onboarding - Rastreio","Erro durante Onboarding - Teste"]
+    STATUS_PENDENCIAS = ["Aguardando informações adicionais","Em andamento","Aguardando pendências da Triagem","Aguardando validação do cliente","Aguardando Comercial"]
     dfp = ensure_assunto_nome(dfp.copy(), "INT")
     df_onb = aplicar_filtro_global(dfp.copy(), "mes_created", ano_global, mes_global)
-
     total_clientes_novos = int((df_onb["assunto_nome"] == ASSUNTO_CLIENTE_NOVO).sum())
     df_erros = df_onb[df_onb["assunto_nome"].isin(ASSUNTOS_ERROS)].copy()
     pend_mask = df_onb["status"].isin(STATUS_PENDENCIAS)
-
     tickets_pendencias = int(pend_mask.sum())
     possiveis_clientes = int(pend_mask.sum())
-
     c1,c2,c3,c4 = st.columns(4)
     c1.metric("Tickets clientes novos", total_clientes_novos)
     c2.metric("Erros onboarding", int(len(df_erros)))
     c3.metric("Tickets com pendências", tickets_pendencias)
     c4.metric("Possíveis clientes", possiveis_clientes)
-
     st.markdown("---")
-
     if not df_erros.empty:
-        cont_erros = (df_erros["assunto_nome"].value_counts()
-                      .reindex(ASSUNTOS_ERROS, fill_value=0).reset_index())
+        cont_erros = (df_erros["assunto_nome"].value_counts().reindex(ASSUNTOS_ERROS, fill_value=0).reset_index())
         cont_erros.columns = ["Categoria","Qtd"]
-
-        fig_onb = px.bar(cont_erros, x="Qtd", y="Categoria", orientation="h",
-                         text="Qtd", title="Erros Onboarding", height=420)
-        fig_onb.update_traces(texttemplate="%{text:.0f}", textposition="outside",
-                              textfont_size=16, cliponaxis=False)
+        fig_onb = px.bar(cont_erros, x="Qtd", y="Categoria", orientation="h", text="Qtd", title="Erros Onboarding", height=420)
+        fig_onb.update_traces(texttemplate="%{text:.0f}", textposition="outside", textfont_size=16, cliponaxis=False)
         max_q = int(cont_erros["Qtd"].max()) if not cont_erros.empty else 0
         if max_q > 0:
             fig_onb.update_xaxes(range=[0, max_q*1.25])
         fig_onb.update_layout(margin=dict(t=50, r=20, b=30, l=10), bargap=0.25)
         st.plotly_chart(fig_onb, use_container_width=True)
-
     df_cli = df_onb[df_onb["assunto_nome"] == ASSUNTO_CLIENTE_NOVO].copy()
     if not df_cli.empty:
-        serie_cli = (df_cli.groupby(df_cli["mes_created"].dt.to_period("M"))
-                          .size().reset_index(name="ClientesNovos"))
+        serie_cli = (df_cli.groupby(df_cli["mes_created"].dt.to_period("M")).size().reset_index(name="ClientesNovos"))
         serie_cli["mes_dt"] = serie_cli["mes_created"].dt.to_timestamp()
         serie_cli = serie_cli.sort_values("mes_dt")
         serie_cli["mes_str"] = serie_cli["mes_dt"].dt.strftime("%Y %b")
         serie_cli["MoM"] = serie_cli["ClientesNovos"].pct_change() * 100
-
-        fig_cli = px.bar(serie_cli, x="mes_str", y="ClientesNovos",
-                         title="Tickets - Cliente novo", text="ClientesNovos", height=380)
-        fig_cli.update_traces(texttemplate="%{text}", textposition="outside",
-                              textfont_size=14, cliponaxis=False)
+        fig_cli = px.bar(serie_cli, x="mes_str", y="ClientesNovos", title="Tickets - Cliente novo", text="ClientesNovos", height=380)
+        fig_cli.update_traces(texttemplate="%{text}", textposition="outside", textfont_size=14, cliponaxis=False)
         y_top = (serie_cli["ClientesNovos"].max() * 2.2) if len(serie_cli) else 10
         fig_cli.update_yaxes(range=[0, y_top])
-
         for _, r in serie_cli.iterrows():
             x = r["mes_str"]; yb = float(r["ClientesNovos"])
             if pd.notna(r["MoM"]):
@@ -647,26 +588,18 @@ def render_onboarding(dfp: pd.DataFrame, ano_global: str, mes_global: str):
                     up = r["MoM"] >= 0
                     arrow = "▲" if up else "▼"
                     color = "#2563eb" if up else "#dc2626"
-                    fig_cli.add_annotation(x=x, y=yb + (y_top*0.20),
-                                           text=f"{arrow} {mom_abs:.0f}%",
-                                           showarrow=False, font=dict(size=12, color=color))
-        fig_cli.update_layout(margin=dict(t=50, r=20, b=35, l=40),
-                              bargap=0.18, xaxis_title=None, yaxis_title="ClientesNovos")
+                    fig_cli.add_annotation(x=x, y=yb + (y_top*0.20), text=f"{arrow} {mom_abs:.0f}%", showarrow=False, font=dict(size=12, color=color))
+        fig_cli.update_layout(margin=dict(t=50, r=20, b=35, l=40), bargap=0.18, xaxis_title=None, yaxis_title="ClientesNovos")
         st.plotly_chart(fig_cli, use_container_width=True)
-
     st.markdown("---")
     st.subheader("💸 Dinheiro perdido (simulação)")
     c_left,c_right = st.columns([1,1])
     with c_left:
         st.number_input("Clientes novos (simulação)", value=possiveis_clientes, disabled=True, key="sim_clientes_onb")
     with c_right:
-        receita_cliente = st.slider("Cenário Receita por Cliente (R$)",
-                                    min_value=0, max_value=100000, step=500, value=20000,
-                                    key="sim_receita_onb")
+        receita_cliente = st.slider("Cenário Receita por Cliente (R$)", min_value=0, max_value=100000, step=500, value=20000, key="sim_receita_onb")
     dinheiro_perdido = float(possiveis_clientes) * float(receita_cliente)
-    st.markdown(f"### **R$ {dinheiro_perdido:,.2f}**",
-                help="Cálculo: Clientes novos (simulação) × Cenário Receita por Cliente")
-
+    st.markdown(f"### **R$ {dinheiro_perdido:,.2f}**", help="Cálculo: Clientes novos (simulação) × Cenário Receita por Cliente")
 
 # ======================
 # Abas por Projeto/Visão
@@ -676,7 +609,6 @@ tabs = st.tabs([TITULOS[p] for p in PROJETOS])
 for projeto, tab in zip(PROJETOS, tabs):
     with tab:
         st.subheader(f"📂 Projeto: {TITULOS[projeto]}")
-
         if projeto == "TDS":
             dfp = df_tds.copy()
             opcoes = ["Geral","Criados vs Resolvidos","SLA","Assunto Relacionado","Área Solicitante","APP NE"]
@@ -689,68 +621,48 @@ for projeto, tab in zip(PROJETOS, tabs):
         else:
             dfp = df_intel.copy()
             opcoes = ["Geral","Criados vs Resolvidos","SLA","Assunto Relacionado"]
-
         if dfp.empty:
             st.info("Sem dados carregados para este projeto.")
             continue
-
         dfp = ensure_assunto_nome(dfp, projeto)
         visao = st.selectbox("Visão", opcoes, key=f"visao_{projeto}")
-
-        # 1) Criados vs Resolvidos
         if visao == "Criados vs Resolvidos":
             render_criados_resolvidos(dfp, projeto, ano_global, mes_global)
-
-        # 2) SLA
         elif visao == "SLA":
             render_sla(dfp, projeto, ano_global, mes_global)
-
-        # 3) Assunto
         elif visao == "Assunto Relacionado":
             render_assunto(dfp, projeto, ano_global, mes_global)
-
-        # 4) Área
         elif visao == "Área Solicitante":
             if projeto == "INTEL":
                 st.info("Este projeto não possui Área Solicitante.")
             else:
                 render_area(dfp, ano_global, mes_global)
-
-        # 5) Onboarding
         elif visao == "Onboarding":
             if projeto == "INT":
                 render_onboarding(dfp, ano_global, mes_global)
             else:
                 st.info("Onboarding disponível somente para Integrations.")
-
-        # 6) APP NE
         elif visao == "APP NE":
             if projeto == "TDS":
                 render_app_ne(dfp, ano_global, mes_global)
             else:
                 st.info("APP NE disponível somente para Tech Support.")
-
-        # Geral — ordem fixa
         else:
             render_criados_resolvidos(dfp, projeto, ano_global, mes_global)
             render_sla(dfp, projeto, ano_global, mes_global)
             render_assunto(dfp, projeto, ano_global, mes_global)
-
             if projeto != "INTEL":
                 render_area(dfp, ano_global, mes_global)
-
             if projeto in ("TDS","INT"):
                 render_encaminhamentos(dfp, ano_global, mes_global)
-
             if projeto == "TDS":
                 render_app_ne(dfp, ano_global, mes_global)
                 with st.expander("🛠️ Rotinas Manuais", expanded=False):
                     render_rotinas_manuais(dfp, ano_global, mes_global)
-
             if projeto == "INT":
                 with st.expander("🧭 Onboarding", expanded=False):
                     render_onboarding(dfp, ano_global, mes_global)
 
 # Rodapé
 st.markdown("---")
-st.caption("Feito com 💙 — layout completo preservado, com correções pedidas (OKR/Meta, filtros, APP NE, Rotinas Manuais, Onboarding).")
+st.caption("Feito com 💙 — layout completo preservado, com endpoint Jira /search/jql e paginação por nextPageToken.")
