@@ -260,12 +260,36 @@ def buscar_issues(projeto: str, jql: str, max_pages: int = 200) -> pd.DataFrame:
 # ======================
 # Carrega todos projetos
 # ======================
-DATA_INICIO = "2024-02-01"  # corte mínimo de datas (inclusive)
+DATA_INICIO = "2024-01-01"  # corte mínimo (inclusive)
 
-JQL_TDS   = f'project = "TDS" AND created >= "{DATA_INICIO}" ORDER BY created ASC'
-JQL_INT   = f'project = "INT" AND created >= "{DATA_INICIO}" ORDER BY created ASC'
-JQL_TINE  = f'project = "TINE" AND created >= "{DATA_INICIO}" ORDER BY created ASC'
-JQL_INTEL = f'project = "INTEL" AND created >= "{DATA_INICIO}" ORDER BY created ASC'
+def jql_projeto(project_key: str, ano_selecionado: str, mes_selecionado: str) -> str:
+    """
+    Monta o JQL respeitando:
+      - sempre a data mínima (DATA_INICIO)
+      - se 'mes_selecionado' for 'Todos' => sem data final (traz até hoje)
+      - se um mês for escolhido => limita até o 1º dia do mês seguinte (created < next_month)
+    """
+    # sempre entre aspas para evitar o erro do 'INT' reservado
+    base = f'project = "{project_key}" AND created >= "{DATA_INICIO}"'
+
+    if mes_selecionado and mes_selecionado != "Todos":
+        # calcula o primeiro dia do mês seguinte
+        from datetime import date
+        m = int(mes_selecionado)
+        a = int(ano_selecionado)
+        if m == 12:
+            next_month_first = date(a + 1, 1, 1)
+        else:
+            next_month_first = date(a, m + 1, 1)
+        base += f' AND created < "{next_month_first:%Y-%m-%d}"'
+
+    return base + " ORDER BY created ASC"
+
+# Exemplo de uso (mantém seu fluxo):
+JQL_TDS   = jql_projeto("TDS",   ano_global, mes_global)
+JQL_INT   = jql_projeto("INT",   ano_global, mes_global)
+JQL_TINE  = jql_projeto("TINE",  ano_global, mes_global)
+JQL_INTEL = jql_projeto("INTEL", ano_global, mes_global)
 
 with st.spinner("Carregando TDS..."):
     df_tds = buscar_issues("TDS", JQL_TDS)
