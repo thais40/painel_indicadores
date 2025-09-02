@@ -1,8 +1,10 @@
 # -*- coding: utf-8 -*-
 # ============================================================
 # Painel de Indicadores — Jira (Nuvemshop)
+# FULL layout com correções solicitadas por @thais.santos
 # ============================================================
 
+import os
 import base64
 from datetime import datetime
 from zoneinfo import ZoneInfo
@@ -13,68 +15,103 @@ import requests
 import streamlit as st
 from requests.auth import HTTPBasicAuth
 
+# =====================
+# Configuração de página
+# =====================
+st.set_page_config(page_title="Painel de Indicadores — Jira", page_icon="📊", layout="wide")
 
-# --------------------------
-# Aparência / Layout
-# --------------------------
-st.set_page_config(layout="wide")
+# =====================
+# Secrets / Credenciais
+# =====================
+JIRA_URL = "https://tiendanube.atlassian.net"
+EMAIL = st.secrets.get("EMAIL", "")
+TOKEN = st.secrets.get("TOKEN", "")
 
+if not EMAIL or not TOKEN:
+    st.error("⚠️ Configure EMAIL e TOKEN em st.secrets para acessar o Jira.")
+    st.stop()
+
+auth = HTTPBasicAuth(EMAIL, TOKEN)
+
+# =========================
+# Constantes / Campos Jira
+# =========================
+SLA_CAMPOS = {
+    "TDS": "customfield_13744",
+    "TINE": "customfield_13744",
+    "INT": "customfield_13686",
+    "INTEL": "customfield_13686",
+}
+
+CAMPOS_ASSUNTO = {
+    "TDS": "customfield_13712",
+    "INT": "customfield_13643",
+    "TINE": "customfield_13699",
+    "INTEL": "issuetype",
+}
+
+CAMPO_AREA            = "customfield_13719"
+CAMPO_N3              = "customfield_13659"
+CAMPO_ORIGEM          = "customfield_13628"   # Origem do problema (APP NE)
+CAMPO_QTD_ENCOMENDAS  = "customfield_13666"   # Rotinas Manuais (TDS)
+
+META_SLA = {"TDS": 98.00, "INT": 96.00, "TINE": 96.00, "INTEL": 95.00}
+
+TITULO_ROTINA = "Volumetria / Tabela de erro CTE"
+ASSUNTO_ALVO_APPNE = "Problemas no App NE - App EN"
+
+PROJETOS = ["TDS", "INT", "TINE", "INTEL"]
+TITULOS  = {"TDS": "Tech Support", "INT": "Integrations", "TINE": "IT Support NE", "INTEL": "Intelligence"}
+
+JIRA_FIELDS = [
+    "key", "summary", "project", "issuetype", "status",
+    "created", "updated", "resolutiondate", "resolved",
+    CAMPO_AREA, CAMPO_N3, CAMPO_ORIGEM, CAMPO_QTD_ENCOMENDAS
+]
+
+# ============
+# Aparência UI
+# ============
 st.markdown(
     """
 <style>
 html, body, [class*="css"] { font-family: Inter, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial !important; }
-:root { --ns-muted:#6B7280; }
-h1 { letter-spacing:.2px; }
 .stButton > button{ border-radius:10px; border:1px solid #e6e8ee; box-shadow:0 1px 2px rgba(16,24,40,.04); }
 .update-row{ display:inline-flex; align-items:center; gap:12px; margin-bottom:.5rem; }
-.update-caption{ color:var(--ns-muted); font-size:.85rem; }
+.update-caption{ color:#6B7280; font-size:.85rem; }
 .section-spacer{ height:10px; }
 </style>
 """,
     unsafe_allow_html=True,
 )
 
-
+# ============
+# Cabeçalho UI
+# ============
 def _render_logo_and_title():
-    """Mostra logo (se LOGO_B64 em st.secrets) e subtítulo 'Painel interno'."""
     logo_bytes = None
     b64 = st.secrets.get("LOGO_B64")
     if b64:
         try:
-            logo_bytes = base64.b64decode(b64)
+            import base64 as _b
+            logo_bytes = _b.b64decode(b64)
         except Exception:
             logo_bytes = None
-    st.markdown(
-        '<div style="display:flex;align-items:center;gap:10px;margin:8px 0 20px 0;">',
-        unsafe_allow_html=True,
-    )
+    st.markdown('<div style="display:flex;align-items:center;gap:10px;margin:8px 0 20px 0;">', unsafe_allow_html=True)
     if logo_bytes:
         st.image(logo_bytes, width=300)
-        st.markdown(
-            '<span style="color:#111827;font-weight:600;font-size:15px;">Painel interno</span>',
-            unsafe_allow_html=True,
-        )
+        st.markdown('<span style="color:#111827;font-weight:600;font-size:15px;">Painel interno</span>', unsafe_allow_html=True)
     else:
-        st.markdown(
-            '<span style="color:#111827;font-weight:600;font-size:15px;">Nuvemshop · Painel interno</span>',
-            unsafe_allow_html=True,
-        )
+        st.markdown('<span style="color:#111827;font-weight:600;font-size:15px;">Nuvemshop · Painel interno</span>', unsafe_allow_html=True)
     st.markdown("</div>", unsafe_allow_html=True)
-
 
 _render_logo_and_title()
 st.title("📊 Painel de Indicadores — Jira")
 
-
-# --------------------------
-# Atualização / Horário BRT
-# --------------------------
+# Atualização / BRT
 TZ_BR = ZoneInfo("America/Sao_Paulo")
-
-
 def now_br_str():
     return datetime.now(TZ_BR).strftime("%d/%m/%Y %H:%M:%S")
-
 
 if "last_update" not in st.session_state:
     st.session_state["last_update"] = now_br_str()
@@ -84,84 +121,17 @@ if st.button("🔄 Atualizar dados"):
     st.cache_data.clear()
     st.session_state["last_update"] = now_br_str()
     st.rerun()
-st.markdown(
-    f'<span class="update-caption">🕒 Última atualização: {st.session_state["last_update"]} (BRT)</span>',
-    unsafe_allow_html=True,
-)
+st.markdown(f'<span class="update-caption">🕒 Última atualização: {st.session_state["last_update"]} (BRT)</span>', unsafe_allow_html=True)
 st.markdown("</div>", unsafe_allow_html=True)
 
-
-# --------------------------
-# Parâmetros / Campos Jira
-# --------------------------
-JIRA_URL = "https://tiendanube.atlassian.net"
-EMAIL = st.secrets["EMAIL"]
-TOKEN = st.secrets["TOKEN"]
-auth = HTTPBasicAuth(EMAIL, TOKEN)
-
-PROJETOS = ["TDS", "INT", "TINE", "INTEL"]
-TITULOS = {"TDS": "Tech Support", "INT": "Integrations", "TINE": "IT Support NE", "INTEL": "Intelligence"}
-
-# Campo SLA (JSM) por projeto
-SLA_CAMPOS = {
-    "TDS": "customfield_13744",  # SLA resolução (SUP)
-    "TINE": "customfield_13744",
-    "INT": "customfield_13686",
-    "INTEL": "customfield_13686",
-}
-
-# Campo "Assunto relacionado" (ou issuetype p/ INTEL)
-CAMPOS_ASSUNTO = {
-    "TDS": "customfield_13712",
-    "INT": "customfield_13643",
-    "TINE": "customfield_13699",
-    "INTEL": "issuetype",
-}
-
-CAMPO_AREA = "customfield_13719"
-CAMPO_N3 = "customfield_13659"
-CAMPO_ORIGEM = "customfield_13628"       # TDS/TINE
-CAMPO_QTD_ENCOMENDAS = "customfield_13666"  # Quantidade de encomendas (Rotinas Manuais)
-
-# Metas por projeto (corrigidas)
-META_SLA = {"TDS": 98.0, "INT": 96.0, "TINE": 96.0, "INTEL": 95.0}
-
-# APP NE
-ASSUNTO_ALVO_APPNE = "Problemas no App NE - App EN"
-
-
-# --------------------------
-# Helpers
-# --------------------------
+# =================
+# Helpers de dados
+# =================
 def safe_get_value(x, key="value", fallback="—"):
     if isinstance(x, dict):
         return x.get(key, fallback)
     return x if x is not None else fallback
 
-
-def ensure_assunto_nome(df_proj: pd.DataFrame, projeto: str) -> pd.DataFrame:
-    """Garante a coluna 'assunto_nome' para todos os projetos."""
-    if "assunto_nome" not in df_proj.columns:
-        if CAMPOS_ASSUNTO[projeto] == "issuetype":
-            df_proj["assunto_nome"] = df_proj["issuetype"].apply(lambda x: safe_get_value(x, "name"))
-        else:
-            df_proj["assunto_nome"] = df_proj["assunto"].apply(lambda x: safe_get_value(x, "value"))
-    return df_proj
-
-
-def normaliza_origem(s: str) -> str:
-    if s is None or str(s).strip() == "" or str(s).lower() in ("nan", "none"):
-        return "Outros/Não informado"
-    t = str(s).strip().lower().replace("-", " ").replace("_", " ")
-    t = " ".join(t.split())
-    if "app" in t and "ne" in t:
-        return "APP NE"
-    if "app" in t and ("en" in t or "eng" in t):
-        return "APP EN"
-    return "Outros/Não informado"
-
-
-# SLA fiel ao Jira: usa breached ou elapsed <= goal
 def dentro_sla_from_raw(sla_raw: dict) -> bool | None:
     try:
         if not sla_raw or not isinstance(sla_raw, dict):
@@ -179,7 +149,188 @@ def dentro_sla_from_raw(sla_raw: dict) -> bool | None:
     except Exception:
         return None
 
+def normaliza_origem(s: str) -> str:
+    if s is None or str(s).strip() == "" or str(s).lower() in ("nan", "none"):
+        return "Outros/Não informado"
+    t = str(s).strip().lower().replace("-", " ").replace("_", " ")
+    t = " ".join(t.split())
+    if "app" in t and "ne" in t:
+        return "APP NE"
+    if "app" in t and ("en" in t or "eng" in t):
+        return "APP EN"
+    return "Outros/Não informado"
 
+def parse_qtd_encomendas(v):
+    import re
+    if isinstance(v, list):
+        v = next((x for x in reversed(v) if x not in (None, "")), None)
+    if v is None:
+        return 0
+    s = str(v).strip()
+    if not s:
+        return 0
+    digits = re.sub(r"[^\d]", "", s)
+    try:
+        return int(digits) if digits else 0
+    except Exception:
+        return 0
+
+# =====================
+# Busca de Issues (Jira)
+# =====================
+def _jira_get(jql: str, start_at: int = 0, max_results: int = 100):
+    url = f"{JIRA_URL}/rest/api/3/search"
+    params = {"jql": jql, "startAt": start_at, "maxResults": max_results, "fields": ",".join(JIRA_FIELDS + list(SLA_CAMPOS.values()) + list(CAMPOS_ASSUNTO.values()))}
+    try:
+        resp = requests.get(url, params=params, auth=auth, timeout=60)
+    except Exception as e:
+        return {"error": str(e), "issues": []}
+    if resp.status_code != 200:
+        return {"error": f"{resp.status_code}: {resp.text[:400]}", "issues": []}
+    return resp.json()
+@st.cache_data(show_spinner="🔄 Buscando dados do Jira...", ttl=60*30)
+def buscar_issues(projeto: str, jql: str, max_pages: int = 200) -> pd.DataFrame:
+    todos, start, page, last_error = [], 0, 0, None
+    while True:
+        page += 1
+        data = _jira_get(jql, start_at=start, max_results=100)
+        if "error" in data and data["error"]:
+            last_error = data["error"]
+            break
+        issues = data.get("issues", [])
+        if not issues:
+            break
+        for it in issues:
+            f = it.get("fields", {})
+            row = {
+                "projeto": projeto,
+                "key": it.get("key"),
+                "summary": f.get("summary"),
+                "created": f.get("created"),
+                "updated": f.get("updated"),
+                "resolutiondate": f.get("resolutiondate"),
+                "resolved": f.get("resolved") or f.get("resolutiondate"),
+                "status": safe_get_value(f.get("status"), "name"),
+                "issuetype": f.get("issuetype"),
+                "assunto": f.get(CAMPOS_ASSUNTO[projeto]),
+                "area": f.get(CAMPO_AREA),
+                "n3": f.get(CAMPO_N3),
+                "origem": f.get(CAMPO_ORIGEM),
+                CAMPO_QTD_ENCOMENDAS: f.get(CAMPO_QTD_ENCOMENDAS),
+                "sla_raw": f.get(SLA_CAMPOS[projeto], {}),
+            }
+            todos.append(row)
+        start += len(issues)
+        if start >= data.get("total", 0) or page >= max_pages:
+            break
+
+    dfp = pd.DataFrame(todos)
+
+    if last_error and dfp.empty:
+        st.warning(f"⚠️ Erro ao buscar Jira ({projeto}): {last_error}")
+        return dfp
+
+    if not dfp.empty:
+        # Converte UTC -> BRT ANTES de derivar mês
+        for c in ("created", "resolved", "resolutiondate", "updated"):
+            dfp[c] = pd.to_datetime(dfp[c], errors="coerce", utc=True).dt.tz_convert(TZ_BR).dt.tz_localize(None)
+        # Colunas mensais
+        dfp["mes_created"]  = dfp["created"].dt.to_period("M").dt.to_timestamp()
+        dfp["mes_resolved"] = dfp["resolved"].dt.to_period("M").dt.to_timestamp()
+    return dfp
+
+# ======================
+# Carrega todos projetos
+# ======================
+JQL_TDS   = 'project = TDS ORDER BY created ASC'
+JQL_INT   = 'project = INT ORDER BY created ASC'
+JQL_TINE  = 'project = TINE ORDER BY created ASC'
+JQL_INTEL = 'project = INTEL ORDER BY created ASC'
+
+with st.spinner("Carregando TDS..."):
+    df_tds = buscar_issues("TDS", JQL_TDS)
+with st.spinner("Carregando INT..."):
+    df_int = buscar_issues("INT", JQL_INT)
+with st.spinner("Carregando TINE..."):
+    df_tine = buscar_issues("TINE", JQL_TINE)
+with st.spinner("Carregando INTEL..."):
+    df_intel = buscar_issues("INTEL", JQL_INTEL)
+
+# ===================
+# Filtros Globais UI
+# ===================
+st.markdown("### 🔍 Filtros Globais")
+if all(d.empty for d in [df_tds, df_int, df_tine, df_intel]):
+    st.warning("Sem dados do Jira em nenhum projeto.")
+    st.stop()
+
+anos_glob = sorted(pd.Series(
+    pd.concat([d["mes_created"] for d in [df_tds, df_int, df_tine, df_intel] if not d.empty])
+      .dt.year.dropna().unique()
+).astype(int).tolist())
+
+meses_glob = list(range(1,13))
+
+c1, c2 = st.columns(2)
+with c1:
+    ano_global = st.selectbox("Ano (global)", ["Todos"] + [str(a) for a in anos_glob], key="ano_global")
+with c2:
+    mes_global = st.selectbox("Mês (global)", ["Todos"] + [f"{m:02d}" for m in meses_glob], key="mes_global")
+
+st.markdown('<div class="section-spacer"></div>', unsafe_allow_html=True)
+
+# =====================
+# Pré-agregados mensais
+# =====================
+@st.cache_data(show_spinner=False)
+def build_monthly_tables(df_all: pd.DataFrame) -> pd.DataFrame:
+    if df_all.empty:
+        return df_all
+    base = df_all.copy()
+    base["per_created"]  = base["created"].dt.to_period("M")
+    base["per_resolved"] = base["resolved"].dt.to_period("M")
+
+    # Criados por mês (created)
+    created = (base.groupby(["projeto","per_created"])
+                    .size().reset_index(name="Criados")
+                    .rename(columns={"per_created":"period"}))
+
+    # Resolvidos por mês (resolved) + SLA (JSM)
+    res = base[base["resolved"].notna()].copy()
+    res["dentro_sla"] = res["sla_raw"].apply(dentro_sla_from_raw).fillna(False)
+    resolved = (res.groupby(["projeto","per_resolved"])
+                  .agg(Resolvidos=("key","count"), Dentro=("dentro_sla","sum"))
+                  .reset_index()
+                  .rename(columns={"per_resolved":"period"}))
+
+    monthly = pd.merge(created, resolved, how="outer", on=["projeto","period"]).fillna(0)
+    monthly["period"]   = monthly["period"].astype("period[M]")
+    monthly["period_ts"]= monthly["period"].dt.to_timestamp()
+    monthly["ano"]      = monthly["period"].dt.year.astype(int)
+    monthly["mes"]      = monthly["period"].dt.month.astype(int)
+    monthly["mes_str"]  = monthly["period_ts"].dt.strftime("%b/%Y")
+
+    monthly["Dentro"]     = monthly["Dentro"].astype(int)
+    monthly["Resolvidos"] = monthly["Resolvidos"].astype(int)
+    monthly["Fora"]       = (monthly["Resolvidos"] - monthly["Dentro"]).clip(lower=0)
+
+    # Percentuais com 2 casas (precisão exata solicitada)
+    monthly["pct_dentro"] = monthly.apply(
+        lambda r: (r["Dentro"]/r["Resolvidos"]*100) if r["Resolvidos"]>0 else 0.0, axis=1
+    ).round(2)
+    monthly["pct_fora"] = monthly.apply(
+        lambda r: (r["Fora"]/r["Resolvidos"]*100) if r["Resolvidos"]>0 else 0.0, axis=1
+    ).round(2)
+
+    return monthly.sort_values(["projeto","period"])
+
+df_monthly_all = pd.concat(
+    [build_monthly_tables(d) for d in [df_tds, df_int, df_tine, df_intel] if not d.empty],
+    ignore_index=True
+) if not all(d.empty for d in [df_tds, df_int, df_tine, df_intel]) else pd.DataFrame()
+# ===================
+# Renderizadores base
+# ===================
 def aplicar_filtro_global(df_in: pd.DataFrame, col_dt: str, ano: str, mes: str) -> pd.DataFrame:
     out = df_in.copy()
     if ano != "Todos":
@@ -188,260 +339,241 @@ def aplicar_filtro_global(df_in: pd.DataFrame, col_dt: str, ano: str, mes: str) 
         out = out[out[col_dt].dt.month == int(mes)]
     return out
 
+def ensure_assunto_nome(df_proj: pd.DataFrame, projeto: str) -> pd.DataFrame:
+    if "assunto_nome" not in df_proj.columns:
+        if CAMPOS_ASSUNTO[projeto] == "issuetype":
+            df_proj["assunto_nome"] = df_proj["issuetype"].apply(lambda x: safe_get_value(x, "name"))
+        else:
+            df_proj["assunto_nome"] = df_proj["assunto"].apply(lambda x: safe_get_value(x, "value"))
+    return df_proj
 
-# --------------------------
-# Busca de Issues (Jira)
-# --------------------------
-@st.cache_data(show_spinner="🔄 Buscando dados do Jira...")
-def buscar_issues() -> pd.DataFrame:
-    todos = []
-    for projeto in PROJETOS:
-        start = 0
-        while True:
-            jql = f'project="{projeto}" AND created >= "2024-01-01" ORDER BY created ASC'
-            params = {
-                "jql": jql,
-                "startAt": start,
-                "maxResults": 100,
-                "fields": (
-                    "created,resolutiondate,status,issuetype,"
-                    f"{SLA_CAMPOS[projeto]},{CAMPOS_ASSUNTO[projeto]},"
-                    f"{CAMPO_AREA},{CAMPO_N3},{CAMPO_ORIGEM},{CAMPO_QTD_ENCOMENDAS}"
-                ),
-            }
-            resp = requests.get(f"{JIRA_URL}/rest/api/3/search", auth=auth, params=params)
-            if resp.status_code != 200:
-                break
-            issues = resp.json().get("issues", [])
-            if not issues:
-                break
-
-            for it in issues:
-                f = it.get("fields", {})
-                todos.append(
-                    {
-                        "projeto": projeto,
-                        "key": it.get("key"),
-                        "created": f.get("created"),
-                        "resolutiondate": f.get("resolutiondate"),
-                        "status": safe_get_value(f.get("status"), "name"),
-                        "sla_raw": f.get(SLA_CAMPOS[projeto], {}),
-                        "issuetype": f.get("issuetype"),
-                        "assunto": f.get(CAMPOS_ASSUNTO[projeto]),
-                        "area": f.get(CAMPO_AREA),
-                        "n3": f.get(CAMPO_N3),
-                        "origem": f.get(CAMPO_ORIGEM),
-                        CAMPO_QTD_ENCOMENDAS: f.get(CAMPO_QTD_ENCOMENDAS),
-                    }
-                )
-            start += 100
-
-    df_all = pd.DataFrame(todos)
-    if df_all.empty:
-        return df_all
-
-    # UTC → BRT antes de gerar mês/ano (evita “vazamento” Jul→Ago)
-    df_all["created"] = (
-        pd.to_datetime(df_all["created"], errors="coerce", utc=True).dt.tz_convert(TZ_BR).dt.tz_localize(None)
-    )
-    df_all["resolved"] = (
-        pd.to_datetime(df_all["resolutiondate"], errors="coerce", utc=True).dt.tz_convert(TZ_BR).dt.tz_localize(None)
-    )
-
-    df_all["mes_created"] = df_all["created"].dt.to_period("M").dt.to_timestamp()
-    df_all["mes_resolved"] = df_all["resolved"].dt.to_period("M").dt.to_timestamp()
-    return df_all
-
-
-@st.cache_data(show_spinner=False)
-def build_monthly_tables(df_all: pd.DataFrame) -> pd.DataFrame:
-    """
-    Pré-agrega por projeto e mês (BRT):
-      - Criados (mês de criação)
-      - Resolvidos (mês de resolução)
-      - Dentro/Fora do SLA
-
-    Tabela mensal estável que alimenta os gráficos (acaba com “vazamento” de mês).
-    """
-    if df_all.empty:
-        return df_all
-
-    base = df_all.copy()
-    base["per_created"] = base["created"].dt.to_period("M")
-    base["per_resolved"] = base["resolved"].dt.to_period("M")
-
-    # Criados por mês de criação
-    created = base.groupby(["projeto", "per_created"]).size().reset_index(name="Criados")
-    created = created.rename(columns={"per_created": "period"})
-
-    # Resolvidos + SLA por mês de resolução
-    res = base[base["resolved"].notna()].copy()
-    res["dentro_sla"] = res["sla_raw"].apply(dentro_sla_from_raw).fillna(False)
-    resolved = (
-        res.groupby(["projeto", "per_resolved"])
-        .agg(Resolvidos=("key", "count"), Dentro=("dentro_sla", "sum"))
-        .reset_index()
-        .rename(columns={"per_resolved": "period"})
-    )
-
-    # Full outer
-    monthly = pd.merge(created, resolved, how="outer", on=["projeto", "period"]).fillna(0)
-
-    monthly["period"] = monthly["period"].astype("period[M]")
-    monthly["period_ts"] = monthly["period"].dt.to_timestamp()
-    monthly["ano"] = monthly["period"].dt.year.astype(int)
-    monthly["mes"] = monthly["period"].dt.month.astype(int)
-    monthly["mes_str"] = monthly["period_ts"].dt.strftime("%b/%Y")
-
-    monthly["Dentro"] = monthly["Dentro"].astype(int)
-    monthly["Resolvidos"] = monthly["Resolvidos"].astype(int)
-    monthly["Fora"] = (monthly["Resolvidos"] - monthly["Dentro"]).clip(lower=0)
-
-    monthly["pct_dentro"] = monthly.apply(
-        lambda r: (r["Dentro"] / r["Resolvidos"] * 100.0) if r["Resolvidos"] > 0 else 0.0, axis=1
-    )
-    monthly["pct_fora"] = monthly.apply(
-        lambda r: (r["Fora"] / r["Resolvidos"] * 100.0) if r["Resolvidos"] > 0 else 0.0, axis=1
-    )
-
-    monthly = monthly.sort_values(["projeto", "period"])
-    return monthly
-
-
-# --------------------------
-# Dados + Filtros Globais
-# --------------------------
-df = buscar_issues()
-df_monthly = build_monthly_tables(df)
-
-st.markdown("### 🔍 Filtros Globais")
-if df.empty:
-    st.warning("Sem dados retornados do Jira.")
-    st.stop()
-
-anos_glob = sorted(pd.Series(df["mes_created"].dt.year.dropna().unique()).astype(int).tolist())
-meses_glob = sorted(pd.Series(df["mes_created"].dt.month.dropna().unique()).astype(int).tolist())
-
-c1, c2 = st.columns(2)
-with c1:
-    ano_global = st.selectbox("Ano (global)", ["Todos"] + [str(a) for a in anos_glob], key="ano_global")
-with c2:
-    mes_global = st.selectbox("Mês (global)", ["Todos"] + [str(m).zfill(2) for m in meses_glob], key="mes_global")
-
-st.markdown('<div class="section-spacer"></div>', unsafe_allow_html=True)
-
-
-# --------------------------
-# Renderizadores
-# --------------------------
-def render_criados_resolvidos(dfp: pd.DataFrame, ano_global: str, mes_global: str):
+def render_criados_resolvidos(dfp: pd.DataFrame, projeto: str, ano_global: str, mes_global: str):
     st.markdown("### 📈 Tickets Criados vs Resolvidos")
 
-    projeto = dfp["projeto"].iat[0]
-    dfm = df_monthly[df_monthly["projeto"] == projeto].copy()
+    dfm = df_monthly_all[df_monthly_all["projeto"] == projeto].copy()
+    if dfm.empty:
+        st.info("Sem dados para esta visão.")
+        return
 
+    # aplica filtros globais
     if ano_global != "Todos":
         dfm = dfm[dfm["ano"] == int(ano_global)]
     if mes_global != "Todos":
         dfm = dfm[dfm["mes"] == int(mes_global)]
 
-    # filtro FINAL por Período (100% à prova de vazamento)
+    # se ano e mês selecionados, fixa no período exato (evita qualquer vazamento)
     if ano_global != "Todos" and mes_global != "Todos":
-        alvo_period = pd.Period(f"{int(ano_global)}-{int(mes_global):02d}", freq="M")
-        dfm = dfm[dfm["period"] == alvo_period]
-
-    if dfm.empty:
-        st.info("Sem dados para os filtros selecionados.")
-        return
+        alvo = pd.Period(f"{int(ano_global)}-{int(mes_global):02d}", freq="M")
+        dfm = dfm[dfm["period"] == alvo]
 
     dfm = dfm.sort_values("period_ts")
-    show = dfm[["mes_str", "period_ts", "Criados", "Resolvidos"]].copy()
+    show = dfm[["mes_str","period_ts","Criados","Resolvidos"]].copy()
     show["Criados"] = show["Criados"].astype(int)
     show["Resolvidos"] = show["Resolvidos"].astype(int)
 
-    fig = px.bar(show, x="mes_str", y=["Criados", "Resolvidos"], barmode="group", text_auto=True, height=440)
+    fig = px.bar(
+        show, x="mes_str", y=["Criados","Resolvidos"],
+        barmode="group", text_auto=True, height=440
+    )
     fig.update_traces(textangle=0, textfont_size=14, cliponaxis=False)
     fig.update_xaxes(categoryorder="array", categoryarray=show["mes_str"].tolist())
-
     st.plotly_chart(fig, use_container_width=True)
 
-
-def render_sla(dfp, projeto, ano_global, mes_global):
+def render_sla(dfp: pd.DataFrame, projeto: str, ano_global: str, mes_global: str):
     st.markdown("### ⏱️ SLA")
 
-    dfm = df_monthly[df_monthly["projeto"] == projeto].copy()
+    dfm = df_monthly_all[df_monthly_all["projeto"] == projeto].copy()
+    if dfm.empty:
+        st.info("Sem dados de SLA.")
+        return
+
     if ano_global != "Todos":
         dfm = dfm[dfm["ano"] == int(ano_global)]
     if mes_global != "Todos":
         dfm = dfm[dfm["mes"] == int(mes_global)]
-
-    # filtro FINAL por Período (igual ao de cima)
     if ano_global != "Todos" and mes_global != "Todos":
-        alvo_period = pd.Period(f"{int(ano_global)}-{int(mes_global):02d}", freq="M")
-        dfm = dfm[dfm["period"] == alvo_period]
-
-    if dfm.empty:
-        st.info("Sem dados de SLA para os filtros selecionados.")
-        return
+        alvo = pd.Period(f"{int(ano_global)}-{int(mes_global):02d}", freq="M")
+        dfm = dfm[dfm["period"] == alvo]
 
     okr = dfm["pct_dentro"].mean() if not dfm.empty else 0.0
     meta = META_SLA.get(projeto, 98.0)
     titulo = f"OKR: {okr:.2f}% — Meta: {meta:.2f}%".replace(".", ",")
 
-    show = dfm[["mes_str", "period_ts", "pct_dentro", "pct_fora"]].sort_values("period_ts")
-    show = show.rename(columns={"pct_dentro": "% Dentro SLA", "pct_fora": "% Fora SLA"})
+    show = dfm[["mes_str","period_ts","pct_dentro","pct_fora"]].sort_values("period_ts")
+    show = show.rename(columns={"pct_dentro": "% Dentro SLA", "pct_fora":"% Fora SLA"})
 
-    fig_sla = px.bar(
-        show,
-        x="mes_str",
-        y=["% Dentro SLA", "% Fora SLA"],
-        barmode="group",
+    fig = px.bar(
+        show, x="mes_str", y=["% Dentro SLA","% Fora SLA"], barmode="group",
         title=titulo,
-        color_discrete_map={"% Dentro SLA": "green", "% Fora SLA": "red"},
-        height=440,
+        color_discrete_map={"% Dentro SLA":"green","% Fora SLA":"red"},
+        height=440
     )
-    fig_sla.update_traces(texttemplate="%{y:.2f}%", textposition="outside", textfont_size=14, cliponaxis=False)
-    fig_sla.update_yaxes(ticksuffix="%")
-    fig_sla.update_xaxes(categoryorder="array", categoryarray=show["mes_str"].tolist())
+    fig.update_traces(texttemplate="%{y:.2f}%", textposition="outside", textfont_size=14, cliponaxis=False)
+    fig.update_yaxes(ticksuffix="%")
+    fig.update_xaxes(categoryorder="array", categoryarray=show["mes_str"].tolist())
+    st.plotly_chart(fig, use_container_width=True)
 
-    st.plotly_chart(fig_sla, use_container_width=True)
-
-
-def render_assunto(dfp, projeto, ano_global, mes_global):
+def render_assunto(dfp: pd.DataFrame, projeto: str, ano_global: str, mes_global: str):
     st.markdown("### 🧾 Assunto Relacionado")
     df_ass = aplicar_filtro_global(dfp.copy(), "mes_created", ano_global, mes_global)
+    if df_ass.empty:
+        st.info("Sem dados para Assunto Relacionado nos filtros atuais.")
+        return
+
     if CAMPOS_ASSUNTO[projeto] == "issuetype":
         df_ass["assunto_nome"] = df_ass["issuetype"].apply(lambda x: safe_get_value(x, "name"))
     else:
         df_ass["assunto_nome"] = df_ass["assunto"].apply(lambda x: safe_get_value(x, "value"))
+
     assunto_count = df_ass["assunto_nome"].value_counts().reset_index()
-    assunto_count.columns = ["Assunto", "Qtd"]
+    assunto_count.columns = ["Assunto","Qtd"]
     st.dataframe(assunto_count, use_container_width=True, hide_index=True)
 
-
-def render_area(dfp, ano_global, mes_global):
+def render_area(dfp: pd.DataFrame, ano_global: str, mes_global: str):
     st.markdown("### 📦 Área Solicitante")
     df_area = aplicar_filtro_global(dfp.copy(), "mes_created", ano_global, mes_global)
+    if df_area.empty:
+        st.info("Sem dados para Área Solicitante nos filtros atuais.")
+        return
+
     df_area["area_nome"] = df_area["area"].apply(lambda x: safe_get_value(x, "value"))
     area_count = df_area["area_nome"].value_counts().reset_index()
-    area_count.columns = ["Área", "Qtd"]
+    area_count.columns = ["Área","Qtd"]
     st.dataframe(area_count, use_container_width=True, hide_index=True)
 
-
-def render_encaminhamentos(dfp, ano_global, mes_global):
+def render_encaminhamentos(dfp: pd.DataFrame, ano_global: str, mes_global: str):
     st.markdown("### 🔄 Encaminhamentos")
     df_enc = aplicar_filtro_global(dfp.copy(), "mes_created", ano_global, mes_global)
-    col1, col2 = st.columns(2)
+    if df_enc.empty:
+        st.info("Sem dados para Encaminhamentos nos filtros atuais.")
+        return
+
+    col1,col2 = st.columns(2)
     with col1:
         count_prod = df_enc["status"].astype(str).str.contains("Produto", case=False, na=False).sum()
         st.metric("Encaminhados Produto", int(count_prod))
     with col2:
         df_enc["n3_valor"] = df_enc["n3"].apply(lambda x: safe_get_value(x, "value", None))
         st.metric("Encaminhados N3", int((df_enc["n3_valor"] == "Sim").sum()))
+def render_app_ne(dfp: pd.DataFrame, ano_global: str, mes_global: str):
+    st.markdown("### 📱 APP NE — Origem do problema")
+    if dfp.empty:
+        st.info("Sem dados para APP NE.")
+        return
+
+    dfp = ensure_assunto_nome(dfp.copy(), "TDS")
+    s_ass = dfp["assunto_nome"].astype(str).str.strip()
+    alvo = ASSUNTO_ALVO_APPNE.strip().casefold()
+    mask_assunto = s_ass.str.casefold().eq(alvo)
+    if not mask_assunto.any():
+        mask_assunto = s_ass.str.contains(r"app\s*ne", case=False, regex=True)
+
+    df_app = dfp[mask_assunto].copy()
+    if df_app.empty:
+        st.info(f"Não há chamados para '{ASSUNTO_ALVO_APPNE}'.")
+        return
+
+    df_app["origem_nome"] = df_app["origem"].apply(lambda x: safe_get_value(x, "value"))
+    df_app["origem_cat"]  = df_app["origem_nome"].apply(normaliza_origem)
+
+    df_app["mes_dt"] = df_app["mes_created"].dt.to_period("M").dt.to_timestamp()
+    df_app = aplicar_filtro_global(df_app, "mes_dt", ano_global, mes_global)
+    if df_app.empty:
+        st.info("Sem dados para exibir com os filtros selecionados.")
+        return
+
+    total_app = int(len(df_app))
+    contagem  = df_app["origem_cat"].value_counts()
+
+    m1,m2,m3 = st.columns(3)
+    m1.metric("Total (APP NE/EN)", total_app)
+    m2.metric("APP NE", int(contagem.get("APP NE", 0)))
+    m3.metric("APP EN", int(contagem.get("APP EN", 0)))
+
+    serie = (df_app.groupby(["mes_dt","origem_cat"]).size()
+             .reset_index(name="Qtd").sort_values("mes_dt"))
+    serie["mes_str"] = serie["mes_dt"].dt.strftime("%b/%Y")
+    cats = serie["mes_str"].dropna().unique().tolist()
+    serie["mes_str"] = pd.Categorical(serie["mes_str"], categories=cats, ordered=True)
+
+    fig_app = px.bar(
+        serie, x="mes_str", y="Qtd", color="origem_cat", barmode="group",
+        title="APP NE — Volumes por mês e Origem do problema",
+        color_discrete_map={"APP NE":"#2ca02c","APP EN":"#1f77b4","Outros/Não informado":"#9ca3af"},
+        text="Qtd", height=460
+    )
+    fig_app.update_traces(texttemplate="%{text:.0f}", textposition="outside", textfont_size=16, cliponaxis=False)
+    max_qtd = int(serie["Qtd"].max()) if not serie.empty else 0
+    if max_qtd > 0:
+        fig_app.update_yaxes(range=[0, max_qtd * 1.25])
+    fig_app.update_layout(yaxis_title="Qtd", xaxis_title="Mês",
+                          uniformtext_minsize=14, uniformtext_mode="show",
+                          bargap=0.15, margin=dict(t=70, r=20, b=60, l=50))
+    st.plotly_chart(fig_app, use_container_width=True)
 
 
-def render_onboarding(dfp, ano_global, mes_global):
+def render_rotinas_manuais(dfp: pd.DataFrame, ano_global: str, mes_global: str):
+    st.markdown("### 🛠️ Rotinas Manuais")
+    if dfp.empty:
+        st.info("Sem dados do Jira para Rotinas Manuais.")
+        return
+
+    base = dfp[["key","resolved",CAMPO_QTD_ENCOMENDAS,"summary"]].copy()
+
+    # Filtra apenas tickets de rotina pelo título (mantido como combinamos)
+    base = base[base["summary"].astype(str).str.contains(TITULO_ROTINA, case=False, na=False)]
+    if base.empty:
+        st.info("Nenhum ticket de Rotinas Manuais encontrado (por título).")
+        return
+
+    base[CAMPO_QTD_ENCOMENDAS] = base[CAMPO_QTD_ENCOMENDAS].apply(parse_qtd_encomendas).astype("Int64")
+    base["resolved"] = pd.to_datetime(base["resolved"], errors="coerce")
+    base = base.dropna(subset=["resolved"])
+    base = base[base[CAMPO_QTD_ENCOMENDAS].notna() & (base[CAMPO_QTD_ENCOMENDAS] > 0)]
+
+    # Dedup por key (último resolved)
+    base = base.sort_values("resolved").drop_duplicates(subset=["key"], keep="last")
+
+    # Agregação por mês de resolved
+    base["period"]    = base["resolved"].dt.to_period("M")
+    base["period_ts"] = base["period"].dt.to_timestamp()
+    base["ano"]       = base["period"].dt.year
+    base["mes"]       = base["period"].dt.month
+    base["mes_str"]   = base["period_ts"].dt.strftime("%b/%Y")
+
+    # Filtros globais aplicados
+    if ano_global != "Todos":
+        base = base[base["ano"] == int(ano_global)]
+    if mes_global != "Todos":
+        if ano_global != "Todos":
+            alvo = pd.Period(f"{int(ano_global)}-{int(mes_global):02d}", freq="M")
+            base = base[base["period"] == alvo]
+        else:
+            base = base[base["mes"] == int(mes_global)]
+
+    if base.empty:
+        st.info("Sem dados de Rotinas Manuais no período filtrado.")
+        return
+
+    agg = (base.groupby(["period","period_ts","mes_str"], as_index=False)[CAMPO_QTD_ENCOMENDAS]
+           .sum().rename(columns={CAMPO_QTD_ENCOMENDAS:"Qtd encomendas"}).sort_values("period_ts"))
+    agg["label"] = agg["Qtd encomendas"].map(lambda x: f"{x:,.0f}".replace(",", "."))
+
+    fig = px.bar(agg, x="mes_str", y="Qtd encomendas", text="label", height=420)
+    fig.update_traces(textangle=0, textfont_size=14, cliponaxis=False)
+    fig.update_yaxes(title_text="Qtd encomendas", tickformat=",")
+    st.plotly_chart(fig, use_container_width=True)
+
+    with st.expander("🔎 Tickets usados (amostra)"):
+        st.dataframe(base[["key","summary","resolved",CAMPO_QTD_ENCOMENDAS]]
+                     .sort_values("resolved"), use_container_width=True, hide_index=True)
+
+
+def render_onboarding(dfp: pd.DataFrame, ano_global: str, mes_global: str):
     st.markdown("### 🧭 Onboarding")
+    if dfp.empty:
+        st.info("Sem dados de Onboarding.")
+        return
 
     ASSUNTO_CLIENTE_NOVO = "Nova integração - Cliente novo"
     ASSUNTOS_ERROS = [
@@ -458,15 +590,17 @@ def render_onboarding(dfp, ano_global, mes_global):
         "Aguardando Comercial",
     ]
 
+    dfp = ensure_assunto_nome(dfp.copy(), "INT")
     df_onb = aplicar_filtro_global(dfp.copy(), "mes_created", ano_global, mes_global)
 
     total_clientes_novos = int((df_onb["assunto_nome"] == ASSUNTO_CLIENTE_NOVO).sum())
     df_erros = df_onb[df_onb["assunto_nome"].isin(ASSUNTOS_ERROS)].copy()
     pend_mask = df_onb["status"].isin(STATUS_PENDENCIAS)
+
     tickets_pendencias = int(pend_mask.sum())
     possiveis_clientes = int(pend_mask.sum())
 
-    c1, c2, c3, c4 = st.columns(4)
+    c1,c2,c3,c4 = st.columns(4)
     c1.metric("Tickets clientes novos", total_clientes_novos)
     c2.metric("Erros onboarding", int(len(df_erros)))
     c3.metric("Tickets com pendências", tickets_pendencias)
@@ -474,484 +608,149 @@ def render_onboarding(dfp, ano_global, mes_global):
 
     st.markdown("---")
 
-    if df_erros.empty:
-        st.info("Sem erros de Onboarding no período.")
-    else:
-        cont_erros = (
-            df_erros["assunto_nome"]
-            .value_counts()
-            .reindex(ASSUNTOS_ERROS, fill_value=0)
-            .reset_index()
-        )
-        cont_erros.columns = ["Categoria", "Qtd"]
-        fig_onb = px.bar(
-            cont_erros, x="Qtd", y="Categoria", orientation="h", text="Qtd", title="Erros Onboarding", height=420
-        )
-        fig_onb.update_traces(texttemplate="%{text:.0f}", textposition="outside", textfont_size=16, cliponaxis=False)
+    if not df_erros.empty:
+        cont_erros = (df_erros["assunto_nome"].value_counts()
+                      .reindex(ASSUNTOS_ERROS, fill_value=0).reset_index())
+        cont_erros.columns = ["Categoria","Qtd"]
+
+        fig_onb = px.bar(cont_erros, x="Qtd", y="Categoria", orientation="h",
+                         text="Qtd", title="Erros Onboarding", height=420)
+        fig_onb.update_traces(texttemplate="%{text:.0f}", textposition="outside",
+                              textfont_size=16, cliponaxis=False)
         max_q = int(cont_erros["Qtd"].max()) if not cont_erros.empty else 0
         if max_q > 0:
-            fig_onb.update_xaxes(range=[0, max_q * 1.25])
+            fig_onb.update_xaxes(range=[0, max_q*1.25])
         fig_onb.update_layout(margin=dict(t=50, r=20, b=30, l=10), bargap=0.25)
         st.plotly_chart(fig_onb, use_container_width=True)
 
     df_cli = df_onb[df_onb["assunto_nome"] == ASSUNTO_CLIENTE_NOVO].copy()
     if not df_cli.empty:
-        serie_cli = (
-            df_cli.groupby(df_cli["mes_created"].dt.to_period("M")).size().reset_index(name="ClientesNovos")
-        )
+        serie_cli = (df_cli.groupby(df_cli["mes_created"].dt.to_period("M"))
+                          .size().reset_index(name="ClientesNovos"))
         serie_cli["mes_dt"] = serie_cli["mes_created"].dt.to_timestamp()
         serie_cli = serie_cli.sort_values("mes_dt")
         serie_cli["mes_str"] = serie_cli["mes_dt"].dt.strftime("%Y %b")
         serie_cli["MoM"] = serie_cli["ClientesNovos"].pct_change() * 100
 
-        fig_cli = px.bar(
-            serie_cli, x="mes_str", y="ClientesNovos", title="Tickets - Cliente novo", text="ClientesNovos", height=380
-        )
-        fig_cli.update_traces(texttemplate="%{text}", textposition="outside", textfont_size=14, cliponaxis=False)
+        fig_cli = px.bar(serie_cli, x="mes_str", y="ClientesNovos",
+                         title="Tickets - Cliente novo", text="ClientesNovos", height=380)
+        fig_cli.update_traces(texttemplate="%{text}", textposition="outside",
+                              textfont_size=14, cliponaxis=False)
         y_top = (serie_cli["ClientesNovos"].max() * 2.2) if len(serie_cli) else 10
         fig_cli.update_yaxes(range=[0, y_top])
 
         for _, r in serie_cli.iterrows():
-            x = r["mes_str"]
-            yb = float(r["ClientesNovos"])
+            x = r["mes_str"]; yb = float(r["ClientesNovos"])
             if pd.notna(r["MoM"]):
                 mom_abs = abs(r["MoM"])
                 if mom_abs >= 1:
                     up = r["MoM"] >= 0
                     arrow = "▲" if up else "▼"
                     color = "#2563eb" if up else "#dc2626"
-                    fig_cli.add_annotation(
-                        x=x, y=yb + (y_top * 0.20), text=f"{arrow} {mom_abs:.0f}%", showarrow=False,
-                        font=dict(size=12, color=color)
-                    )
-        fig_cli.update_layout(margin=dict(t=50, r=20, b=35, l=40), bargap=0.18,
-                              xaxis_title=None, yaxis_title="ClientesNovos")
+                    fig_cli.add_annotation(x=x, y=yb + (y_top*0.20),
+                                           text=f"{arrow} {mom_abs:.0f}%",
+                                           showarrow=False, font=dict(size=12, color=color))
+        fig_cli.update_layout(margin=dict(t=50, r=20, b=35, l=40),
+                              bargap=0.18, xaxis_title=None, yaxis_title="ClientesNovos")
         st.plotly_chart(fig_cli, use_container_width=True)
 
     st.markdown("---")
     st.subheader("💸 Dinheiro perdido (simulação)")
-    c_left, c_right = st.columns([1, 1])
+    c_left,c_right = st.columns([1,1])
     with c_left:
         st.number_input("Clientes novos (simulação)", value=possiveis_clientes, disabled=True, key="sim_clientes_onb")
     with c_right:
-        receita_cliente = st.slider(
-            "Cenário Receita por Cliente (R$)", min_value=0, max_value=100000, step=500, value=20000, key="sim_receita_onb"
-        )
-
+        receita_cliente = st.slider("Cenário Receita por Cliente (R$)",
+                                    min_value=0, max_value=100000, step=500, value=20000,
+                                    key="sim_receita_onb")
     dinheiro_perdido = float(possiveis_clientes) * float(receita_cliente)
-    st.markdown(
-        f"### **R$ {dinheiro_perdido:,.2f}**",
-        help="Cálculo: Clientes novos (simulação) × Cenário Receita por Cliente"
-    )
+    st.markdown(f"### **R$ {dinheiro_perdido:,.2f}**",
+                help="Cálculo: Clientes novos (simulação) × Cenário Receita por Cliente")
 
 
-def render_app_ne(dfp, ano_global, mes_global):
-    st.markdown("### 📱 APP NE — Origem do problema")
-
-    s_ass = dfp["assunto_nome"].astype(str).str.strip()
-    alvo = ASSUNTO_ALVO_APPNE.strip().casefold()
-    mask_assunto = s_ass.str.casefold().eq(alvo)
-    if not mask_assunto.any():
-        mask_assunto = s_ass.str.contains(r"app\s*ne", case=False, regex=True)
-
-    df_app = dfp[mask_assunto].copy()
-    if df_app.empty:
-        st.info(f"Não há chamados para '{ASSUNTO_ALVO_APPNE}'.")
-        return
-
-    df_app["origem_nome"] = df_app["origem"].apply(lambda x: safe_get_value(x, "value"))
-    df_app["origem_cat"] = df_app["origem_nome"].apply(normaliza_origem)
-    df_app["mes_dt"] = df_app["mes_created"].dt.to_period("M").dt.to_timestamp()
-
-    df_app = aplicar_filtro_global(df_app, "mes_dt", ano_global, mes_global)
-    if df_app.empty:
-        st.info("Sem dados para exibir com os filtros selecionados.")
-        return
-
-    total_app = int(len(df_app))
-    contagem = df_app["origem_cat"].value_counts()
-    m1, m2, m3 = st.columns(3)
-    m1.metric("Total (APP NE/EN)", total_app)
-    m2.metric("APP NE", int(contagem.get("APP NE", 0)))
-    m3.metric("APP EN", int(contagem.get("APP EN", 0)))
-
-    serie = df_app.groupby(["mes_dt", "origem_cat"]).size().reset_index(name="Qtd").sort_values("mes_dt")
-    serie["mes_str"] = serie["mes_dt"].dt.strftime("%b/%Y")
-    cats = serie["mes_str"].dropna().unique().tolist()
-    serie["mes_str"] = pd.Categorical(serie["mes_str"], categories=cats, ordered=True)
-
-    fig_app = px.bar(
-        serie,
-        x="mes_str",
-        y="Qtd",
-        color="origem_cat",
-        barmode="group",
-        title="APP NE — Volumes por mês e Origem do problema",
-        color_discrete_map={"APP NE": "#2ca02c", "APP EN": "#1f77b4", "Outros/Não informado": "#9ca3af"},
-        text="Qtd",
-        height=460,
-    )
-    fig_app.update_traces(texttemplate="%{text:.0f}", textposition="outside", textfont_size=16, cliponaxis=False)
-    max_qtd = int(serie["Qtd"].max()) if not serie.empty else 0
-    if max_qtd > 0:
-        fig_app.update_yaxes(range=[0, max_qtd * 1.25])
-    fig_app.update_layout(
-        yaxis_title="Qtd", xaxis_title="Mês", uniformtext_minsize=14, uniformtext_mode="show",
-        bargap=0.15, margin=dict(t=70, r=20, b=60, l=50)
-    )
-    st.plotly_chart(fig_app, use_container_width=True)
-
-    df_app["mes_str"] = df_app["mes_dt"].dt.strftime("%b/%Y")
-    cols_show = ["key", "created", "mes_str", "assunto_nome", "origem_cat", "status"]
-    st.dataframe(df_app[cols_show], use_container_width=True, hide_index=True)
-
-
-# --------------------------
-# Rotinas Manuais (TDS) — versão final
-# --------------------------
-def render_rotinas_manuais(dfp: pd.DataFrame, ano_global: str, mes_global: str):
-    """
-    Rotinas Manuais (TDS) — soma mensal do campo 'Quantidade de encomendas' (customfield_13666).
-    - Usa a data de RESOLUÇÃO ('resolved') como bucket.
-    - 1 linha por ticket (key): usa o último resolved.
-    - Parsing robusto (remove separadores, só dígitos); descarta outliers > 100.000.
-    """
-    import re
-
-    COL_QTD = CAMPO_QTD_ENCOMENDAS  # "customfield_13666"
-    st.markdown("### 🛠️ Rotinas Manuais")
-
-    if COL_QTD not in dfp.columns or "resolved" not in dfp.columns or "key" not in dfp.columns:
-        st.info("Dados insuficientes para Rotinas Manuais (faltam 'key', 'resolved' ou o campo de quantidade).")
-        return
-
-    def _to_int(v):
-        if pd.isna(v):
-            return pd.NA
-        s = str(v).strip()
-        if not s:
-            return pd.NA
-        digits = re.sub(r"[^\d]", "", s)
-        return int(digits) if digits else pd.NA
-
-    base = dfp[["key", "resolved", COL_QTD]].copy()
-    base[COL_QTD] = base[COL_QTD].apply(_to_int).astype("Int64")
-    base["resolved"] = pd.to_datetime(base["resolved"], errors="coerce")
-    base = base.dropna(subset=["resolved"])
-    base = base[base[COL_QTD].notna() & (base[COL_QTD] > 0)]
-
-    if base.empty:
-        st.info("Sem dados de Rotinas Manuais.")
-        return
-
-    # 🔒 deduplicação por ticket (último resolved)
-    base = base.sort_values("resolved")
-    base = base.groupby("key", as_index=False).tail(1)
-
-    # outliers defensivos
-    LIMITE = 100_000
-    outliers = base[base[COL_QTD] > LIMITE]
-    if not outliers.empty:
-        base = base[base[COL_QTD] <= LIMITE]
-        st.caption(f"ℹ️ {len(outliers)} registro(s) descartado(s) por > {LIMITE:,}".replace(",", "."))
-
-    # Bucket mensal por resolved (BRT já aplicado na carga)
-    base["period"]    = base["resolved"].dt.to_period("M")
-    base["period_ts"] = base["period"].dt.to_timestamp()
-    base["ano"]       = base["period"].dt.year
-    base["mes"]       = base["period"].dt.month
-    base["mes_str"]   = base["period_ts"].dt.strftime("%b/%Y")
-
-    # Filtros globais (Ano/Mês)
-    if ano_global != "Todos":
-        base = base[base["ano"] == int(ano_global)]
-    if mes_global != "Todos":
-        if ano_global != "Todos":
-            alvo_period = pd.Period(f"{int(ano_global)}-{int(mes_global):02d}", freq="M")
-            base = base[base["period"] == alvo_period]
-        else:
-            base = base[base["mes"] == int(mes_global)]
-
-    if base.empty:
-        st.info("Sem dados de **Rotinas Manuais** para os filtros selecionados.")
-        return
-
-    # Agregação mensal (soma de encomendas)
-    agg = (
-        base.groupby(["period", "period_ts", "mes_str"], as_index=False)[COL_QTD]
-        .sum()
-        .rename(columns={COL_QTD: "Qtd encomendas"})
-        .sort_values("period_ts")
-    )
-
-    # Rótulo com separador de milhar (pt-BR)
-    agg["label"] = agg["Qtd encomendas"].map(lambda x: f"{x:,.0f}".replace(",", "."))
-
-    fig = px.bar(agg, x="mes_str", y="Qtd encomendas", text="label", height=420)
-    fig.update_traces(textangle=0, textfont_size=14, cliponaxis=False)
-
-    # Eixo Y sem 'k'; formatação com milhar
-    fig.update_yaxes(title_text="Qtd encomendas", tickformat=",")
-    top = int(agg["Qtd encomendas"].max()) if not agg.empty else 0
-    if top > 0:
-        fig.update_yaxes(range=[0, top * 1.15])
-
-    # Ordenação no caso de um único mês selecionado
-    if ano_global != "Todos" and mes_global != "Todos":
-        fig.update_xaxes(categoryorder="array", categoryarray=agg["mes_str"].tolist())
-
-    st.plotly_chart(fig, use_container_width=True)
-
-
-# --------------------------
-# Abas por Projeto / Visões
-# --------------------------
+# ======================
+# Abas por Projeto/Visão
+# ======================
 tabs = st.tabs([TITULOS[p] for p in PROJETOS])
 
 for projeto, tab in zip(PROJETOS, tabs):
     with tab:
         st.subheader(f"📂 Projeto: {TITULOS[projeto]}")
 
-        dfp = df[df["projeto"] == projeto].copy()
-        if dfp.empty:
-            st.info("Sem dados carregados.")
-            continue
-        dfp = ensure_assunto_nome(dfp, projeto)
-
-        # Opções de visão por projeto
         if projeto == "TDS":
-            opcoes = ["Geral", "Criados vs Resolvidos", "SLA", "Assunto Relacionado", "Área Solicitante", "APP NE"]
+            dfp = df_tds.copy()
+            opcoes = ["Geral","Criados vs Resolvidos","SLA","Assunto Relacionado","Área Solicitante","APP NE"]
         elif projeto == "INT":
-            opcoes = ["Geral", "Criados vs Resolvidos", "SLA", "Assunto Relacionado", "Área Solicitante", "Onboarding"]
+            dfp = df_int.copy()
+            opcoes = ["Geral","Criados vs Resolvidos","SLA","Assunto Relacionado","Área Solicitante","Onboarding"]
         elif projeto == "TINE":
-            opcoes = ["Geral", "Criados vs Resolvidos", "SLA", "Assunto Relacionado", "Área Solicitante"]
-        else:  # INTEL
-            opcoes = ["Geral", "Criados vs Resolvidos", "SLA", "Assunto Relacionado"]
+            dfp = df_tine.copy()
+            opcoes = ["Geral","Criados vs Resolvidos","SLA","Assunto Relacionado","Área Solicitante"]
+        else:
+            dfp = df_intel.copy()
+            opcoes = ["Geral","Criados vs Resolvidos","SLA","Assunto Relacionado"]
 
+        if dfp.empty:
+            st.info("Sem dados carregados para este projeto.")
+            continue
+
+        dfp = ensure_assunto_nome(dfp, projeto)
         visao = st.selectbox("Visão", opcoes, key=f"visao_{projeto}")
 
-        # ---- Renderizadores isolados
+        # 1) Criados vs Resolvidos
         if visao == "Criados vs Resolvidos":
-            render_criados_resolvidos(dfp, ano_global, mes_global)
+            render_criados_resolvidos(dfp, projeto, ano_global, mes_global)
 
+        # 2) SLA
         elif visao == "SLA":
             render_sla(dfp, projeto, ano_global, mes_global)
 
+        # 3) Assunto
         elif visao == "Assunto Relacionado":
             render_assunto(dfp, projeto, ano_global, mes_global)
 
+        # 4) Área
         elif visao == "Área Solicitante":
             if projeto == "INTEL":
                 st.info("Este projeto não possui Área Solicitante.")
             else:
                 render_area(dfp, ano_global, mes_global)
 
+        # 5) Onboarding
         elif visao == "Onboarding":
             if projeto == "INT":
                 render_onboarding(dfp, ano_global, mes_global)
             else:
                 st.info("Onboarding disponível somente para Integrations.")
 
+        # 6) APP NE
         elif visao == "APP NE":
             if projeto == "TDS":
                 render_app_ne(dfp, ano_global, mes_global)
             else:
                 st.info("APP NE disponível somente para Tech Support.")
 
-        # ---- Visão Geral (ordem e seções combinadas)
+        # Geral — ordem fixa
         else:
-            # 1) Criados vs Resolvidos
-            render_criados_resolvidos(dfp, ano_global, mes_global)
-
-            # 2) SLA
+            render_criados_resolvidos(dfp, projeto, ano_global, mes_global)
             render_sla(dfp, projeto, ano_global, mes_global)
-
-            # 3) Assunto Relacionado
             render_assunto(dfp, projeto, ano_global, mes_global)
 
-            # 4) Área Solicitante (exceto INTEL)
             if projeto != "INTEL":
                 render_area(dfp, ano_global, mes_global)
 
-            # 5) Encaminhamentos (TDS e INT)
-            if projeto in ("TDS", "INT"):
+            if projeto in ("TDS","INT"):
                 render_encaminhamentos(dfp, ano_global, mes_global)
 
-            # 6) APP NE (TDS) — ao final da página, fora de sub-menu
             if projeto == "TDS":
                 render_app_ne(dfp, ano_global, mes_global)
-
-                # 7) Rotinas Manuais (TDS) — expander no fim
                 with st.expander("🛠️ Rotinas Manuais", expanded=False):
                     render_rotinas_manuais(dfp, ano_global, mes_global)
 
-            # 8) Onboarding (INT) — expander no fim
             if projeto == "INT":
                 with st.expander("🧭 Onboarding", expanded=False):
                     render_onboarding(dfp, ano_global, mes_global)
 
-# ==========================================================
-# PATCH: ROTINAS MANUAIS — soma correta de "Quantidade de encomendas"
-# ==========================================================
-# Este bloco é autocontido e não altera as demais seções do seu painel.
-
-import pandas as pd
-import plotly.express as px
-import streamlit as st
-
-# --- Campos Jira usados nesta seção ---
-COL_KEY         = "key"                   # id único do ticket (já vem do Jira)
-COL_RESOLVED    = "resolved"              # data/hora de resolução (já vem do Jira)
-COL_QTD_ENCOM   = "customfield_13666"     # Quantidade de encomendas no Jira
-COL_QTD_NORM    = "qtd_encomendas_norm"   # coluna normalizada que vamos criar
-
-
-# ------------------ Utilitários do patch ------------------
-
-def _parse_quantidade_encomendas(v):
-    """
-    Converte o valor cru de 'Quantidade de encomendas' para INTEIRO.
-    Trata:
-      - lista -> usa o último valor não-nulo
-      - string PT-BR com milhar/decimal
-      - float/int
-      - None -> 0
-    """
-    if isinstance(v, list):
-        v = next((x for x in reversed(v) if x is not None and x != ""), None)
-
-    if v is None:
-        return 0
-
-    if isinstance(v, (int, float)):
-        try:
-            return int(round(float(v)))
-        except Exception:
-            return 0
-
-    if isinstance(v, str):
-        s = v.strip()
-        if s == "":
-            return 0
-        s = s.replace(".", "").replace(",", ".")
-        try:
-            return int(round(float(s)))
-        except Exception:
-            return 0
-
-    try:
-        return int(round(float(v)))
-    except Exception:
-        return 0
-
-
-def _dedupe_by_latest(df, key_col=COL_KEY, date_col=COL_RESOLVED):
-    """
-    Mantém APENAS 1 linha por issue (key), escolhendo a com RESOLVED mais recente.
-    Isso evita somas duplicadas quando o Jira retorna o mesmo ticket em múltiplas linhas.
-    """
-    if date_col in df.columns:
-        df = df.sort_values(date_col).drop_duplicates(subset=[key_col], keep="last")
-    else:
-        df = df.drop_duplicates(subset=[key_col], keep="last")
-    return df
-
-
-def prepare_rotinas_columns(dfp: pd.DataFrame) -> pd.DataFrame:
-    """
-    Aplica:
-      - deduplicação por key (último resolved)
-      - normalização de 'Quantidade de encomendas'
-      - colunas de período (ano/mes/mes_str)
-    Retorna um novo DF pronto para agregação.
-    """
-    if dfp is None or dfp.empty:
-        return pd.DataFrame()
-
-    # 1) Deduplica (seguro contra duplicatas do Jira)
-    base = _dedupe_by_latest(dfp.copy(), key_col=COL_KEY, date_col=COL_RESOLVED)
-
-    # 2) Normaliza quantidade
-    if COL_QTD_ENCOM in base.columns:
-        base[COL_QTD_NORM] = base[COL_QTD_ENCOM].apply(_parse_quantidade_encomendas)
-    else:
-        base[COL_QTD_NORM] = 0
-
-    # 3) Garante datas e colunas de período
-    base[COL_RESOLVED] = pd.to_datetime(base[COL_RESOLVED], errors="coerce")
-    base = base.dropna(subset=[COL_RESOLVED]).copy()
-    base["period"]    = base[COL_RESOLVED].dt.to_period("M")
-    base["period_ts"] = base["period"].dt.to_timestamp()
-    base["ano"]       = base[COL_RESOLVED].dt.year
-    base["mes"]       = base[COL_RESOLVED].dt.month
-    base["mes_str"]   = base["period_ts"].dt.strftime("%b/%Y")
-
-    return base
-
-
-def render_rotinas_manuais(dfp: pd.DataFrame, ano_global: str, mes_global: str):
-    """
-    Renderiza a seção 'Rotinas Manuais' no projeto TDS.
-    NÃO mexe em nenhum outro gráfico do painel.
-    """
-    st.markdown("### 🛠️ Rotinas Manuais")
-
-    if dfp is None or dfp.empty:
-        st.info("Sem dados do Jira para Rotinas Manuais.")
-        return
-
-    # Prepara (dedup + parse + período)
-    base = prepare_rotinas_columns(dfp)
-    if base.empty:
-        st.info("Sem dados válidos (após deduplicação/normalização).")
-        return
-
-    # 🔎 DEBUG opcional
-    with st.expander("🔎 Mostrar detalhes (debug)", expanded=False):
-        st.caption("Tickets já deduplicados (1 por key) com a quantidade normalizada.")
-        debug_ano = st.selectbox(
-            "Ano (debug)", ["Todos"] + sorted(base["ano"].dropna().unique().tolist()), index=0
-        )
-        debug_mes = st.selectbox(
-            "Mês (debug)", ["Todos"] + [f"{m:02d}" for m in range(1, 13)], index=0
-        )
-        df_dbg = base.copy()
-        if debug_ano != "Todos":
-            df_dbg = df_dbg[df_dbg["ano"] == int(debug_ano)]
-        if debug_mes != "Todos":
-            df_dbg = df_dbg[df_dbg["mes"] == int(debug_mes)]
-        st.write(
-            df_dbg[[COL_KEY, COL_RESOLVED, COL_QTD_NORM]]
-            .sort_values(COL_RESOLVED)
-            .head(200)
-        )
-
-    # 🎯 Filtro global (ano/mês) — usa exatamente os valores do seletor global
-    plot = base.copy()
-    if ano_global != "Todos":
-        plot = plot[plot["ano"] == int(ano_global)]
-    if mes_global != "Todos":
-        plot = plot[plot["mes"] == int(mes_global)]
-
-    if plot.empty:
-        st.info("Sem dados de Rotinas Manuais para o período selecionado.")
-        return
-
-    # 📊 Agrega por mês com SOMA simples (após dedupe já está 1 issue por key)
-    agg = (
-        plot.groupby(["period", "period_ts", "mes_str"], as_index=False)[COL_QTD_NORM]
-        .sum()
-        .rename(columns={COL_QTD_NORM: "qtd"})
-        .sort_values("period_ts")
-    )
-    agg["label"] = agg["qtd"].map(lambda x: f"{x:,.0f}".replace(",", "."))
-
-    fig = px.bar(agg, x="mes_str", y="qtd", text="label", height=430)
-    fig.update_traces(textangle=0, textfont_size=14, cliponaxis=False)
-    fig.update_yaxes(title_text="Qtd encomendas", tickformat=",")
-    fig.update_layout(margin=dict(l=10, r=10, t=10, b=10))
-
-    # Info de outliers (igual ao que você tinha: mostra quantos descartados se quiser)
-    # Se quiser reativar a remoção de outliers > 100k, basta filtrar antes de agrupar.
-    st.plotly_chart(fig, use_container_width=True)
-# ===================== FIM DO PATCH ======================
+# Rodapé
+st.markdown("---")
+st.caption("Feito com 💙 — layout completo preservado, com correções pedidas (OKR/Meta, filtros, APP NE, Rotinas Manuais, Onboarding).")
