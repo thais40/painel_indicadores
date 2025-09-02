@@ -1,304 +1,192 @@
-# -*- coding: utf-8 -*-
-# ============================================================
-# Painel de Indicadores — Jira (Nuvemshop)
-# FULL v13 — mesmo layout; apenas atualização do endpoint Jira:
-#   /rest/api/3/search  ->  /rest/api/3/search/jql (nextPageToken)
-# ============================================================
+# === BLOCO A: Imports + Config + Jira helpers + jql_projeto ===
+from __future__ import annotations
 
-from datetime import datetime
-from zoneinfo import ZoneInfo
-import base64
-import pandas as pd
-import plotly.express as px
+import os
+import json
+import math
+from datetime import date, datetime
+from typing import List, Dict, Any, Optional
+
 import requests
+import pandas as pd
 import streamlit as st
-from requests.auth import HTTPBasicAuth
 
-# =====================
-# Configuração de página
-# =====================
-st.set_page_config(page_title="Painel de Indicadores — Jira", page_icon="📊", layout="wide")
+# ----------------- Config Jira via st.secrets -----------------
+JIRA_URL = st.secrets["JIRA_URL"].rstrip("/")
+EMAIL    = st.secrets["EMAIL"]
+TOKEN    = st.secrets["TOKEN"]
 
-# =====================
-# Secrets / Credenciais
-# =====================
-JIRA_URL = "https://tiendanube.atlassian.net"
-EMAIL = st.secrets.get("EMAIL", "")
-TOKEN = st.secrets.get("TOKEN", "")
+# Data mínima global
+DATA_INICIO = "2024-01-01"
 
-if not EMAIL or not TOKEN:
-    st.error("⚠️ Configure EMAIL e TOKEN em st.secrets para acessar o Jira.")
-    st.stop()
-
-auth = HTTPBasicAuth(EMAIL, TOKEN)
-
-# =========================
-# Constantes / Campos Jira
-# =========================
-SLA_CAMPOS = {
-    "TDS": "customfield_13744",
-    "TINE": "customfield_13744",
-    "INT": "customfield_13686",
-    "INTEL": "customfield_13686",
-}
-
-CAMPOS_ASSUNTO = {
-    "TDS": "customfield_13712",
-    "INT": "customfield_13643",
-    "TINE": "customfield_13699",
-    "INTEL": "issuetype",
-}
-
-CAMPO_AREA            = "customfield_13719"
-CAMPO_N3              = "customfield_13659"
-CAMPO_ORIGEM          = "customfield_13628"   # Origem do problema (APP NE)
-CAMPO_QTD_ENCOMENDAS  = "customfield_13666"   # Rotinas Manuais (TDS)
-
-META_SLA = {"TDS": 98.00, "INT": 96.00, "TINE": 96.00, "INTEL": 96.00}
-
-TITULO_ROTINA = "Volumetria / Tabela de erro CTE"
-ASSUNTO_ALVO_APPNE = "Problemas no App NE - App EN"
-
-PROJETOS = ["TDS", "INT", "TINE", "INTEL"]
-TITULOS  = {"TDS": "Tech Support", "INT": "Integrations", "TINE": "IT Support NE", "INTEL": "Intelligence"}
-
+# ----------------- Campos que queremos do Jira ----------------
+# Adapte a lista conforme os painéis que você já tem
 JIRA_FIELDS = [
-    "key", "summary", "project", "issuetype", "status",
-    "created", "updated", "resolutiondate", "resolved",
-    CAMPO_AREA, CAMPO_N3, CAMPO_ORIGEM, CAMPO_QTD_ENCOMENDAS
+    "summary",
+    "created",
+    "updated",
+    "resolutiondate",
+    # SLA resolução (SUP) — informe o customfield correto por projeto se necessário
+    "customfield_13744",
+    # Origem do problema (se usar em APP NE/EN)
+    "customfield_13628",
+    # Quantidade de encomendas (Rotinas Manuais)
+    "customfield_13666",
+    # Outros campos que seu arquivo já usa...
 ]
 
-# ============
-# Aparência UI
-# ============
-st.markdown(
+# ----------------- Nova chamada (API v3 /search/jql) -----------------
+def _jira_post_search_jql(jql: str, start_at: int = 0, max_results: int = 100) -> Dict[str, Any]:
     """
-<style>
-html, body, [class*="css"] { font-family: Inter, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial !important; }
-.stButton > button{ border-radius:10px; border:1px solid #e6e8ee; box-shadow:0 1px 2px rgba(16,24,40,.04); }
-.update-row{ display:inline-flex; align-items:center; gap:12px; margin-bottom:.5rem; }
-.update-caption{ color:#6B7280; font-size:.85rem; }
-.section-spacer{ height:10px; }
-</style>
-""",
-    unsafe_allow_html=True,
-)
-
-# ============
-# Cabeçalho UI
-# ============
-def _render_logo_and_title():
-    logo_bytes = None
-    b64 = st.secrets.get("LOGO_B64")
-    if b64:
-        try:
-            logo_bytes = base64.b64decode(b64)
-        except Exception:
-            logo_bytes = None
-    st.markdown('<div style="display:flex;align-items:center;gap:10px;margin:8px 0 20px 0;">', unsafe_allow_html=True)
-    if logo_bytes:
-        st.image(logo_bytes, width=300)
-        st.markdown('<span style="color:#111827;font-weight:600;font-size:15px;">Painel interno</span>', unsafe_allow_html=True)
-    else:
-        st.markdown('<span style="color:#111827;font-weight:600;font-size:15px;">Nuvemshop · Painel interno</span>', unsafe_allow_html=True)
-    st.markdown("</div>", unsafe_allow_html=True)
-
-_render_logo_and_title()
-st.title("📊 Painel de Indicadores — Jira")
-
-# Atualização / BRT
-TZ_BR = ZoneInfo("America/Sao_Paulo")
-def now_br_str():
-    return datetime.now(TZ_BR).strftime("%d/%m/%Y %H:%M:%S")
-
-if "last_update" not in st.session_state:
-    st.session_state["last_update"] = now_br_str()
-
-st.markdown('<div class="update-row">', unsafe_allow_html=True)
-if st.button("🔄 Atualizar dados"):
-    st.cache_data.clear()
-    st.session_state["last_update"] = now_br_str()
-    st.rerun()
-st.markdown(f'<span class="update-caption">🕒 Última atualização: {st.session_state["last_update"]} (BRT)</span>', unsafe_allow_html=True)
-st.markdown("</div>", unsafe_allow_html=True)
-
-# =================
-# Helpers de dados
-# =================
-def safe_get_value(x, key="value", fallback="—"):
-    if isinstance(x, dict):
-        return x.get(key, fallback)
-    return x if x is not None else fallback
-
-def dentro_sla_from_raw(sla_raw: dict) -> bool | None:
-    try:
-        if not sla_raw or not isinstance(sla_raw, dict):
-            return None
-        cycles = sla_raw.get("completedCycles") or []
-        if cycles:
-            last = cycles[-1]
-            if "breached" in last:
-                return not bool(last["breached"])
-            elapsed = (last.get("elapsedTime") or {}).get("millis")
-            goal = (last.get("goalDuration") or {}).get("millis")
-            if elapsed is not None and goal is not None:
-                return elapsed <= goal
-        return None
-    except Exception:
-        return None
-
-def normaliza_origem(s: str) -> str:
-    if s is None or str(s).strip() == "" or str(s).lower() in ("nan", "none"):
-        return "Outros/Não informado"
-    t = str(s).strip().lower().replace("-", " ").replace("_", " ")
-    t = " ".join(t.split())
-    if "app" in t and "ne" in t:
-        return "APP NE"
-    if "app" in t and ("en" in t or "eng" in t):
-        return "APP EN"
-    return "Outros/Não informado"
-
-def parse_qtd_encomendas(v):
-    import re
-    if isinstance(v, list):
-        v = next((x for x in reversed(v) if x not in (None, "")), None)
-    if v is None:
-        return 0
-    s = str(v).strip()
-    if not s:
-        return 0
-    digits = re.sub(r"[^\d]", "", s)
-    try:
-        return int(digits) if digits else 0
-    except Exception:
-        return 0
-# =====================
-# Busca de Issues (Jira) — NOVO ENDPOINT
-# =====================
-def _jira_get(jql: str, next_page_token: str | None = None, max_results: int = 100):
-    """
-    Usa o endpoint novo (enhanced search):
-      GET /rest/api/3/search/jql
-    Paginação por nextPageToken.
+    Usa a API nova do Jira: POST /rest/api/3/search/jql
     """
     url = f"{JIRA_URL}/rest/api/3/search/jql"
-
-    fields_list = JIRA_FIELDS + list(SLA_CAMPOS.values()) + list(CAMPOS_ASSUNTO.values())
-    params = {
+    headers = {"Content-Type": "application/json"}
+    payload = {
         "jql": jql,
+        "startAt": start_at,
         "maxResults": max_results,
-        "fields": ",".join(fields_list),
+        "fields": JIRA_FIELDS,
     }
-    if next_page_token:
-        params["nextPageToken"] = next_page_token
 
-    try:
-        resp = requests.get(url, params=params, auth=auth, timeout=60)
-    except Exception as e:
-        return {"error": str(e), "issues": [], "isLast": True}
+    r = requests.post(url, headers=headers, auth=(EMAIL, TOKEN), data=json.dumps(payload))
+    if r.status_code >= 400:
+        raise RuntimeError(f"Erro Jira {r.status_code}: {r.text[:400]}")
+    return r.json()
 
-    if resp.status_code != 200:
-        return {"error": f"{resp.status_code}: {resp.text[:400]}", "issues": [], "isLast": True}
-
-    return resp.json()
-
-@st.cache_data(show_spinner="🔄 Buscando dados do Jira...", ttl=60*30)
-def buscar_issues(projeto: str, jql: str, max_pages: int = 200) -> pd.DataFrame:
-    todos, page, last_error = [], 0, None
-    next_token = None
-    while True:
-        page += 1
-        data = _jira_get(jql, next_page_token=next_token, max_results=100)
-        if "error" in data and data["error"]:
-            last_error = data["error"]
-            break
-        issues = data.get("issues", [])
-        if not issues:
-            break
-        for it in issues:
-            f = it.get("fields", {})
-            row = {
-                "projeto": projeto,
-                "key": it.get("key"),
-                "summary": f.get("summary"),
-                "created": f.get("created"),
-                "updated": f.get("updated"),
-                "resolutiondate": f.get("resolutiondate"),
-                "resolved": f.get("resolved") or f.get("resolutiondate"),
-                "status": safe_get_value(f.get("status"), "name"),
-                "issuetype": f.get("issuetype"),
-                "assunto": f.get(CAMPOS_ASSUNTO[projeto]),
-                "area": f.get(CAMPO_AREA),
-                "n3": f.get(CAMPO_N3),
-                "origem": f.get(CAMPO_ORIGEM),
-                CAMPO_QTD_ENCOMENDAS: f.get(CAMPO_QTD_ENCOMENDAS),
-                "sla_raw": f.get(SLA_CAMPOS[projeto], {}),
-            }
-            todos.append(row)
-
-        # paginação nova
-        next_token = data.get("nextPageToken")
-        is_last = bool(data.get("isLast", not bool(next_token)))
-        if is_last or page >= max_pages:
-            break
-
-    dfp = pd.DataFrame(todos)
-
-    if last_error and dfp.empty:
-        st.warning(f"⚠️ Erro ao buscar Jira ({projeto}): {last_error}")
-        return dfp
-
-    if not dfp.empty:
-        # Converte UTC -> BRT ANTES de derivar mês
-        for c in ("created", "resolved", "resolutiondate", "updated"):
-            dfp[c] = pd.to_datetime(dfp[c], errors="coerce", utc=True).dt.tz_convert(ZoneInfo("America/Sao_Paulo")).dt.tz_localize(None)
-        # Colunas mensais
-        dfp["mes_created"]  = dfp["created"].dt.to_period("M").dt.to_timestamp()
-        dfp["mes_resolved"] = dfp["resolved"].dt.to_period("M").dt.to_timestamp()
-    return dfp
-
-# ======================
-# Carrega todos projetos
-# ======================
-DATA_INICIO = "2024-01-01"  # corte mínimo (inclusive)
-
-def jql_projeto(project_key: str, ano_selecionado: str, mes_selecionado: str) -> str:
+@st.cache_data(ttl=3600, show_spinner=False)
+def jira_search_all(jql: str) -> List[Dict[str, Any]]:
     """
-    Monta o JQL respeitando:
-      - sempre a data mínima (DATA_INICIO)
-      - se 'mes_selecionado' for 'Todos' => sem data final (traz até hoje)
-      - se um mês for escolhido => limita até o 1º dia do mês seguinte (created < next_month)
+    Busca todas as páginas de issues para um JQL.
     """
-    # sempre entre aspas para evitar o erro do 'INT' reservado
+    issues: List[Dict[str, Any]] = []
+    start = 0
+    page = _jira_post_search_jql(jql, start_at=start, max_results=100)
+    total = page.get("total", 0)
+    issues.extend(page.get("issues", []))
+
+    while len(issues) < total:
+        start = len(issues)
+        page = _jira_post_search_jql(jql, start_at=start, max_results=100)
+        issues.extend(page.get("issues", []))
+
+    return issues
+
+def normalize_issues(raw_issues: List[Dict[str, Any]], project_key: str) -> pd.DataFrame:
+    """
+    Converte issues em DataFrame e normaliza campos usados nos seus gráficos.
+    (Mantém o resto do seu pipeline igual.)
+    """
+    if not raw_issues:
+        return pd.DataFrame()
+
+    rows = []
+    for it in raw_issues:
+        f = it.get("fields", {}) or {}
+        rows.append({
+            "key": it.get("key"),
+            "project": project_key,
+            "summary": f.get("summary"),
+            "created": f.get("created"),
+            "updated": f.get("updated"),
+            "resolutiondate": f.get("resolutiondate"),
+            # SLA (ex.: customfield_13744) — mantenha como string/numero conforme você já trata depois
+            "sla_sup": f.get("customfield_13744"),
+            # Origem do problema
+            "origem_problema": f.get("customfield_13628"),
+            # Quantidade de encomendas (Rotinas Manuais)
+            "qtd_encomendas": f.get("customfield_13666"),
+        })
+
+    df = pd.DataFrame(rows)
+    # Datas para datetime
+    for col in ["created", "updated", "resolutiondate"]:
+        if col in df.columns:
+            df[col] = pd.to_datetime(df[col], errors="coerce")
+
+    # Campo numérico de encomendas (se vier string)
+    if "qtd_encomendas" in df.columns:
+        df["qtd_encomendas"] = pd.to_numeric(df["qtd_encomendas"], errors="coerce")
+
+    # Month label (mes_str) — seus gráficos usam isso
+    if "created" in df.columns:
+        df["mes_str"] = df["created"].dt.strftime("%b/%Y")
+
+    return df
+
+# ----------------- Montagem robusta de JQL -----------------
+def jql_projeto(project_key: str, ano_selecionado=None, mes_selecionado=None) -> str:
+    """
+    Monta um JQL seguro e com recorte:
+      - Sempre traz a partir de DATA_INICIO
+      - Se Mês != 'Todos': corta até 1º dia do mês seguinte (created < next_month)
+      - Se Mês == 'Todos': não corta (traz até hoje)
+      - Protege o nome do projeto com aspas (ex.: "INT") para evitar conflito com palavra reservada
+    """
+    if ano_selecionado is None:
+        ano_selecionado = "Todos"
+    if mes_selecionado is None:
+        mes_selecionado = "Todos"
+
     base = f'project = "{project_key}" AND created >= "{DATA_INICIO}"'
 
-    if mes_selecionado and mes_selecionado != "Todos":
-        # calcula o primeiro dia do mês seguinte
-        from datetime import date
-        m = int(mes_selecionado)
-        a = int(ano_selecionado)
-        if m == 12:
-            next_month_first = date(a + 1, 1, 1)
-        else:
-            next_month_first = date(a, m + 1, 1)
-        base += f' AND created < "{next_month_first:%Y-%m-%d}"'
+    if mes_selecionado != "Todos" and ano_selecionado != "Todos":
+        try:
+            a = int(ano_selecionado)
+            m = int(mes_selecionado)
+            # 1º dia do mês seguinte
+            if m == 12:
+                next_month_first = date(a + 1, 1, 1)
+            else:
+                next_month_first = date(a, m + 1, 1)
+            base += f' AND created < "{next_month_first:%Y-%m-%d}"'
+        except Exception:
+            # Se algo vier inválido, não aplica corte final
+            pass
 
+    # Ordenação padrão
     return base + " ORDER BY created ASC"
+# === BLOCO B: Header + Filtros Globais + JQL + Coleta ===
 
-# Exemplo de uso (mantém seu fluxo):
+st.markdown("## 📊 Painel de Indicadores — Jira")
+
+# Botão de atualizar cache
+c1, c2 = st.columns([1, 3])
+with c1:
+    if st.button("🔄 Atualizar dados"):
+        st.cache_data.clear()
+        st.rerun()
+with c2:
+    agora_brt = pd.Timestamp.utcnow().tz_convert("America/Sao_Paulo").strftime("%d/%m/%Y %H:%M:%S")
+    st.caption(f"🕒 Última atualização (BRT): {agora_brt}")
+
+# --------- Filtros Globais (devem vir ANTES de montar JQL) ----------
+col_ano, col_mes = st.columns(2)
+
+anos_opcoes = ["Todos"] + [str(y) for y in range(2024, date.today().year + 1)]
+meses_opcoes = ["Todos"] + [f"{m:02d}" for m in range(1, 12 + 1)]
+
+with col_ano:
+    # Mantém o padrão "Todos" se quiser sempre ver tudo até hoje
+    ano_global = st.selectbox("Ano (global)", anos_opcoes, index=anos_opcoes.index(str(date.today().year)))
+with col_mes:
+    mes_global = st.selectbox("Mês (global)", meses_opcoes, index=0)  # "Todos"
+
+# --------- Monta os JQLs (somente AGORA, após filtros) ----------
 JQL_TDS   = jql_projeto("TDS",   ano_global, mes_global)
 JQL_INT   = jql_projeto("INT",   ano_global, mes_global)
 JQL_TINE  = jql_projeto("TINE",  ano_global, mes_global)
 JQL_INTEL = jql_projeto("INTEL", ano_global, mes_global)
 
+# --------- Baixa e normaliza os dados ----------
 with st.spinner("Carregando TDS..."):
-    df_tds = buscar_issues("TDS", JQL_TDS)
+    df_tds  = normalize_issues(jira_search_all(JQL_TDS),  "TDS")
 with st.spinner("Carregando INT..."):
-    df_int = buscar_issues("INT", JQL_INT)
+    df_int  = normalize_issues(jira_search_all(JQL_INT),  "INT")
 with st.spinner("Carregando TINE..."):
-    df_tine = buscar_issues("TINE", JQL_TINE)
+    df_tine = normalize_issues(jira_search_all(JQL_TINE), "TINE")
 with st.spinner("Carregando INTEL..."):
-    df_intel = buscar_issues("INTEL", JQL_INTEL)
+    df_intel = normalize_issues(jira_search_all(JQL_INTEL), "INTEL")
 
 # ===================
 # Filtros Globais UI
