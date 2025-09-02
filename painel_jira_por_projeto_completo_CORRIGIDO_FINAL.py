@@ -54,7 +54,7 @@ CAMPO_N3              = "customfield_13659"
 CAMPO_ORIGEM          = "customfield_13628"   # Origem do problema (APP NE)
 CAMPO_QTD_ENCOMENDAS  = "customfield_13666"   # Rotinas Manuais (TDS)
 
-META_SLA = {"TDS": 98.00, "INT": 96.00, "TINE": 96.00, "INTEL": 95.00}
+META_SLA = {"TDS": 98.00, "INT": 96.00, "TINE": 96.00, "INTEL": 96.00}
 
 TITULO_ROTINA = "Volumetria / Tabela de erro CTE"
 ASSUNTO_ALVO_APPNE = "Problemas no App NE - App EN"
@@ -260,10 +260,12 @@ def buscar_issues(projeto: str, jql: str, max_pages: int = 200) -> pd.DataFrame:
 # ======================
 # Carrega todos projetos
 # ======================
-JQL_TDS   = 'project = TDS ORDER BY created ASC'
-JQL_INT   = 'project = INT ORDER BY created ASC'
-JQL_TINE  = 'project = TINE ORDER BY created ASC'
-JQL_INTEL = 'project = INTEL ORDER BY created ASC'
+DATA_INICIO = "2024-02-01"  # corte mínimo de datas (inclusive)
+
+JQL_TDS   = f'project = "TDS" AND created >= "{DATA_INICIO}" ORDER BY created ASC'
+JQL_INT   = f'project = "INT" AND created >= "{DATA_INICIO}" ORDER BY created ASC'
+JQL_TINE  = f'project = "TINE" AND created >= "{DATA_INICIO}" ORDER BY created ASC'
+JQL_INTEL = f'project = "INTEL" AND created >= "{DATA_INICIO}" ORDER BY created ASC'
 
 with st.spinner("Carregando TDS..."):
     df_tds = buscar_issues("TDS", JQL_TDS)
@@ -273,6 +275,7 @@ with st.spinner("Carregando TINE..."):
     df_tine = buscar_issues("TINE", JQL_TINE)
 with st.spinner("Carregando INTEL..."):
     df_intel = buscar_issues("INTEL", JQL_INTEL)
+
 
 # ===================
 # Filtros Globais UI
