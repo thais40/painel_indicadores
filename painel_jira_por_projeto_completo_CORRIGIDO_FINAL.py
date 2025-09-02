@@ -300,7 +300,6 @@ with st.spinner("Carregando TINE..."):
 with st.spinner("Carregando INTEL..."):
     df_intel = buscar_issues("INTEL", JQL_INTEL)
 
-
 # ===================
 # Filtros Globais UI
 # ===================
