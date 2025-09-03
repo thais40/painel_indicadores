@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import base64
 import re
+import unicodedata
 from datetime import datetime, date
 from zoneinfo import ZoneInfo
 from typing import Dict, Any, List, Optional
@@ -279,14 +280,26 @@ def buscar_issues(projeto: str, jql: str, max_pages: int = 500) -> pd.DataFrame:
 # ===================
 st.markdown("### 🔍 Filtros Globais")
 
-anos_opcoes = ["Todos"] + [str(y) for y in range(2024, date.today().year + 1)]
-meses_opcoes = ["Todos"] + [f"{m:02d}" for m in range(1, 13)]
+# anos disponíveis (extraídos dos dados) + "Todos" na frente
+anos_disponiveis = sorted({d.year for d in pd.to_datetime(pd.concat([
+    df_tds["created"], df_int["created"], df_tine["created"], df_intel["created"]
+], axis=0), errors="coerce").dropna()})
+opcoes_ano = ["Todos"] + [str(a) for a in anos_disponiveis]
 
-c1, c2 = st.columns(2)
-with c1:
-    ano_global = st.selectbox("Ano (global)", anos_opcoes, index=anos_opcoes.index(str(date.today().year)))
-with c2:
-    mes_global = st.selectbox("Mês (global)", meses_opcoes, index=0)  # "Todos"
+# meses 01..12 com "Todos" primeiro
+opcoes_mes = ["Todos"] + [f"{m:02d}" for m in range(1, 13)]
+
+# valores padrão na sessão
+if "ano_global" not in st.session_state:
+    st.session_state["ano_global"] = "Todos"
+if "mes_global" not in st.session_state:
+    st.session_state["mes_global"] = "Todos"
+
+colA, colB = st.columns(2)
+with colA:
+    ano_global = st.selectbox("Ano (global)", opcoes_ano, index=0, key="ano_global")
+with colB:
+    mes_global = st.selectbox("Mês (global)", opcoes_mes, index=0, key="mes_global")
 
 # ======================
 # JQL (com corte mínimo e mês opcional)
@@ -553,16 +566,24 @@ def render_app_ne(dfp: pd.DataFrame, ano_global: str, mes_global: str):
 # ===========================
 # Rotinas Manuais — TDS (OK)
 # ===========================
-def render_rotinas_manuais(dfp: pd.DataFrame, ano_global: str, mes_global: str):
-    """
-    Rotinas Manuais: soma somente os tickets cujo summary é exatamente
-    'Volumetria / Tabela de erro CTE' e que tenham quantidade > 0.
-    Usa 'resolved' como base do agrupamento mensal.
-    """
+def _canonical(s: str) -> str:
+    """normaliza texto: sem acentos, minúsculo, sem pontuação, 1 espaço, strip."""
+    if not isinstance(s, str):
+        s = "" if s is None else str(s)
+    s = unicodedata.normalize("NFKD", s)
+    s = "".join(ch for ch in s if not unicodedata.combining(ch))
+    s = s.lower()
+    s = re.sub(r"[^\w\s]", " ", s)       # remove pontuação (mantém letras/números/_ e espaços)
+    s = re.sub(r"\s+", " ", s).strip()   # espaços consecutivos -> 1 só
+    return s
 
-    # ---- valores padrão para não depender de variáveis globais ----
+def render_rotinas_manuais(dfp: pd.DataFrame, ano_global: str, mes_global: str):
+    """Rotinas Manuais: soma tickets com título-alvo (variações toleradas) e quantidade > 0."""
+    # Valores padrão (se não tiverem sido definidos em globals)
     COL_QTD_ROTINAS = globals().get("COL_QTD_ROTINAS", "customfield_13666")
     TITULO_ROTINAS  = globals().get("TITULO_ROTINAS", "Volumetria / Tabela de erro CTE")
+
+    alvo = _canonical(TITULO_ROTINAS)
 
     st.markdown("### 🛠️ Rotinas Manuais")
 
@@ -570,22 +591,22 @@ def render_rotinas_manuais(dfp: pd.DataFrame, ano_global: str, mes_global: str):
         st.info("Sem tickets para o período.")
         return
 
-    # 1) Filtra pelo título EXATO
-    mask_titulo = dfp["summary"].fillna("").str.strip().str.casefold() == TITULO_ROTINAS.casefold()
-    df_rot = dfp.loc[mask_titulo].copy()
+    # Normaliza summary e filtra tolerante (igual ou contém)
+    summ_norm = dfp["summary"].fillna("").map(_canonical)
+    mask = (summ_norm == alvo) | (summ_norm.str.contains(alvo, regex=False))
+    df_rot = dfp.loc[mask].copy()
 
-    # 2) Quantidade numérica e > 0
+    # Quantidade numérica > 0
     df_rot[COL_QTD_ROTINAS] = pd.to_numeric(df_rot[COL_QTD_ROTINAS], errors="coerce").fillna(0)
     df_rot = df_rot[df_rot[COL_QTD_ROTINAS] > 0]
 
-    # 3) Usa RESOLVED para compor a série mensal
+    # Resolved válido
     df_rot["resolved"] = pd.to_datetime(df_rot["resolved"], errors="coerce")
     df_rot = df_rot.dropna(subset=["resolved"])
 
-    # 4) Aplica filtros globais (se estiverem ativos)
+    # Filtros globais
     if ano_global and str(ano_global).lower() != "todos":
         df_rot = df_rot[df_rot["resolved"].dt.year.astype(str) == str(ano_global)]
-
     if mes_global and str(mes_global).lower() != "todos":
         m = f"{int(mes_global):02d}"
         df_rot = df_rot[df_rot["resolved"].dt.month.astype(str).str.zfill(2) == m]
@@ -594,20 +615,18 @@ def render_rotinas_manuais(dfp: pd.DataFrame, ano_global: str, mes_global: str):
         st.info("Sem tickets de **Volumetria / Tabela de erro CTE** com quantidade > 0 no período.")
         return
 
-    # 5) Coluna mensal (ex.: 'Jul/2025') e soma
+    # Série mensal
     df_rot["mes_str"] = df_rot["resolved"].dt.to_period("M").dt.strftime("%b/%Y")
-
     serie = (
         df_rot.groupby("mes_str", as_index=False)[COL_QTD_ROTINAS]
               .sum()
               .rename(columns={COL_QTD_ROTINAS: "qtd_encomendas"})
     )
-
     # Ordena cronologicamente
     serie["mes_ord"] = pd.to_datetime(serie["mes_str"], format="%b/%Y")
     serie = serie.sort_values("mes_ord").drop(columns=["mes_ord"])
 
-    # 6) Gráfico
+    # Gráfico
     fig = px.bar(
         serie,
         x="mes_str",
@@ -624,7 +643,7 @@ def render_rotinas_manuais(dfp: pd.DataFrame, ano_global: str, mes_global: str):
     )
     st.plotly_chart(fig, use_container_width=True)
 
-    # 7) Amostra para conferência
+    # Amostra pra conferência
     with st.expander("🔎 Tickets usados (amostra)"):
         st.dataframe(
             df_rot[["key", "summary", "resolved", COL_QTD_ROTINAS]]
