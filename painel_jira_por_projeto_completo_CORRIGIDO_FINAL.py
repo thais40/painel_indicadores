@@ -554,60 +554,80 @@ def render_app_ne(dfp: pd.DataFrame, ano_global: str, mes_global: str):
 # Rotinas Manuais — TDS (OK)
 # ===========================
 def render_rotinas_manuais(dfp: pd.DataFrame, ano_global: str, mes_global: str):
+    """
+    Rotinas Manuais: soma somente os tickets cujo summary é exatamente
+    'Volumetria / Tabela de erro CTE' e que tenham quantidade > 0.
+    Usa 'resolved' como base do agrupamento mensal.
+    """
     st.markdown("### 🛠️ Rotinas Manuais")
-    COL_QTD = CAMPO_QTD_ENCOMENDAS
-    if dfp.empty or COL_QTD not in dfp.columns or "resolved" not in dfp.columns or "key" not in dfp.columns:
-        st.info("Dados insuficientes para Rotinas Manuais.")
+
+    if dfp.empty:
+        st.info("Sem tickets para o período.")
         return
 
-    base = dfp[["key","resolved",COL_QTD,"summary"]].copy()
-    base["resolved"] = pd.to_datetime(base["resolved"], errors="coerce")
-    base = base.dropna(subset=["resolved"])
-    base[COL_QTD] = base[COL_QTD].apply(parse_qtd_encomendas)
-    base = base[base[COL_QTD] > 0]
-    if base.empty:
-        st.info("Sem dados de Rotinas Manuais.")
+    # 1) Filtra pelo título EXATO (sem alterar mais nada do resto do painel)
+    #    Se existir variação no título, troque por .str.contains(..., case=False, regex=False)
+    mask_titulo = dfp["summary"].fillna("").str.strip().str.casefold() == TITULO_ROTINAS.casefold()
+    df_rot = dfp.loc[mask_titulo].copy()
+
+    # 2) Garante numérico no campo de quantidade e mantém apenas > 0
+    df_rot[COL_QTD_ROTINAS] = pd.to_numeric(df_rot[COL_QTD_ROTINAS], errors="coerce").fillna(0)
+    df_rot = df_rot[df_rot[COL_QTD_ROTINAS] > 0]
+
+    # 3) Usa RESOLVED para compor a série mensal
+    df_rot["resolved"] = pd.to_datetime(df_rot["resolved"], errors="coerce")
+    df_rot = df_rot.dropna(subset=["resolved"])
+
+    # 4) Aplica filtros globais (se estiverem ativos no teu painel)
+    if ano_global and str(ano_global).lower() != "todos":
+        df_rot = df_rot[df_rot["resolved"].dt.year.astype(str) == str(ano_global)]
+
+    if mes_global and str(mes_global).lower() != "todos":
+        m = f"{int(mes_global):02d}"
+        df_rot = df_rot[df_rot["resolved"].dt.month.astype(str).str.zfill(2) == m]
+
+    if df_rot.empty:
+        st.info("Sem tickets de **Volumetria / Tabela de erro CTE** com quantidade > 0 no período.")
         return
 
-    # Dedup por ticket (último resolved)
-    base = base.sort_values("resolved").drop_duplicates(subset=["key"], keep="last")
+    # 5) Constrói a coluna mensal (ex.: 'Jul/2025') e agrega as quantidades
+    df_rot["mes_str"] = df_rot["resolved"].dt.to_period("M").dt.strftime("%b/%Y")
 
-    # Agregação por mês de RESOLVED
-    base["period"]    = base["resolved"].dt.to_period("M")
-    base["period_ts"] = base["period"].dt.to_timestamp()
-    base["ano"]       = base["period"].dt.year.astype(int)
-    base["mes"]       = base["period"].dt.month.astype(int)
-    base["mes_str"]   = base["period_ts"].dt.strftime("%b/%Y")
+    serie = (
+        df_rot.groupby("mes_str", as_index=False)[COL_QTD_ROTINAS]
+              .sum()
+              .rename(columns={COL_QTD_ROTINAS: "qtd_encomendas"})
+    )
 
-    # Aplicar filtros globais
-    if ano_global != "Todos":
-        base = base[base["ano"] == int(ano_global)]
-    if mes_global != "Todos":
-        if ano_global != "Todos":
-            alvo = pd.Period(f"{int(ano_global)}-{int(mes_global):02d}", freq="M")
-            base = base[base["period"] == alvo]
-        else:
-            base = base[base["mes"] == int(mes_global)]
+    # Ordena corretamente pela ordem cronológica (não alfabética)
+    serie["mes_ord"] = pd.to_datetime(serie["mes_str"], format="%b/%Y")
+    serie = serie.sort_values("mes_ord").drop(columns=["mes_ord"])
 
-    if base.empty:
-        st.info("Sem dados de Rotinas Manuais nos filtros selecionados.")
-        return
-
-    agg = (base.groupby(["period","period_ts","mes_str"], as_index=False)[COL_QTD]
-           .sum().rename(columns={COL_QTD:"Qtd encomendas"}).sort_values("period_ts"))
-    agg["label"] = agg["Qtd encomendas"].map(lambda x: f"{x:,.0f}".replace(",", "."))
-
-    fig = px.bar(agg, x="mes_str", y="Qtd encomendas", text="label", height=430)
-    fig.update_traces(textangle=0, textfont_size=14, cliponaxis=False)
-    fig.update_yaxes(title_text="Qtd encomendas", tickformat=",")
-    top = int(agg["Qtd encomendas"].max()) if not agg.empty else 0
-    if top > 0:
-        fig.update_yaxes(range=[0, top * 1.15])
+    # 6) Plota (mantém estilo/cores padrão do teu app)
+    fig = px.bar(
+        serie,
+        x="mes_str",
+        y="qtd_encomendas",
+        text="qtd_encomendas",
+        title=None,
+    )
+    fig.update_traces(texttemplate="%{text:,}", textposition="outside")
+    fig.update_layout(
+        yaxis_title="Qtd encomendas",
+        xaxis_title="mes_str",
+        uniformtext_minsize=8,
+        uniformtext_mode="hide",
+    )
     st.plotly_chart(fig, use_container_width=True)
 
+    # 7) Amostra (mantém para conferência)
     with st.expander("🔎 Tickets usados (amostra)"):
-        st.dataframe(base[["key","summary","resolved",COL_QTD]].sort_values("resolved"),
-                     use_container_width=True, hide_index=True)
+        st.dataframe(
+            df_rot[["key", "summary", "resolved", COL_QTD_ROTINAS]]
+            .sort_values("resolved", ascending=True)
+            .head(50),
+            use_container_width=True,
+        )
 
 # ===================
 # Onboarding — INT (mantido)
