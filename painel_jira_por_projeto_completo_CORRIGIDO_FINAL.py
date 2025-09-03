@@ -741,7 +741,7 @@ for projeto, tab in zip(PROJETOS, tabs):
 
         if projeto == "TDS":
             dfp = df_tds.copy()
-            opcoes = ["Geral","Criados vs Resolvidos","SLA","Assunto Relacionado","Área Solicitante","APP NE"]
+            opcoes = ["Geral","Criados vs Resolvidos","SLA","Assunto Relacionado","Área Solicitante","APP NE","Rotinas Manuais"]
         elif projeto == "INT":
             dfp = df_int.copy()
             opcoes = ["Geral","Criados vs Resolvidos","SLA","Assunto Relacionado","Área Solicitante","Onboarding"]
