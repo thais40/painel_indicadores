@@ -559,18 +559,22 @@ def render_rotinas_manuais(dfp: pd.DataFrame, ano_global: str, mes_global: str):
     'Volumetria / Tabela de erro CTE' e que tenham quantidade > 0.
     Usa 'resolved' como base do agrupamento mensal.
     """
+
+    # ---- valores padrão para não depender de variáveis globais ----
+    COL_QTD_ROTINAS = globals().get("COL_QTD_ROTINAS", "customfield_13666")
+    TITULO_ROTINAS  = globals().get("TITULO_ROTINAS", "Volumetria / Tabela de erro CTE")
+
     st.markdown("### 🛠️ Rotinas Manuais")
 
     if dfp.empty:
         st.info("Sem tickets para o período.")
         return
 
-    # 1) Filtra pelo título EXATO (sem alterar mais nada do resto do painel)
-    #    Se existir variação no título, troque por .str.contains(..., case=False, regex=False)
+    # 1) Filtra pelo título EXATO
     mask_titulo = dfp["summary"].fillna("").str.strip().str.casefold() == TITULO_ROTINAS.casefold()
     df_rot = dfp.loc[mask_titulo].copy()
 
-    # 2) Garante numérico no campo de quantidade e mantém apenas > 0
+    # 2) Quantidade numérica e > 0
     df_rot[COL_QTD_ROTINAS] = pd.to_numeric(df_rot[COL_QTD_ROTINAS], errors="coerce").fillna(0)
     df_rot = df_rot[df_rot[COL_QTD_ROTINAS] > 0]
 
@@ -578,7 +582,7 @@ def render_rotinas_manuais(dfp: pd.DataFrame, ano_global: str, mes_global: str):
     df_rot["resolved"] = pd.to_datetime(df_rot["resolved"], errors="coerce")
     df_rot = df_rot.dropna(subset=["resolved"])
 
-    # 4) Aplica filtros globais (se estiverem ativos no teu painel)
+    # 4) Aplica filtros globais (se estiverem ativos)
     if ano_global and str(ano_global).lower() != "todos":
         df_rot = df_rot[df_rot["resolved"].dt.year.astype(str) == str(ano_global)]
 
@@ -590,7 +594,7 @@ def render_rotinas_manuais(dfp: pd.DataFrame, ano_global: str, mes_global: str):
         st.info("Sem tickets de **Volumetria / Tabela de erro CTE** com quantidade > 0 no período.")
         return
 
-    # 5) Constrói a coluna mensal (ex.: 'Jul/2025') e agrega as quantidades
+    # 5) Coluna mensal (ex.: 'Jul/2025') e soma
     df_rot["mes_str"] = df_rot["resolved"].dt.to_period("M").dt.strftime("%b/%Y")
 
     serie = (
@@ -599,11 +603,11 @@ def render_rotinas_manuais(dfp: pd.DataFrame, ano_global: str, mes_global: str):
               .rename(columns={COL_QTD_ROTINAS: "qtd_encomendas"})
     )
 
-    # Ordena corretamente pela ordem cronológica (não alfabética)
+    # Ordena cronologicamente
     serie["mes_ord"] = pd.to_datetime(serie["mes_str"], format="%b/%Y")
     serie = serie.sort_values("mes_ord").drop(columns=["mes_ord"])
 
-    # 6) Plota (mantém estilo/cores padrão do teu app)
+    # 6) Gráfico
     fig = px.bar(
         serie,
         x="mes_str",
@@ -620,7 +624,7 @@ def render_rotinas_manuais(dfp: pd.DataFrame, ano_global: str, mes_global: str):
     )
     st.plotly_chart(fig, use_container_width=True)
 
-    # 7) Amostra (mantém para conferência)
+    # 7) Amostra para conferência
     with st.expander("🔎 Tickets usados (amostra)"):
         st.dataframe(
             df_rot[["key", "summary", "resolved", COL_QTD_ROTINAS]]
@@ -628,6 +632,7 @@ def render_rotinas_manuais(dfp: pd.DataFrame, ano_global: str, mes_global: str):
             .head(50),
             use_container_width=True,
         )
+
 # ===================
 # Onboarding — INT (mantido)
 # ===================
