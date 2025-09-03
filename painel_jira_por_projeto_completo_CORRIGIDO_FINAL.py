@@ -821,4 +821,4 @@ for projeto, tab in zip(PROJETOS, tabs):
 
 # Rodapé
 st.markdown("---")
-st.caption("Feito com 💙 — endpoint Jira /search/jql (enhanced), meses ordenados, SLA com 2 casas, Rotinas Manuais por resolved.")
+st.caption("💙 Desenvolvido por Thaís Franco.")
