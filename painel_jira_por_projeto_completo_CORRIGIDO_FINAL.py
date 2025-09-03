@@ -573,13 +573,32 @@ def _canonical(s: str) -> str:
     s = re.sub(r"\s+", " ", s).strip()   # espaços consecutivos -> 1 só
     return s
 
+import re
+import unicodedata
+
+def _canonical(s: str) -> str:
+    """normaliza texto: sem acentos, minúsculo, sem pontuação, 1 espaço, strip."""
+    if not isinstance(s, str):
+        s = "" if s is None else str(s)
+    s = unicodedata.normalize("NFKD", s)
+    s = "".join(ch for ch in s if not unicodedata.combining(ch))
+    s = s.lower()
+    s = re.sub(r"[^\w\s]", " ", s)
+    s = re.sub(r"\s+", " ", s).strip()
+    return s
+
 def render_rotinas_manuais(dfp: pd.DataFrame, ano_global: str, mes_global: str):
     """Rotinas Manuais: soma tickets com título-alvo (variações toleradas) e quantidade > 0."""
-    # Valores padrão (se não tiverem sido definidos em globals)
-    COL_QTD_ROTINAS = globals().get("COL_QTD_ROTINAS", "customfield_13666")
-    TITULO_ROTINAS  = globals().get("TITULO_ROTINAS", "Volumetria / Tabela de erro CTE")
 
-    alvo = _canonical(TITULO_ROTINAS)
+    COL_QTD_ROTINAS = globals().get("COL_QTD_ROTINAS", "customfield_13666")
+
+    # títulos aceitos
+    TITULOS_ROTINAS = [
+        "Volumetria / Tabela de erro CTE",
+        "Volumetria Correção de Erro de CTE",
+    ]
+    # normaliza todos
+    alvos = [_canonical(t) for t in TITULOS_ROTINAS]
 
     st.markdown("### 🛠️ Rotinas Manuais")
 
@@ -587,20 +606,20 @@ def render_rotinas_manuais(dfp: pd.DataFrame, ano_global: str, mes_global: str):
         st.info("Sem tickets para o período.")
         return
 
-    # Normaliza summary e filtra tolerante (igual ou contém)
+    # normaliza summaries
     summ_norm = dfp["summary"].fillna("").map(_canonical)
-    mask = (summ_norm == alvo) | (summ_norm.str.contains(alvo, regex=False))
+    mask = summ_norm.isin(alvos) | summ_norm.apply(lambda s: any(a in s for a in alvos))
     df_rot = dfp.loc[mask].copy()
 
-    # Quantidade numérica > 0
+    # quantidade numérica > 0
     df_rot[COL_QTD_ROTINAS] = pd.to_numeric(df_rot[COL_QTD_ROTINAS], errors="coerce").fillna(0)
     df_rot = df_rot[df_rot[COL_QTD_ROTINAS] > 0]
 
-    # Resolved válido
+    # resolved válido
     df_rot["resolved"] = pd.to_datetime(df_rot["resolved"], errors="coerce")
     df_rot = df_rot.dropna(subset=["resolved"])
 
-    # Filtros globais
+    # filtros globais
     if ano_global and str(ano_global).lower() != "todos":
         df_rot = df_rot[df_rot["resolved"].dt.year.astype(str) == str(ano_global)]
     if mes_global and str(mes_global).lower() != "todos":
@@ -608,38 +627,31 @@ def render_rotinas_manuais(dfp: pd.DataFrame, ano_global: str, mes_global: str):
         df_rot = df_rot[df_rot["resolved"].dt.month.astype(str).str.zfill(2) == m]
 
     if df_rot.empty:
-        st.info("Sem tickets de **Volumetria / Tabela de erro CTE** com quantidade > 0 no período.")
+        st.info("Sem tickets de Rotinas Manuais (títulos alvo) no período.")
         return
 
-    # Série mensal
+    # série mensal
     df_rot["mes_str"] = df_rot["resolved"].dt.to_period("M").dt.strftime("%b/%Y")
     serie = (
         df_rot.groupby("mes_str", as_index=False)[COL_QTD_ROTINAS]
               .sum()
               .rename(columns={COL_QTD_ROTINAS: "qtd_encomendas"})
     )
-    # Ordena cronologicamente
     serie["mes_ord"] = pd.to_datetime(serie["mes_str"], format="%b/%Y")
     serie = serie.sort_values("mes_ord").drop(columns=["mes_ord"])
 
-    # Gráfico
+    # gráfico
     fig = px.bar(
-        serie,
-        x="mes_str",
-        y="qtd_encomendas",
-        text="qtd_encomendas",
-        title=None,
+        serie, x="mes_str", y="qtd_encomendas", text="qtd_encomendas"
     )
     fig.update_traces(texttemplate="%{text:,}", textposition="outside")
     fig.update_layout(
-        yaxis_title="Qtd encomendas",
-        xaxis_title="mes_str",
-        uniformtext_minsize=8,
-        uniformtext_mode="hide",
+        yaxis_title="Qtd encomendas", xaxis_title="mes_str",
+        uniformtext_minsize=8, uniformtext_mode="hide",
     )
     st.plotly_chart(fig, use_container_width=True)
 
-    # Amostra pra conferência
+    # amostra
     with st.expander("🔎 Tickets usados (amostra)"):
         st.dataframe(
             df_rot[["key", "summary", "resolved", COL_QTD_ROTINAS]]
