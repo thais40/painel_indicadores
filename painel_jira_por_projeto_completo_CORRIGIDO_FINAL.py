@@ -24,6 +24,23 @@ from requests.auth import HTTPBasicAuth
 # =====================
 st.set_page_config(page_title="Painel de Indicadores — Jira", page_icon="📊", layout="wide")
 
+# --- Hotfix para evitar StreamlitDuplicateElementId em gráficos Plotly ---
+import uuid
+import streamlit as st
+
+# guarda referência do original
+__orig_plotly_chart = st.plotly_chart
+
+def _plotly_chart_unique(fig, *args, **kwargs):
+    # se não vier um element_id explícito, geramos um único
+    kwargs.setdefault("element_id", f"plt-{uuid.uuid4()}")
+    # mantemos o comportamento que você já usa
+    kwargs.setdefault("use_container_width", True)
+    return __orig_plotly_chart(fig, *args, **kwargs)
+
+# monkey-patch global: a partir daqui, todo st.plotly_chart recebe element_id único
+st.plotly_chart = _plotly_chart_unique
+
 # =====================
 # Credenciais / Jira
 # =====================
