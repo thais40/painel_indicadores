@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 # ============================================================
 # Painel de Indicadores — Jira (Nuvemshop)
-# FULL — migração p/ /rest/api/3/search/jql + Rotinas Manuais corrigido
+# FULL — corrigido: element_id único p/ Plotly + Rotinas Manuais + filtros "Todos"
 # ============================================================
 
 from __future__ import annotations
@@ -18,33 +18,17 @@ import plotly.express as px
 import requests
 import streamlit as st
 from requests.auth import HTTPBasicAuth
+from uuid import uuid4
 
 # =====================
 # Config de página
 # =====================
-st.set_page_config(page_title="Painel de Indicadores — Jira", page_icon="📊", layout="wide")
-
-# --- Hotfix para evitar StreamlitDuplicateElementId em gráficos Plotly ---
-import uuid
-import streamlit as st
-
-# guarda referência do original
-__orig_plotly_chart = st.plotly_chart
-
-def _plotly_chart_unique(fig, *args, **kwargs):
-    # se não vier um element_id explícito, geramos um único
-    kwargs.setdefault("element_id", f"plt-{uuid.uuid4()}")
-    # mantemos o comportamento que você já usa
-    kwargs.setdefault("use_container_width", True)
-    return __orig_plotly_chart(fig, *args, **kwargs)
-
-# monkey-patch global: a partir daqui, todo st.plotly_chart recebe element_id único
-st.plotly_chart = _plotly_chart_unique
+st.set_page_config(page_title="Painel de Indicadores", page_icon="📊", layout="wide")
 
 # =====================
 # Credenciais / Jira
 # =====================
-JIRA_URL = "https://tiendanube.atlassian.net"  # se preferir, coloque em st.secrets["JIRA_URL"]
+JIRA_URL = "https://tiendanube.atlassian.net"
 EMAIL = st.secrets.get("EMAIL", "")
 TOKEN = st.secrets.get("TOKEN", "")
 
@@ -58,52 +42,45 @@ TZ_BR = ZoneInfo("America/Sao_Paulo")
 # =====================
 # Constantes / Campos
 # =====================
-# SLA por projeto (JSM)
 SLA_CAMPOS = {
-    "TDS": "customfield_13744",  # SLA resolução (SUP)
-    "TINE": "customfield_13744", # idem
-    "INT": "customfield_13686",  # SLA INT
+    "TDS": "customfield_13744",   # SLA resolução (SUP) - TDS/TINE
+    "TINE": "customfield_13744",
+    "INT": "customfield_13686",   # SLA INT/INTEL
     "INTEL": "customfield_13686"
 }
 
-# Assunto Relacionado por projeto
 CAMPOS_ASSUNTO = {
     "TDS": "customfield_13712",
     "INT": "customfield_13643",
     "TINE": "customfield_13699",
-    "INTEL": "issuetype",  # para INTEL usamos issuetype no lugar de assunto
+    "INTEL": "issuetype",  # INTEL usa issuetype
 }
 
-CAMPO_AREA           = "customfield_13719"  # Área solicitante
-CAMPO_N3             = "customfield_13659"  # Encaminhamento N3 (Sim/Não)
-CAMPO_ORIGEM         = "customfield_13628"  # Origem do problema (APP NE / APP EN)
-CAMPO_QTD_ENCOMENDAS = "customfield_13666"  # Rotinas Manuais — Quantidade de encomendas
+CAMPO_AREA           = "customfield_13719"   # Área solicitante
+CAMPO_N3             = "customfield_13659"   # Encaminhamento N3 (Sim/Não)
+CAMPO_ORIGEM         = "customfield_13628"   # Origem do problema (APP NE / APP EN)
+CAMPO_QTD_ENCOMENDAS = "customfield_13666"   # Rotinas Manuais — Quantidade de encomendas
 
 META_SLA = {"TDS": 98.00, "INT": 96.00, "TINE": 96.00, "INTEL": 96.00}
 
 ASSUNTO_ALVO_APPNE = "Problemas no App NE - App EN"
-TITULO_ROTINA = "Volumetria / Tabela de erro CTE"  # (mantido caso use também por summary)
-
 PROJETOS = ["TDS", "INT", "TINE", "INTEL"]
 TITULOS  = {"TDS": "Tech Support", "INT": "Integrations", "TINE": "IT Support NE", "INTEL": "Intelligence"}
 
-# Campos comuns que pediremos sempre no /search/jql
+# Campos a buscar no /search/jql
 JIRA_FIELDS_BASE = [
     "key", "summary", "created", "updated", "resolutiondate", "resolved", "status", "issuetype",
     CAMPO_AREA, CAMPO_N3, CAMPO_ORIGEM, CAMPO_QTD_ENCOMENDAS
 ]
-# Campos de SLA e assunto (incluímos todos e usamos conforme projeto)
 FIELDS_SLA_ALL = list(set(SLA_CAMPOS.values()))
 FIELDS_ASSUNTO_ALL = list(set([v for v in CAMPOS_ASSUNTO.values() if v != "issuetype"]))
-
 FIELDS_ALL: List[str] = list(dict.fromkeys(JIRA_FIELDS_BASE + FIELDS_SLA_ALL + FIELDS_ASSUNTO_ALL))
 
-# Corte mínimo global (inclusive)
-DATA_INICIO = "2024-02-01"
+DATA_INICIO = "2024-01-01"
 
-# ============
-# Aparência UI
-# ============
+# =================
+# Aparência / Header
+# =================
 st.markdown(
     """
 <style>
@@ -111,7 +88,6 @@ html, body, [class*="css"] { font-family: Inter, system-ui, -apple-system, Segoe
 .stButton > button{ border-radius:10px; border:1px solid #e6e8ee; box-shadow:0 1px 2px rgba(16,24,40,.04); }
 .update-row{ display:inline-flex; align-items:center; gap:12px; margin-bottom:.5rem; }
 .update-caption{ color:#6B7280; font-size:.85rem; }
-.section-spacer{ height:10px; }
 </style>
 """,
     unsafe_allow_html=True,
@@ -134,7 +110,7 @@ def _render_logo_and_title():
     st.markdown("</div>", unsafe_allow_html=True)
 
 _render_logo_and_title()
-st.title("📊 Painel de Indicadores")
+st.title("📊 Painel de Indicadores — Jira")
 
 def now_br_str():
     return datetime.now(TZ_BR).strftime("%d/%m/%Y %H:%M:%S")
@@ -150,6 +126,19 @@ if st.button("🔄 Atualizar dados"):
 st.markdown(f'<span class="update-caption">🕒 Última atualização: {st.session_state["last_update"]} (BRT)</span>', unsafe_allow_html=True)
 st.markdown("</div>", unsafe_allow_html=True)
 
+# ==========================
+# Helper: Plotly com chave única
+# ==========================
+def show_plot(fig, nome_bloco: str, projeto: str, ano: str, mes: str):
+    """
+    Renderiza um gráfico Plotly com key única, evitando StreamlitDuplicateElementId.
+    """
+    st.plotly_chart(
+        fig,
+        use_container_width=True,
+        key=f"plt-{nome_bloco}-{projeto}-{ano}-{mes}-{uuid4()}",
+    )
+
 # =================
 # Helpers de dados
 # =================
@@ -159,10 +148,7 @@ def safe_get_value(x, key="value", fallback="—"):
     return x if x is not None else fallback
 
 def dentro_sla_from_raw(sla_raw: dict) -> Optional[bool]:
-    """
-    Lê estrutura Jira Service Management (completedCycles/elapsedTime/goalDuration/breached).
-    True = dentro do SLA, False = fora, None = indeterminado.
-    """
+    """True = dentro do SLA, False = fora, None = indeterminado."""
     try:
         if not sla_raw or not isinstance(sla_raw, dict):
             return None
@@ -215,9 +201,7 @@ def parse_qtd_encomendas(v):
 # =====================
 def _jira_search_jql(jql: str, next_page_token: Optional[str] = None, max_results: int = 100) -> Dict[str, Any]:
     """
-    GET /rest/api/3/search/jql  (Enhanced)
-      params: jql, fields, maxResults, nextPageToken
-      response: issues[], nextPageToken, isLast
+    GET /rest/api/3/search/jql (Enhanced)
     """
     url = f"{JIRA_URL}/rest/api/3/search/jql"
     params = {
@@ -287,24 +271,18 @@ def buscar_issues(projeto: str, jql: str, max_pages: int = 500) -> pd.DataFrame:
         # Converte UTC -> BRT ANTES de derivar mês
         for c in ("created", "resolved", "resolutiondate", "updated"):
             dfp[c] = pd.to_datetime(dfp[c], errors="coerce", utc=True).dt.tz_convert(TZ_BR).dt.tz_localize(None)
-        # Colunas mensais
         dfp["mes_created"]  = dfp["created"].dt.to_period("M").dt.to_timestamp()
         dfp["mes_resolved"] = dfp["resolved"].dt.to_period("M").dt.to_timestamp()
     return dfp
 
 # ===================
-# Filtros Globais UI
+# Filtros Globais UI (iniciam em "Todos")
 # ===================
 st.markdown("### 🔍 Filtros Globais")
-
-# opções de ano: de 2024 até o ano atual
 ano_atual = date.today().year
 opcoes_ano = ["Todos"] + [str(y) for y in range(2024, ano_atual + 1)]
-
-# opções de mês: 01..12
 opcoes_mes = ["Todos"] + [f"{m:02d}" for m in range(1, 13)]
 
-# inicia em "Todos"
 colA, colB = st.columns(2)
 with colA:
     ano_global = st.selectbox("Ano (global)", opcoes_ano, index=0, key="ano_global")
@@ -312,7 +290,7 @@ with colB:
     mes_global = st.selectbox("Mês (global)", opcoes_mes, index=0, key="mes_global")
 
 # ======================
-# JQL (com corte mínimo e mês opcional)
+# JQL (corte mínimo; mês opcional)
 # ======================
 def jql_projeto(project_key: str, ano_sel: str, mes_sel: str) -> str:
     base = f'project = "{project_key}" AND created >= "{DATA_INICIO}"'
@@ -326,7 +304,7 @@ def jql_projeto(project_key: str, ano_sel: str, mes_sel: str) -> str:
     return base + " ORDER BY created ASC"
 
 JQL_TDS   = jql_projeto("TDS",   ano_global, mes_global)
-JQL_INT   = jql_projeto("INT",   ano_global, mes_global)   # INT entre aspas evita palavra reservada
+JQL_INT   = jql_projeto("INT",   ano_global, mes_global)
 JQL_TINE  = jql_projeto("TINE",  ano_global, mes_global)
 JQL_INTEL = jql_projeto("INTEL", ano_global, mes_global)
 
@@ -437,7 +415,7 @@ def render_criados_resolvidos(dfp: pd.DataFrame, projeto: str, ano_global: str, 
     fig = px.bar(show, x="mes_str", y=["Criados","Resolvidos"], barmode="group", text_auto=True, height=440)
     fig.update_traces(textangle=0, textfont_size=14, cliponaxis=False)
     fig.update_xaxes(categoryorder="array", categoryarray=show["mes_str"].tolist())
-    st.plotly_chart(fig, use_container_width=True)
+    show_plot(fig, "criados_resolvidos", projeto, ano_global, mes_global)
 
 def render_sla(dfp: pd.DataFrame, projeto: str, ano_global: str, mes_global: str):
     st.markdown("### ⏱️ SLA")
@@ -469,7 +447,7 @@ def render_sla(dfp: pd.DataFrame, projeto: str, ano_global: str, mes_global: str
     fig.update_traces(texttemplate="%{y:.2f}%", textposition="outside", textfont_size=14, cliponaxis=False)
     fig.update_yaxes(ticksuffix="%")
     fig.update_xaxes(categoryorder="array", categoryarray=show["mes_str"].tolist())
-    show_plot(fig, nome_bloco="sla", projeto=projeto, ano=ano_global, mes=mes_global)
+    show_plot(fig, "sla", projeto, ano_global, mes_global)
 
 def render_assunto(dfp: pd.DataFrame, projeto: str, ano_global: str, mes_global: str):
     st.markdown("### 🧾 Assunto Relacionado")
@@ -559,48 +537,24 @@ def render_app_ne(dfp: pd.DataFrame, ano_global: str, mes_global: str):
     serie["mes_str"] = pd.Categorical(serie["mes_str"], categories=cats, ordered=True)
 
     fig_app = px.bar(
-        serie,
-        x="mes_str",
-        y="Qtd",
-        color="origem_cat",
-        barmode="group",
+        serie, x="mes_str", y="Qtd", color="origem_cat", barmode="group",
         title="APP NE — Volumes por mês e Origem do problema",
-        color_discrete_map={
-            "APP NE": "#2ca02c",
-            "APP EN": "#1f77b4",
-            "Outros/Não informado": "#9ca3af"
-        },
-        text="Qtd",
-        height=460,
-        # 👇 força ordem da legenda e das cores
+        color_discrete_map={"APP NE":"#2ca02c","APP EN":"#1f77b4","Outros/Não informado":"#9ca3af"},
+        text="Qtd", height=460,
         category_orders={"origem_cat": ["APP NE", "APP EN", "Outros/Não informado"]},
     )
-    fig_app.update_traces(texttemplate="%{text:.0f}", textposition="outside", textfont_size=16, cliponaxis=False)
+    fig_app.update_traces(texttemplate="%{text}", textposition="outside", textfont_size=16, cliponaxis=False)
     max_qtd = int(serie["Qtd"].max()) if not serie.empty else 0
     if max_qtd > 0:
         fig_app.update_yaxes(range=[0, max_qtd * 1.25])
     fig_app.update_layout(yaxis_title="Qtd", xaxis_title="Mês",
                           uniformtext_minsize=14, uniformtext_mode="show",
                           bargap=0.15, margin=dict(t=70, r=20, b=60, l=50))
-    st.plotly_chart(fig_app, use_container_width=True)
+    show_plot(fig_app, "app_ne", "TDS", ano_global, mes_global)
 
 # ===========================
-# Rotinas Manuais — TDS (OK)
+# Rotinas Manuais — TDS (com dois títulos aceitos + normalização)
 # ===========================
-def _canonical(s: str) -> str:
-    """normaliza texto: sem acentos, minúsculo, sem pontuação, 1 espaço, strip."""
-    if not isinstance(s, str):
-        s = "" if s is None else str(s)
-    s = unicodedata.normalize("NFKD", s)
-    s = "".join(ch for ch in s if not unicodedata.combining(ch))
-    s = s.lower()
-    s = re.sub(r"[^\w\s]", " ", s)       # remove pontuação (mantém letras/números/_ e espaços)
-    s = re.sub(r"\s+", " ", s).strip()   # espaços consecutivos -> 1 só
-    return s
-
-import re
-import unicodedata
-
 def _canonical(s: str) -> str:
     """normaliza texto: sem acentos, minúsculo, sem pontuação, 1 espaço, strip."""
     if not isinstance(s, str):
@@ -613,32 +567,27 @@ def _canonical(s: str) -> str:
     return s
 
 def render_rotinas_manuais(dfp: pd.DataFrame, ano_global: str, mes_global: str):
-    """Rotinas Manuais: soma tickets com título-alvo (variações toleradas) e quantidade > 0."""
-
-    COL_QTD_ROTINAS = globals().get("COL_QTD_ROTINAS", "customfield_13666")
-
-    # títulos aceitos
-    TITULOS_ROTINAS = [
-        "Volumetria / Tabela de erro CTE",
-        "Volumetria Correção de Erro de CTE",
-    ]
-    # normaliza todos
-    alvos = [_canonical(t) for t in TITULOS_ROTINAS]
-
     st.markdown("### 🛠️ Rotinas Manuais")
 
     if dfp.empty:
         st.info("Sem tickets para o período.")
         return
 
-    # normaliza summaries
+    # títulos aceitos (normalizados)
+    TITULOS_ROTINAS = [
+        "Volumetria / Tabela de erro CTE",
+        "Volumetria Correção de Erro de CTE",
+    ]
+    alvos = [_canonical(t) for t in TITULOS_ROTINAS]
+
+    # normaliza summaries e filtra tolerante (igual ou contém)
     summ_norm = dfp["summary"].fillna("").map(_canonical)
     mask = summ_norm.isin(alvos) | summ_norm.apply(lambda s: any(a in s for a in alvos))
     df_rot = dfp.loc[mask].copy()
 
     # quantidade numérica > 0
-    df_rot[COL_QTD_ROTINAS] = pd.to_numeric(df_rot[COL_QTD_ROTINAS], errors="coerce").fillna(0)
-    df_rot = df_rot[df_rot[COL_QTD_ROTINAS] > 0]
+    df_rot[CAMPO_QTD_ENCOMENDAS] = pd.to_numeric(df_rot[CAMPO_QTD_ENCOMENDAS], errors="coerce").fillna(0)
+    df_rot = df_rot[df_rot[CAMPO_QTD_ENCOMENDAS] > 0]
 
     # resolved válido
     df_rot["resolved"] = pd.to_datetime(df_rot["resolved"], errors="coerce")
@@ -658,9 +607,9 @@ def render_rotinas_manuais(dfp: pd.DataFrame, ano_global: str, mes_global: str):
     # série mensal
     df_rot["mes_str"] = df_rot["resolved"].dt.to_period("M").dt.strftime("%b/%Y")
     serie = (
-        df_rot.groupby("mes_str", as_index=False)[COL_QTD_ROTINAS]
+        df_rot.groupby("mes_str", as_index=False)[CAMPO_QTD_ENCOMENDAS]
               .sum()
-              .rename(columns={COL_QTD_ROTINAS: "qtd_encomendas"})
+              .rename(columns={CAMPO_QTD_ENCOMENDAS: "qtd_encomendas"})
     )
     serie["mes_ord"] = pd.to_datetime(serie["mes_str"], format="%b/%Y")
     serie = serie.sort_values("mes_ord").drop(columns=["mes_ord"])
@@ -674,12 +623,12 @@ def render_rotinas_manuais(dfp: pd.DataFrame, ano_global: str, mes_global: str):
         yaxis_title="Qtd encomendas", xaxis_title="mes_str",
         uniformtext_minsize=8, uniformtext_mode="hide",
     )
-    st.plotly_chart(fig, use_container_width=True)
+    show_plot(fig, "rotinas", "TDS", ano_global, mes_global)
 
     # amostra
     with st.expander("🔎 Tickets usados (amostra)"):
         st.dataframe(
-            df_rot[["key", "summary", "resolved", COL_QTD_ROTINAS]]
+            df_rot[["key", "summary", "resolved", CAMPO_QTD_ENCOMENDAS]]
             .sort_values("resolved", ascending=True)
             .head(50),
             use_container_width=True,
@@ -739,7 +688,7 @@ def render_onboarding(dfp: pd.DataFrame, ano_global: str, mes_global: str):
         if max_q > 0:
             fig_onb.update_xaxes(range=[0, max_q*1.25])
         fig_onb.update_layout(margin=dict(t=50, r=20, b=30, l=10), bargap=0.25)
-        st.plotly_chart(fig_onb, use_container_width=True)
+        show_plot(fig_onb, "onboarding", "INT", ano_global, mes_global)
 
     # simulação de dinheiro perdido
     st.markdown("---")
@@ -825,10 +774,8 @@ for projeto, tab in zip(PROJETOS, tabs):
         elif visao == "Rotinas Manuais":
             render_rotinas_manuais(dfp, ano_global, mes_global)
 
-
-        # Geral — ordem fixa (como você usa)
+        # Geral — ordem fixa
         else:
-            # Criados vs Resolvidos ANTES do SLA (mantido)
             render_criados_resolvidos(dfp, projeto, ano_global, mes_global)
             render_sla(dfp, projeto, ano_global, mes_global)
             render_assunto(dfp, projeto, ano_global, mes_global)
@@ -841,7 +788,6 @@ for projeto, tab in zip(PROJETOS, tabs):
 
             if projeto == "TDS":
                 render_app_ne(dfp, ano_global, mes_global)
-                # Rotinas Manuais no final (expander)
                 with st.expander("🛠️ Rotinas Manuais", expanded=False):
                     render_rotinas_manuais(dfp, ano_global, mes_global)
 
@@ -851,4 +797,4 @@ for projeto, tab in zip(PROJETOS, tabs):
 
 # Rodapé
 st.markdown("---")
-st.caption("💙 Desenvolvido por Thaís Franco.")
+st.caption("💙 Desenvolvido por Thaís Franco")
