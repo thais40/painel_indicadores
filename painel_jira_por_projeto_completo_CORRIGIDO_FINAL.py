@@ -61,7 +61,7 @@ CAMPO_N3             = "customfield_13659"  # Encaminhamento N3 (Sim/Não)
 CAMPO_ORIGEM         = "customfield_13628"  # Origem do problema (APP NE / APP EN)
 CAMPO_QTD_ENCOMENDAS = "customfield_13666"  # Rotinas Manuais — Quantidade de encomendas
 
-META_SLA = {"TDS": 98.00, "INT": 96.00, "TINE": 96.00, "INTEL": 95.00}
+META_SLA = {"TDS": 98.00, "INT": 96.00, "TINE": 96.00, "INTEL": 96.00}
 
 ASSUNTO_ALVO_APPNE = "Problemas no App NE - App EN"
 TITULO_ROTINA = "Volumetria / Tabela de erro CTE"  # (mantido caso use também por summary)
@@ -81,7 +81,7 @@ FIELDS_ASSUNTO_ALL = list(set([v for v in CAMPOS_ASSUNTO.values() if v != "issue
 FIELDS_ALL: List[str] = list(dict.fromkeys(JIRA_FIELDS_BASE + FIELDS_SLA_ALL + FIELDS_ASSUNTO_ALL))
 
 # Corte mínimo global (inclusive)
-DATA_INICIO = "2024-01-01"
+DATA_INICIO = "2024-02-01"
 
 # ============
 # Aparência UI
@@ -116,7 +116,7 @@ def _render_logo_and_title():
     st.markdown("</div>", unsafe_allow_html=True)
 
 _render_logo_and_title()
-st.title("📊 Painel de Indicadores — Jira")
+st.title("📊 Painel de Indicadores")
 
 def now_br_str():
     return datetime.now(TZ_BR).strftime("%d/%m/%Y %H:%M:%S")
@@ -495,7 +495,7 @@ def render_encaminhamentos(dfp: pd.DataFrame, ano_global: str, mes_global: str):
 # APP NE — TDS
 # ===================
 def render_app_ne(dfp: pd.DataFrame, ano_global: str, mes_global: str):
-    st.markdown("### 📱 APP NE — Origem do problema")
+    st.markdown("### 📱 APP NE")
     if dfp.empty:
         st.info("Sem dados para APP NE.")
         return
@@ -628,7 +628,6 @@ def render_rotinas_manuais(dfp: pd.DataFrame, ano_global: str, mes_global: str):
             .head(50),
             use_container_width=True,
         )
-
 # ===================
 # Onboarding — INT (mantido)
 # ===================
