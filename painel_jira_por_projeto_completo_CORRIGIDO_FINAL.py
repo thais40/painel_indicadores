@@ -278,9 +278,6 @@ def buscar_issues(projeto: str, jql: str, max_pages: int = 500) -> pd.DataFrame:
 # ===================
 # Filtros Globais UI
 # ===================
-# ===================
-# Filtros Globais UI
-# ===================
 st.markdown("### 🔍 Filtros Globais")
 
 # opções de ano: de 2024 até o ano atual
@@ -795,6 +792,11 @@ for projeto, tab in zip(PROJETOS, tabs):
                 render_app_ne(dfp, ano_global, mes_global)
             else:
                 st.info("APP NE disponível somente para Tech Support.")
+
+        # 7) Rotinas Manuais
+        elif visao == "Rotinas Manuais":
+            render_rotinas_manuais(dfp, ano_global, mes_global)
+
 
         # Geral — ordem fixa (como você usa)
         else:
