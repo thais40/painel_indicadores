@@ -542,10 +542,21 @@ def render_app_ne(dfp: pd.DataFrame, ano_global: str, mes_global: str):
     serie["mes_str"] = pd.Categorical(serie["mes_str"], categories=cats, ordered=True)
 
     fig_app = px.bar(
-        serie, x="mes_str", y="Qtd", color="origem_cat", barmode="group",
+        serie,
+        x="mes_str",
+        y="Qtd",
+        color="origem_cat",
+        barmode="group",
         title="APP NE — Volumes por mês e Origem do problema",
-        color_discrete_map={"APP NE":"#2ca02c","APP EN":"#1f77b4","Outros/Não informado":"#9ca3af"},
-        text="Qtd", height=460
+        color_discrete_map={
+            "APP NE": "#2ca02c",
+            "APP EN": "#1f77b4",
+            "Outros/Não informado": "#9ca3af"
+        },
+        text="Qtd",
+        height=460,
+        # 👇 força ordem da legenda e das cores
+        category_orders={"origem_cat": ["APP NE", "APP EN", "Outros/Não informado"]},
     )
     fig_app.update_traces(texttemplate="%{text:.0f}", textposition="outside", textfont_size=16, cliponaxis=False)
     max_qtd = int(serie["Qtd"].max()) if not serie.empty else 0
