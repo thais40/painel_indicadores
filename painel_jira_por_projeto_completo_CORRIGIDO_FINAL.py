@@ -469,7 +469,7 @@ def render_sla(dfp: pd.DataFrame, projeto: str, ano_global: str, mes_global: str
     fig.update_traces(texttemplate="%{y:.2f}%", textposition="outside", textfont_size=14, cliponaxis=False)
     fig.update_yaxes(ticksuffix="%")
     fig.update_xaxes(categoryorder="array", categoryarray=show["mes_str"].tolist())
-    st.plotly_chart(fig, use_container_width=True)
+    show_plot(fig, nome_bloco="sla", projeto=projeto, ano=ano_global, mes=mes_global)
 
 def render_assunto(dfp: pd.DataFrame, projeto: str, ano_global: str, mes_global: str):
     st.markdown("### 🧾 Assunto Relacionado")
