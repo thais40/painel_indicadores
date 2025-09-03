@@ -278,23 +278,19 @@ def buscar_issues(projeto: str, jql: str, max_pages: int = 500) -> pd.DataFrame:
 # ===================
 # Filtros Globais UI
 # ===================
+# ===================
+# Filtros Globais UI
+# ===================
 st.markdown("### 🔍 Filtros Globais")
 
-# anos disponíveis (extraídos dos dados) + "Todos" na frente
-anos_disponiveis = sorted({d.year for d in pd.to_datetime(pd.concat([
-    df_tds["created"], df_int["created"], df_tine["created"], df_intel["created"]
-], axis=0), errors="coerce").dropna()})
-opcoes_ano = ["Todos"] + [str(a) for a in anos_disponiveis]
+# opções de ano: de 2024 até o ano atual
+ano_atual = date.today().year
+opcoes_ano = ["Todos"] + [str(y) for y in range(2024, ano_atual + 1)]
 
-# meses 01..12 com "Todos" primeiro
+# opções de mês: 01..12
 opcoes_mes = ["Todos"] + [f"{m:02d}" for m in range(1, 13)]
 
-# valores padrão na sessão
-if "ano_global" not in st.session_state:
-    st.session_state["ano_global"] = "Todos"
-if "mes_global" not in st.session_state:
-    st.session_state["mes_global"] = "Todos"
-
+# inicia em "Todos"
 colA, colB = st.columns(2)
 with colA:
     ano_global = st.selectbox("Ano (global)", opcoes_ano, index=0, key="ano_global")
