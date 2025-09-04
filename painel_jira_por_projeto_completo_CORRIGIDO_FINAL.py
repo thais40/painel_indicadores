@@ -110,7 +110,7 @@ def _render_logo_and_title():
     st.markdown("</div>", unsafe_allow_html=True)
 
 _render_logo_and_title()
-st.title("📊 Painel de Indicadores — Jira")
+st.title("📊 Painel de Indicadores")
 
 def now_br_str():
     return datetime.now(TZ_BR).strftime("%d/%m/%Y %H:%M:%S")
