@@ -76,7 +76,7 @@ FIELDS_SLA_ALL = list(set(SLA_CAMPOS.values()))
 FIELDS_ASSUNTO_ALL = list(set([v for v in CAMPOS_ASSUNTO.values() if v != "issuetype"]))
 FIELDS_ALL: List[str] = list(dict.fromkeys(JIRA_FIELDS_BASE + FIELDS_SLA_ALL + FIELDS_ASSUNTO_ALL))
 
-DATA_INICIO = "2024-04-01"
+DATA_INICIO = "2024-05-01"
 
 # =================
 # Aparência / Header
