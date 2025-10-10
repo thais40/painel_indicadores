@@ -1,3 +1,8 @@
+# === PATCH: filtros locais (não reconsulta o Jira a cada filtro) ===
+# Gerado em 2025-10-10T17:47:28
+# Alteração: todas as chamadas a jql_projeto que usavam ano_global/mes_global
+# agora usam "Todos", "Todos". Os filtros são aplicados apenas no pandas.
+# ================================================================
 # -*- coding: utf-8 -*-
 # ============================================================
 # Painel de Indicadores — Jira (Nuvemshop)
@@ -76,7 +81,7 @@ FIELDS_SLA_ALL = list(set(SLA_CAMPOS.values()))
 FIELDS_ASSUNTO_ALL = list(set([v for v in CAMPOS_ASSUNTO.values() if v != "issuetype"]))
 FIELDS_ALL: List[str] = list(dict.fromkeys(JIRA_FIELDS_BASE + FIELDS_SLA_ALL + FIELDS_ASSUNTO_ALL))
 
-DATA_INICIO = "2024-05-01"
+DATA_INICIO = "2024-04-01"
 
 # =================
 # Aparência / Header
@@ -303,10 +308,10 @@ def jql_projeto(project_key: str, ano_sel: str, mes_sel: str) -> str:
         base += f' AND created < "{next_month_first:%Y-%m-%d}"'
     return base + " ORDER BY created ASC"
 
-JQL_TDS   = jql_projeto("TDS",   ano_global, mes_global)
-JQL_INT   = jql_projeto("INT",   ano_global, mes_global)
-JQL_TINE  = jql_projeto("TINE",  ano_global, mes_global)
-JQL_INTEL = jql_projeto("INTEL", ano_global, mes_global)
+JQL_TDS   = jql_projeto("TDS",   "Todos", "Todos")
+JQL_INT   = jql_projeto("INT",   "Todos", "Todos")
+JQL_TINE  = jql_projeto("TINE",  "Todos", "Todos")
+JQL_INTEL = jql_projeto("INTEL", "Todos", "Todos")
 
 # ======================
 # Carrega todos projetos
