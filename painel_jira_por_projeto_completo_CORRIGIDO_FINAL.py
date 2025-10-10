@@ -1,8 +1,8 @@
-# === PATCH: filtros locais (não reconsulta o Jira a cada filtro) ===
-# Gerado em 2025-10-10T17:47:28
-# Alteração: todas as chamadas a jql_projeto que usavam ano_global/mes_global
-# agora usam "Todos", "Todos". Os filtros são aplicados apenas no pandas.
-# ================================================================
+# === PATCH: Filtros locais também nas visualizações ===
+# Esta versão busca do Jira uma única vez (JQL fixo desde DATA_INICIO)
+# e aplica todos os filtros (globais e das visualizações) apenas em memória (pandas/df_monthly_all).
+# Gerado em 2025-10-10T21:12:08
+# ======================================================
 # -*- coding: utf-8 -*-
 # ============================================================
 # Painel de Indicadores — Jira (Nuvemshop)
