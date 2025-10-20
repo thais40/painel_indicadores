@@ -720,13 +720,38 @@ def render_onboarding(dfp: pd.DataFrame, ano_global: str, mes_global: str):
             fig_cli = px.bar(serie, x="mes_str", y="qtd", text="qtd", title="Tickets – Cliente novo", height=420)
             fig_cli.update_traces(textposition="outside", cliponaxis=False)
 
+            
+            # --- smarter annotation placement to avoid overlaps ---
             ymax = max(5, int(serie["qtd"].max() or 0))
-            bump = ymax * 0.06
+            base = max(3.0, ymax * 0.06)  # base vertical offset
+            min_gap = max(6.0, ymax * 0.04)  # minimal gap between stacked labels
+            prev_y = -1e9
+            i = 0
             for _, r in serie.iterrows():
                 txt = r.get("annot") or ""
-                if txt:
-                    color = "blue" if (r.get("pct") or 0) >= 0 else "red"
-                    fig_cli.add_annotation(x=r["mes_str"], y=r["qtd"] + bump, text=txt, showarrow=False, font=dict(size=12, color=color))
+                if not txt:
+                    i += 1
+                    continue
+                # choose tier so that each label is above the previous by at least min_gap
+                tier = 0
+                target = r["qtd"] + base * (1 + tier)
+                while target <= prev_y + min_gap:
+                    tier += 1
+                    target = r["qtd"] + base * (1 + tier)
+                prev_y = target
+                # small left/right nudge to reduce horizontal collisions
+                xshift = -12 if (i % 2 == 0) else 12
+                color = "blue" if (r.get("pct") or 0) >= 0 else "red"
+                fig_cli.add_annotation(
+                    x=r["mes_str"],
+                    y=target,
+                    text=txt,
+                    showarrow=False,
+                    font=dict(size=12, color=color),
+                    xshift=xshift,
+                )
+                i += 1
+)
 
     # 2) Tipo de Integração (horizontal)
     def _tipo_from_assunto(s: str) -> str:
