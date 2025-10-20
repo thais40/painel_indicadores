@@ -751,7 +751,6 @@ def render_onboarding(dfp: pd.DataFrame, ano_global: str, mes_global: str):
                     xshift=xshift,
                 )
                 i += 1
-)
 
     # 2) Tipo de Integração (horizontal)
     def _tipo_from_assunto(s: str) -> str:
