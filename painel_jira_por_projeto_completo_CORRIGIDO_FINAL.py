@@ -730,22 +730,23 @@ def render_onboarding(dfp: pd.DataFrame, ano_global: str, mes_global: str):
             
 # --- aligned annotation placement (fixed height) ---
 # raise top margin to make room for labels
-fig_cli.update_layout(margin=dict(l=10, r=10, t=60, b=10))
-for _, r in serie.iterrows():
-    txt = r.get("annot") or ""
-    if not txt:
-        continue
-    color = "blue" if (r.get("pct") or 0) >= 0 else "red"
-    fig_cli.add_annotation(
-        x=r["mes_str"],
-        y=1.02,             # fixed height just above plot area
-        xref="x",
-        yref="paper",
-        text=txt,
-        showarrow=False,
-        font=dict(size=12, color=color),
-        yanchor="bottom"
-    )
+if 'fig_cli' in locals():
+    fig_cli.update_layout(margin=dict(l=10, r=10, t=60, b=10))
+    for _, r in serie.iterrows():
+        txt = r.get("annot") or ""
+        if not txt:
+            continue
+        color = "blue" if (r.get("pct") or 0) >= 0 else "red"
+        fig_cli.add_annotation(
+            x=r["mes_str"],
+            y=1.02,             # fixed height just above plot area
+            xref="x",
+            yref="paper",
+            text=txt,
+            showarrow=False,
+            font=dict(size=12, color=color),
+            yanchor="bottom"
+        )
 
     # 2) Tipo de Integração (horizontal)
     def _tipo_from_assunto(s: str) -> str:
