@@ -666,23 +666,10 @@ def render_onboarding(dfp: pd.DataFrame, ano_global: str, mes_global: str):
     dfp = ensure_assunto_nome(dfp.copy(), "INT")
     df_onb = aplicar_filtro_global(dfp.copy(), "mes_created", ano_global, mes_global)
 
-    total_clientes_novos = int((df_onb["assunto_nome"] == ASSUNTO_CLIENTE_NOVO).sum())
-    df_erros = df_onb[df_onb["assunto_nome"].isin(ASSUNTOS_ERROS)].copy()
-    pend_mask = df_onb["status"].isin(STATUS_PENDENCIAS)
-
-    tickets_pendencias = int(pend_mask.sum())
-    possiveis_clientes = int(pend_mask.sum())
-
-    c1,c2,c3,c4 = st.columns(4)
-    c1.metric("Tickets clientes novos", total_clientes_novos)
-    c2.metric("Erros onboarding", int(len(df_erros)))
-    c3.metric("Tickets com pendências", tickets_pendencias)
-    c4.metric("Possíveis clientes", possiveis_clientes)
-
     # ======================
-    # NOVOS GRÁFICOS — Onboarding
+    # NOVOS GRÁFICOS — Onboarding (alinhados)
     # ======================
-    # 1) Tickets – Cliente novo (mensal com variação %)
+    # 1) Tickets – Cliente novo (mensal com variação % e labels alinhados)
     df_cli_novo = df_onb[df_onb["assunto_nome"].astype(str).str.contains("cliente novo", case=False, na=False)].copy()
     if not df_cli_novo.empty:
         serie = (
@@ -692,7 +679,6 @@ def render_onboarding(dfp: pd.DataFrame, ano_global: str, mes_global: str):
             .rename("qtd")
             .reset_index()
         )
-        # preencher meses faltantes entre min e max
         if not serie.empty:
             idx = pd.date_range(serie["created"].min(), serie["created"].max(), freq="MS")
             serie = (
@@ -706,10 +692,10 @@ def render_onboarding(dfp: pd.DataFrame, ano_global: str, mes_global: str):
             serie["pct"] = serie["qtd"].pct_change() * 100.0
 
             def _ann(v):
-                import math
-                if v is None or pd.isna(v):
+                import math, numpy as np
+                if v is None or (isinstance(v, float) and pd.isna(v)):
                     return ""
-                v2 = round(v)
+                v2 = int(round(v))
                 if v2 > 0:  return f"▲ {v2}%"
                 if v2 < 0:  return f"▼ {abs(v2)}%"
                 return "0%"
@@ -719,34 +705,24 @@ def render_onboarding(dfp: pd.DataFrame, ano_global: str, mes_global: str):
 
             fig_cli = px.bar(serie, x="mes_str", y="qtd", text="qtd", title="Tickets – Cliente novo", height=420)
             fig_cli.update_traces(textposition="outside", cliponaxis=False)
-
-            
-            # --- smarter annotation placement to avoid overlaps ---
-            ymax = max(5, int(serie["qtd"].max() or 0))
-            base = max(3.0, ymax * 0.06)  # base vertical offset
-            min_gap = max(6.0, ymax * 0.04)  # minimal gap between stacked labels
-            prev_y = -1e9
-            i = 0
-            
-# --- aligned annotation placement (fixed height) ---
-# raise top margin to make room for labels
-if 'fig_cli' in locals():
-    fig_cli.update_layout(margin=dict(l=10, r=10, t=60, b=10))
-    for _, r in serie.iterrows():
-        txt = r.get("annot") or ""
-        if not txt:
-            continue
-        color = "blue" if (r.get("pct") or 0) >= 0 else "red"
-        fig_cli.add_annotation(
-            x=r["mes_str"],
-            y=1.02,             # fixed height just above plot area
-            xref="x",
-            yref="paper",
-            text=txt,
-            showarrow=False,
-            font=dict(size=12, color=color),
-            yanchor="bottom"
-        )
+            # alinhar % no topo do gráfico (fixo)
+            if "annot" in serie.columns:
+                fig_cli.update_layout(margin=dict(l=10, r=10, t=60, b=10))
+                for _, r in serie.iterrows():
+                    txt = r.get("annot") or ""
+                    if not txt:
+                        continue
+                    color = "blue" if (r.get("pct") or 0) >= 0 else "red"
+                    fig_cli.add_annotation(
+                        x=r["mes_str"],
+                        y=1.02,
+                        xref="x",
+                        yref="paper",
+                        text=txt,
+                        showarrow=False,
+                        font=dict(size=12, color=color),
+                        yanchor="bottom"
+                    )
 
     # 2) Tipo de Integração (horizontal)
     def _tipo_from_assunto(s: str) -> str:
@@ -767,7 +743,6 @@ if 'fig_cli' in locals():
     fig_tipo = px.bar(tipo_counts, x="Qtd", y="tipo", orientation="h", text="Qtd", title="Tipo de Integração", height=420)
     fig_tipo.update_traces(textposition="outside", cliponaxis=False)
 
-    # Layout lado a lado (2:1)
     c1, c2 = st.columns((2, 1))
     with c1:
         if "fig_cli" in locals():
@@ -776,7 +751,22 @@ if 'fig_cli' in locals():
             st.info("Sem dados para 'Cliente novo' com os filtros atuais.")
     with c2:
         show_plot(fig_tipo, "onb_tipo_int", "INT", ano_global, mes_global)
-    
+    # ======================
+
+
+    total_clientes_novos = int((df_onb["assunto_nome"] == ASSUNTO_CLIENTE_NOVO).sum())
+    df_erros = df_onb[df_onb["assunto_nome"].isin(ASSUNTOS_ERROS)].copy()
+    pend_mask = df_onb["status"].isin(STATUS_PENDENCIAS)
+
+    tickets_pendencias = int(pend_mask.sum())
+    possiveis_clientes = int(pend_mask.sum())
+
+    c1,c2,c3,c4 = st.columns(4)
+    c1.metric("Tickets clientes novos", total_clientes_novos)
+    c2.metric("Erros onboarding", int(len(df_erros)))
+    c3.metric("Tickets com pendências", tickets_pendencias)
+    c4.metric("Possíveis clientes", possiveis_clientes)
+
     # gráfico horizontal por erros
     if not df_erros.empty:
         cont_erros = (df_erros["assunto_nome"].value_counts()
