@@ -727,30 +727,25 @@ def render_onboarding(dfp: pd.DataFrame, ano_global: str, mes_global: str):
             min_gap = max(6.0, ymax * 0.04)  # minimal gap between stacked labels
             prev_y = -1e9
             i = 0
-            for _, r in serie.iterrows():
-                txt = r.get("annot") or ""
-                if not txt:
-                    i += 1
-                    continue
-                # choose tier so that each label is above the previous by at least min_gap
-                tier = 0
-                target = r["qtd"] + base * (1 + tier)
-                while target <= prev_y + min_gap:
-                    tier += 1
-                    target = r["qtd"] + base * (1 + tier)
-                prev_y = target
-                # small left/right nudge to reduce horizontal collisions
-                xshift = -12 if (i % 2 == 0) else 12
-                color = "blue" if (r.get("pct") or 0) >= 0 else "red"
-                fig_cli.add_annotation(
-                    x=r["mes_str"],
-                    y=target,
-                    text=txt,
-                    showarrow=False,
-                    font=dict(size=12, color=color),
-                    xshift=xshift,
-                )
-                i += 1
+            
+# --- aligned annotation placement (fixed height) ---
+# raise top margin to make room for labels
+fig_cli.update_layout(margin=dict(l=10, r=10, t=60, b=10))
+for _, r in serie.iterrows():
+    txt = r.get("annot") or ""
+    if not txt:
+        continue
+    color = "blue" if (r.get("pct") or 0) >= 0 else "red"
+    fig_cli.add_annotation(
+        x=r["mes_str"],
+        y=1.02,             # fixed height just above plot area
+        xref="x",
+        yref="paper",
+        text=txt,
+        showarrow=False,
+        font=dict(size=12, color=color),
+        yanchor="bottom"
+    )
 
     # 2) Tipo de Integração (horizontal)
     def _tipo_from_assunto(s: str) -> str:
