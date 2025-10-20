@@ -679,6 +679,84 @@ def render_onboarding(dfp: pd.DataFrame, ano_global: str, mes_global: str):
     c3.metric("Tickets com pendências", tickets_pendencias)
     c4.metric("Possíveis clientes", possiveis_clientes)
 
+    # ======================
+    # NOVOS GRÁFICOS — Onboarding
+    # ======================
+    # 1) Tickets – Cliente novo (mensal com variação %)
+    df_cli_novo = df_onb[df_onb["assunto_nome"].astype(str).str.contains("cliente novo", case=False, na=False)].copy()
+    if not df_cli_novo.empty:
+        serie = (
+            df_cli_novo
+            .groupby(pd.Grouper(key="created", freq="MS"))
+            .size()
+            .rename("qtd")
+            .reset_index()
+        )
+        # preencher meses faltantes entre min e max
+        if not serie.empty:
+            idx = pd.date_range(serie["created"].min(), serie["created"].max(), freq="MS")
+            serie = (
+                serie.set_index("created")
+                     .reindex(idx)
+                     .fillna(0.0)
+                     .rename_axis("created")
+                     .reset_index()
+            )
+            serie["qtd"] = serie["qtd"].astype(int)
+            serie["pct"] = serie["qtd"].pct_change() * 100.0
+
+            def _ann(v):
+                import math
+                if v is None or pd.isna(v):
+                    return ""
+                v2 = round(v)
+                if v2 > 0:  return f"▲ {v2}%"
+                if v2 < 0:  return f"▼ {abs(v2)}%"
+                return "0%"
+
+            serie["annot"] = serie["pct"].map(_ann)
+            serie["mes_str"] = serie["created"].dt.strftime("%Y %b")
+
+            fig_cli = px.bar(serie, x="mes_str", y="qtd", text="qtd", title="Tickets – Cliente novo", height=420)
+            fig_cli.update_traces(textposition="outside", cliponaxis=False)
+
+            ymax = max(5, int(serie["qtd"].max() or 0))
+            bump = ymax * 0.06
+            for _, r in serie.iterrows():
+                txt = r.get("annot") or ""
+                if txt:
+                    color = "blue" if (r.get("pct") or 0) >= 0 else "red"
+                    fig_cli.add_annotation(x=r["mes_str"], y=r["qtd"] + bump, text=txt, showarrow=False, font=dict(size=12, color=color))
+
+    # 2) Tipo de Integração (horizontal)
+    def _tipo_from_assunto(s: str) -> str:
+        s = (s or "").strip().lower()
+        if "cliente novo" in s: return "Cliente novo"
+        if "alteração" in s and "plataforma" in s: return "Alteração de plataforma"
+        if "conta filho" in s: return "Conta filho"
+        return "Outros"
+
+    tipo_counts = (
+        df_onb.assign(tipo=df_onb["assunto_nome"].map(_tipo_from_assunto))
+              .groupby("tipo").size().rename("Qtd").reset_index()
+    )
+    priority = ["Cliente novo","Outros","Alteração de plataforma","Conta filho"]
+    tipo_counts["ord"] = tipo_counts["tipo"].apply(lambda x: priority.index(x) if x in priority else len(priority)+1)
+    tipo_counts = tipo_counts.sort_values(["ord","Qtd"], ascending=[True, False])
+
+    fig_tipo = px.bar(tipo_counts, x="Qtd", y="tipo", orientation="h", text="Qtd", title="Tipo de Integração", height=420)
+    fig_tipo.update_traces(textposition="outside", cliponaxis=False)
+
+    # Layout lado a lado (2:1)
+    c1, c2 = st.columns((2, 1))
+    with c1:
+        if "fig_cli" in locals():
+            show_plot(fig_cli, "onb_cli_novo", "INT", ano_global, mes_global)
+        else:
+            st.info("Sem dados para 'Cliente novo' com os filtros atuais.")
+    with c2:
+        show_plot(fig_tipo, "onb_tipo_int", "INT", ano_global, mes_global)
+    
     # gráfico horizontal por erros
     if not df_erros.empty:
         cont_erros = (df_erros["assunto_nome"].value_counts()
