@@ -14,7 +14,7 @@ from __future__ import annotations
 import base64
 import re
 import unicodedata
-from datetime import datetime, date
+from datetime import datetime, date, timedelta
 from zoneinfo import ZoneInfo
 from typing import Dict, Any, List, Optional
 
@@ -24,6 +24,7 @@ import requests
 import streamlit as st
 from requests.auth import HTTPBasicAuth
 from uuid import uuid4
+import os
 
 # =====================
 # Config de página
@@ -71,6 +72,12 @@ META_SLA = {"TDS": 98.00, "INT": 96.00, "TINE": 96.00, "INTEL": 96.00}
 ASSUNTO_ALVO_APPNE = "Problemas no App NE - App EN"
 PROJETOS = ["TDS", "INT", "TINE", "INTEL"]
 TITULOS  = {"TDS": "Tech Support", "INT": "Integrations", "TINE": "IT Support NE", "INTEL": "Intelligence"}
+
+# === Disk cache (persistente entre sessões/reinícios) ===
+CACHE_DIR = os.environ.get("PANEL_CACHE_DIR", "/tmp/painel_jira_cache")
+CACHE_TTL_HOURS = 12  # TTL do cache em disco
+os.makedirs(CACHE_DIR, exist_ok=True)
+
 
 # Campos a buscar no /search/jql
 JIRA_FIELDS_BASE = [
@@ -125,6 +132,7 @@ if "last_update" not in st.session_state:
 
 st.markdown('<div class="update-row">', unsafe_allow_html=True)
 if st.button("🔄 Atualizar dados"):
+    clear_disk_cache()
     st.cache_data.clear()
     st.session_state["last_update"] = now_br_str()
     st.rerun()
@@ -313,17 +321,74 @@ JQL_INT   = jql_projeto("INT",   "Todos", "Todos")
 JQL_TINE  = jql_projeto("TINE",  "Todos", "Todos")
 JQL_INTEL = jql_projeto("INTEL", "Todos", "Todos")
 
+
+# === Helpers p/ Cache em Disco ===
+def _cache_path(project_key: str) -> str:
+    return os.path.join(CACHE_DIR, f"{project_key}.parquet")
+
+def _disk_cache_is_fresh(path: str) -> bool:
+    try:
+        mtime = datetime.fromtimestamp(os.path.getmtime(path), tz=TZ_BR).replace(tzinfo=None)
+        age = datetime.now(TZ_BR).replace(tzinfo=None) - mtime
+        return age.total_seconds() < CACHE_TTL_HOURS * 3600
+    except Exception:
+        return False
+
+def _disk_cache_load(project_key: str):
+    path = _cache_path(project_key)
+    if os.path.exists(path) and _disk_cache_is_fresh(path):
+        try:
+            return pd.read_parquet(path)
+        except Exception:
+            try:
+                return pd.read_csv(path.replace(".parquet", ".csv"))
+            except Exception:
+                return None
+    return None
+
+def _disk_cache_save(project_key: str, df: pd.DataFrame) -> None:
+    if df is None or df.empty:
+        return
+    path = _cache_path(project_key)
+    try:
+        df.to_parquet(path, index=False)
+    except Exception:
+        df.to_csv(path.replace(".parquet", ".csv"), index=False)
+
+def clear_disk_cache():
+    try:
+        for proj in PROJETOS:
+            p = _cache_path(proj)
+            if os.path.exists(p):
+                os.remove(p)
+            pcsv = p.replace(".parquet", ".csv")
+            if os.path.exists(pcsv):
+                os.remove(pcsv)
+    except Exception:
+        pass
+
+def buscar_issues_disk_cached(projeto: str, jql: str) -> pd.DataFrame:
+    df = _disk_cache_load(projeto)
+    if df is not None:
+        return df
+    df = buscar_issues(projeto, jql)
+    try:
+        _disk_cache_save(projeto, df)
+    except Exception:
+        pass
+    return df
+
 # ======================
 # Carrega todos projetos
 # ======================
 with st.spinner("Carregando TDS..."):
-    df_tds = buscar_issues("TDS", JQL_TDS)
+    df_tds = buscar_issues_disk_cached("TDS", JQL_TDS)
 with st.spinner("Carregando INT..."):
-    df_int = buscar_issues("INT", JQL_INT)
+    df_int = buscar_issues_disk_cached("INT", JQL_INT)
 with st.spinner("Carregando TINE..."):
-    df_tine = buscar_issues("TINE", JQL_TINE)
+    df_tine = buscar_issues_disk_cached("TINE", JQL_TINE)
 with st.spinner("Carregando INTEL..."):
-    df_intel = buscar_issues("INTEL", JQL_INTEL)
+    df_intel = buscar_issues_disk_cached("INTEL", JQL_INTEL)
 
 if all(d.empty for d in [df_tds, df_int, df_tine, df_intel]):
     st.warning("Sem dados do Jira em nenhum projeto (verifique credenciais e permissões).")
