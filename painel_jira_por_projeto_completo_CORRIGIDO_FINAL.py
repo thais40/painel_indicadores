@@ -705,15 +705,25 @@ def render_onboarding(dfp: pd.DataFrame, ano_global: str, mes_global: str):
             )
             serie["qtd"] = serie["qtd"].astype(int)
             serie["pct"] = serie["qtd"].pct_change() * 100.0
-
+            # substitui infinitos por NaN para evitar Overflow no anotador
+            serie["pct"].replace([float("inf"), float("-inf")], float("nan"), inplace=True)
             def _ann(v):
-                if v is None or (isinstance(v, float) and pd.isna(v)):
+                import math
+                try:
+                    # None/NaN/Inf → sem label
+                    if v is None:
+                        return ""
+                    if isinstance(v, float) and (math.isnan(v) or math.isinf(v)):
+                        return ""
+                    # converte para inteiro com proteção
+                    v2 = int(round(v))
+                    if v2 > 0:
+                        return f"▲ {v2}%"
+                    if v2 < 0:
+                        return f"▼ {abs(v2)}%"
+                    return "0%"
+                except Exception:
                     return ""
-                v2 = int(round(v))
-                if v2 > 0:  return f"▲ {v2}%"
-                if v2 < 0:  return f"▼ {abs(v2)}%"
-                return "0%"
-
             serie["annot"] = serie["pct"].map(_ann)
             serie["mes_str"] = serie["created"].dt.strftime("%Y %b")
 
