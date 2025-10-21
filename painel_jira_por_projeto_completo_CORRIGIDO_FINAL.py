@@ -24,6 +24,7 @@ import requests
 import streamlit as st
 from requests.auth import HTTPBasicAuth
 from uuid import uuid4
+import os
 
 # =====================
 # Config de página
@@ -71,29 +72,6 @@ META_SLA = {"TDS": 98.00, "INT": 96.00, "TINE": 96.00, "INTEL": 96.00}
 ASSUNTO_ALVO_APPNE = "Problemas no App NE - App EN"
 PROJETOS = ["TDS", "INT", "TINE", "INTEL"]
 TITULOS  = {"TDS": "Tech Support", "INT": "Integrations", "TINE": "IT Support NE", "INTEL": "Intelligence"}
-
-# === Disk cache (persistente entre sessões/reinícios) ===
-CACHE_DIR = os.environ.get("PANEL_CACHE_DIR", "/tmp/painel_jira_cache")
-CACHE_TTL_HOURS = 12
-
-# --- Early helpers so clear_disk_cache is available before sidebar button ---
-def _cache_path(project_key: str) -> str:
-    return os.path.join(CACHE_DIR, f"{project_key}.parquet")
-
-def clear_disk_cache():
-    try:
-        for proj in PROJETOS:
-            p = _cache_path(proj)
-            if os.path.exists(p):
-                os.remove(p)
-            pcsv = p.replace(".parquet", ".csv")
-            if os.path.exists(pcsv):
-                os.remove(pcsv)
-    except Exception:
-        pass
-# ---------------------------------------------------------------------------
-os.makedirs(CACHE_DIR, exist_ok=True)
-
 
 # Campos a buscar no /search/jql
 JIRA_FIELDS_BASE = [
