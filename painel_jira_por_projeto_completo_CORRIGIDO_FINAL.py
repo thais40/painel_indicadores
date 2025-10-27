@@ -398,30 +398,84 @@ def ensure_assunto_nome(df_proj: pd.DataFrame, projeto: str) -> pd.DataFrame:
             df_proj["assunto_nome"] = df_proj["assunto"].apply(lambda x: safe_get_value(x, "value"))
     return df_proj
 
-def render_criados_resolvidos(dfp: pd.DataFrame, projeto: str, ano_global: str, mes_global: str):
+# fix_criados_resolvidos.py
+import sys, re, shutil, datetime
+from pathlib import Path
+
+NEW_FUNC = r'',
+def render_criados_resolvidos(dfp, projeto, ano_global, mes_global):
     st.markdown("### 📈 Tickets Criados vs Resolvidos")
 
-    dfm = df_monthly_all[df_monthly_all["projeto"] == projeto].copy()
-    if dfm.empty:
+    if dfp is None or dfp.empty:
         st.info("Sem dados para esta visão.")
         return
-    if ano_global != "Todos":
-        dfm = dfm[dfm["ano"] == int(ano_global)]
-    if mes_global != "Todos":
-        dfm = dfm[dfm["mes"] == int(mes_global)]
-    if ano_global != "Todos" and mes_global != "Todos":
-        alvo = pd.Period(f"{int(ano_global)}-{int(mes_global):02d}", freq="M")
-        dfm = dfm[dfm["period"] == alvo]
 
-    dfm = dfm.sort_values("period_ts")
-    show = dfm[["mes_str","period_ts","Criados","Resolvidos"]].copy()
-    show["Criados"] = show["Criados"].astype(int)
-    show["Resolvidos"] = show["Resolvidos"].astype(int)
+    import pandas as pd
+    import plotly.express as px
 
-    fig = px.bar(show, x="mes_str", y=["Criados","Resolvidos"], barmode="group", text_auto=True, height=440)
+    # cópia e garantias de datetime
+    df = dfp.copy()
+    df["created"] = pd.to_datetime(df["created"], errors="coerce")
+    df["resolved"] = pd.to_datetime(df["resolved"], errors="coerce")
+
+    # Série de CRIADOS por mês
+    dfc = df.dropna(subset=["created"]).copy()
+    dfc["period"] = dfc["created"].dt.to_period("M").dt.to_timestamp()
+    dfc = aplicar_filtro_global(dfc, "period", ano_global, mes_global)
+    created = dfc.groupby("period").size().rename("Criados")
+
+    # Série de RESOLVIDOS por mês
+    dfr = df.dropna(subset=["resolved"]).copy()
+    dfr["period"] = dfr["resolved"].dt.to_period("M").dt.to_timestamp()
+    dfr = aplicar_filtro_global(dfr, "period", ano_global, mes_global)
+    resolved = dfr.groupby("period").size().rename("Resolvidos")
+
+    # Combina e formata
+    monthly = (
+        pd.concat([created, resolved], axis=1)
+          .fillna(0).astype(int)
+          .reset_index().sort_values("period")
+    )
+    if monthly.empty:
+        st.info("Sem dados para exibir nos filtros atuais.")
+        return
+
+    monthly["mes_str"] = monthly["period"].dt.strftime("%b/%Y")
+
+    fig = px.bar(
+        monthly, x="mes_str", y=["Criados", "Resolvidos"],
+        barmode="group", text_auto=True, height=440
+    )
     fig.update_traces(textangle=0, textfont_size=14, cliponaxis=False)
-    fig.update_xaxes(categoryorder="array", categoryarray=show["mes_str"].tolist())
+    fig.update_xaxes(categoryorder="array", categoryarray=monthly["mes_str"].tolist())
     show_plot(fig, "criados_resolvidos", projeto, ano_global, mes_global)
+'''.strip("\n")
+
+def main(path_str: str):
+    p = Path(path_str)
+    txt = p.read_text(encoding="utf-8")
+
+    # acha a função inteira (do 'def' até o próximo 'def' na coluna 0 ou EOF)
+    pat = re.compile(r'(^def\s+render_criados_resolvidos\s*\([^)]*\):\s*\n)([\s\S]*?)(?=^\s*def\s+\w+\s*\(|\Z)', re.M)
+    m = pat.search(txt)
+    if not m:
+        print("❌ Não encontrei a função render_criados_resolvidos no arquivo.")
+        sys.exit(1)
+
+    novo = txt[:m.start(1)] + NEW_FUNC + "\n" + txt[m.end():]
+
+    # backup + grava
+    ts = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
+    backup = p.with_suffix(f".py.bak_{ts}")
+    shutil.copyfile(p, backup)
+    p.write_text(novo, encoding="utf-8")
+    print(f"✅ Corrigido. Backup criado: {backup.name}")
+
+if __name__ == "__main__":
+    if len(sys.argv) < 2:
+        print("uso: python fix_criados_resolvidos.py '<caminho_do_arquivo.py>'")
+        sys.exit(1)
+    main(sys.argv[1])
 
 def render_sla(dfp: pd.DataFrame, projeto: str, ano_global: str, mes_global: str):
     st.markdown("### ⏱️ SLA")
