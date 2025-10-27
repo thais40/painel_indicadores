@@ -558,87 +558,85 @@ def render_app_ne(dfp: pd.DataFrame, ano_global: str, mes_global: str):
                           bargap=0.15, margin=dict(t=70, r=20, b=60, l=50))
     show_plot(fig_app, "app_ne", "TDS", ano_global, mes_global)
 
-# ===========================
-# Rotinas Manuais — TDS (com dois títulos aceitos + normalização)
-# ===========================
-def _canonical(s: str) -> str:
-    """normaliza texto: sem acentos, minúsculo, sem pontuação, 1 espaço, strip."""
-    if not isinstance(s, str):
-        s = "" if s is None else str(s)
-    s = unicodedata.normalize("NFKD", s)
-    s = "".join(ch for ch in s if not unicodedata.combining(ch))
-    s = s.lower()
-    s = re.sub(r"[^\w\s]", " ", s)
-    s = re.sub(r"\s+", " ", s).strip()
-    return s
+# ======================
+# Rotinas Manuais (TDS) — Quantidade de encomendas (customfield_13666)
+# ======================
+import pandas as pd
+import plotly.express as px
 
-def render_rotinas_manuais(dfp: pd.DataFrame, ano_global: str, mes_global: str):
-    st.markdown("### 🛠️ Rotinas Manuais")
-
-    if dfp.empty:
-        st.info("Sem tickets para o período.")
-        return
-
-    # títulos aceitos (normalizados)
-    TITULOS_ROTINAS = [
-        "Volumetria / Tabela de erro CTE",
-        "Volumetria Correção de Erro de CTE",
+def _pick_quant_col(df: pd.DataFrame) -> str | None:
+    """Descobre a coluna do campo 'Quantidade de encomendas'.
+       Preferimos o customfield original; se o ETL renomeou, tentamos aliases comuns."""
+    cols = list(df.columns)
+    if "customfield_13666" in cols:
+        return "customfield_13666"
+    aliases = [
+        "Quantidade de encomendas",
+        "quantidade_de_encomendas",
+        "qtd_encomendas",
     ]
-    alvos = [_canonical(t) for t in TITULOS_ROTINAS]
+    lowers = {c.lower(): c for c in cols}
+    for a in aliases:
+        if a in cols:
+            return a
+        la = a.lower()
+        if la in lowers:
+            return lowers[la]
+    # fallback heurístico
+    for c in cols:
+        lc = c.lower()
+        if ("quantidade" in lc or "qtd" in lc) and "encomenda" in lc:
+            return c
+    return None
 
-    # normaliza summaries e filtra tolerante (igual ou contém)
-    summ_norm = dfp["summary"].fillna("").map(_canonical)
-    mask = summ_norm.isin(alvos) | summ_norm.apply(lambda s: any(a in s for a in alvos))
-    df_rot = dfp.loc[mask].copy()
+quant_col = _pick_quant_col(df_tds)
+if not quant_col:
+    st.info("Não encontrei o campo 'Quantidade de encomendas' (customfield_13666) no TDS com os dados atuais.")
+else:
+    # Base: todos os TDS com o campo preenchido
+    df_rm = df_tds[df_tds[quant_col].notna()].copy()
 
-    # quantidade numérica > 0
-    df_rot[CAMPO_QTD_ENCOMENDAS] = pd.to_numeric(df_rot[CAMPO_QTD_ENCOMENDAS], errors="coerce").fillna(0)
-    df_rot = df_rot[df_rot[CAMPO_QTD_ENCOMENDAS] > 0]
-
-    # resolved válido
-    df_rot["resolved"] = pd.to_datetime(df_rot["resolved"], errors="coerce")
-    df_rot = df_rot.dropna(subset=["resolved"])
-
-    # filtros globais
-    if ano_global and str(ano_global).lower() != "todos":
-        df_rot = df_rot[df_rot["resolved"].dt.year.astype(str) == str(ano_global)]
-    if mes_global and str(mes_global).lower() != "todos":
-        m = f"{int(mes_global):02d}"
-        df_rot = df_rot[df_rot["resolved"].dt.month.astype(str).str.zfill(2) == m]
-
-    if df_rot.empty:
-        st.info("Sem tickets de Rotinas Manuais (títulos alvo) no período.")
-        return
-
-    # série mensal
-    df_rot["mes_str"] = df_rot["resolved"].dt.to_period("M").dt.strftime("%b/%Y")
-    serie = (
-        df_rot.groupby("mes_str", as_index=False)[CAMPO_QTD_ENCOMENDAS]
-              .sum()
-              .rename(columns={CAMPO_QTD_ENCOMENDAS: "qtd_encomendas"})
+    # Converte para número (trata milhar e vírgula)
+    df_rm[quant_col] = pd.to_numeric(
+        df_rm[quant_col].astype(str)
+            .str.replace(".", "", regex=False)   # remove milhar
+            .str.replace(",", ".", regex=False), # vírgula -> ponto decimal
+        errors="coerce"
     )
-    serie["mes_ord"] = pd.to_datetime(serie["mes_str"], format="%b/%Y")
-    serie = serie.sort_values("mes_ord").drop(columns=["mes_ord"])
+    df_rm = df_rm[df_rm[quant_col].notna()].copy()
 
-    # gráfico
-    fig = px.bar(
-        serie, x="mes_str", y="qtd_encomendas", text="qtd_encomendas"
+    # Datas e agregação mensal (soma das encomendas)
+    df_rm["created"] = pd.to_datetime(df_rm["created"], errors="coerce")
+    mensal = (
+        df_rm
+        .groupby(pd.Grouper(key="created", freq="MS"))[quant_col]
+        .sum(min_count=1)  # evita 0 “falso” quando o mês só tem NaN
+        .rename("qtd_encomendas")
+        .reset_index()
     )
-    fig.update_traces(texttemplate="%{text:,}", textposition="outside")
-    fig.update_layout(
-        yaxis_title="Qtd encomendas", xaxis_title="mes_str",
-        uniformtext_minsize=8, uniformtext_mode="hide",
-    )
-    show_plot(fig, "rotinas", "TDS", ano_global, mes_global)
 
-    # amostra
-    with st.expander("🔎 Tickets usados (amostra)"):
-        st.dataframe(
-            df_rot[["key", "summary", "resolved", CAMPO_QTD_ENCOMENDAS]]
-            .sort_values("resolved", ascending=True)
-            .head(50),
-            use_container_width=True,
+    # Preenche meses faltantes entre min e max (série contínua)
+    if not mensal.empty:
+        idx = pd.date_range(mensal["created"].min(), mensal["created"].max(), freq="MS")
+        mensal = (
+            mensal.set_index("created")
+                  .reindex(idx)
+                  .rename_axis("created")
+                  .reset_index()
         )
+        mensal["qtd_encomendas"] = mensal["qtd_encomendas"].fillna(0)
+
+    # Gráfico
+    fig_rotinas = px.bar(
+        mensal, x="created", y="qtd_encomendas", text="qtd_encomendas",
+        title="Rotinas Manuais (TDS) — Quantidade de encomendas"
+    )
+    fig_rotinas.update_traces(textposition="outside", cliponaxis=False)
+    fig_rotinas.update_layout(margin=dict(l=10, r=10, t=50, b=10))
+    fig_rotinas.update_xaxes(tickformat="%Y %b")
+
+    # Render com helper padrão do painel
+    show_plot(fig_rotinas, "rotinas_manuais_encomendas", "TDS", ano_global, mes_global)
 
 # ===================
 # Onboarding — INT (mantido)
