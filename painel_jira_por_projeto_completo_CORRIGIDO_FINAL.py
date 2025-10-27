@@ -399,7 +399,6 @@ def ensure_assunto_nome(df_proj: pd.DataFrame, projeto: str) -> pd.DataFrame:
 
 def render_criados_resolvidos(dfp, projeto, ano_global, mes_global):
     st.markdown("### 📈 Tickets Criados vs Resolvidos")
-
     if dfp is None or dfp.empty:
         st.info("Sem dados para esta visão.")
         return
@@ -409,28 +408,31 @@ def render_criados_resolvidos(dfp, projeto, ano_global, mes_global):
 
     df = dfp.copy()
 
-    # --- helpers de data: para mês correto em BRT (sem mexer no resto do app)
+    # --- coluna de chave única (evita duplicar contagens)
+    key_col = "key" if "key" in df.columns else ("issue_key" if "issue_key" in df.columns else None)
+
+    # --- helper: mês correto em BRT (sem estourar se a série vier 'naive')
     def _to_brt_period(s):
-        # tenta tratar timezone → BRT e volta para "naive" (sem tz) já no mês certo
         ser = pd.to_datetime(s, errors="coerce", utc=True)
         try:
             ser = ser.dt.tz_convert(TZ_BR)
         except Exception:
-            # se já estiver naive, apenas assume BRT sem conversão (melhor que estourar)
-            pass
-        # remove tz para evitar surpresas em groupby
+            # se já estiver 'naive', assume BRT
+            ser = pd.to_datetime(s, errors="coerce")
         return ser.dt.tz_localize(None).dt.to_period("M").dt.to_timestamp()
 
-    # --- created
+    # -------- CRIADOS
     if "created" not in df.columns:
         st.info("Dataset sem coluna 'created' para esta visão.")
         return
     dfc = df.dropna(subset=["created"]).copy()
+    if key_col:
+        dfc = dfc.drop_duplicates(subset=[key_col])  # <— de-dup
     dfc["period"] = _to_brt_period(dfc["created"])
     dfc = aplicar_filtro_global(dfc, "period", ano_global, mes_global)
     created = dfc.groupby("period").size().rename("Criados")
 
-    # --- resolved (usa 'resolved' ou 'resolutiondate' como fallback)
+    # -------- RESOLVIDOS (resolved ou resolutiondate)
     res_col = None
     if "resolved" in df.columns and df["resolved"].notna().sum() > 0:
         res_col = "resolved"
@@ -439,26 +441,25 @@ def render_criados_resolvidos(dfp, projeto, ano_global, mes_global):
 
     if res_col:
         dfr = df.dropna(subset=[res_col]).copy()
+        if key_col:
+            dfr = dfr.drop_duplicates(subset=[key_col])  # <— de-dup
         dfr["period"] = _to_brt_period(dfr[res_col])
         dfr = aplicar_filtro_global(dfr, "period", ano_global, mes_global)
         resolved = dfr.groupby("period").size().rename("Resolvidos")
     else:
-        # nenhum resolvido disponível → série vazia (evita barras “fantasmas”)
         resolved = pd.Series(dtype=int, name="Resolvidos")
 
-    # Combina séries e ordena
+    # -------- Junta e plota
     monthly = (
         pd.concat([created, resolved], axis=1)
           .fillna(0).astype(int)
-          .reset_index()
-          .sort_values("period")
+          .reset_index().sort_values("period")
     )
     if monthly.empty:
         st.info("Sem dados para exibir nos filtros atuais.")
         return
 
     monthly["mes_str"] = monthly["period"].dt.strftime("%b/%Y")
-
     fig = px.bar(
         monthly, x="mes_str", y=["Criados", "Resolvidos"],
         barmode="group", text_auto=True, height=440
