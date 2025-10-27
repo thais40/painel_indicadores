@@ -397,29 +397,74 @@ def ensure_assunto_nome(df_proj: pd.DataFrame, projeto: str) -> pd.DataFrame:
             df_proj["assunto_nome"] = df_proj["assunto"].apply(lambda x: safe_get_value(x, "value"))
     return df_proj
 
-def render_criados_resolvidos(dfp: pd.DataFrame, projeto: str, ano_global: str, mes_global: str):
+def render_criados_resolvidos(dfp, projeto, ano_global, mes_global):
     st.markdown("### 📈 Tickets Criados vs Resolvidos")
 
-    dfm = df_monthly_all[df_monthly_all["projeto"] == projeto].copy()
-    if dfm.empty:
+    if dfp is None or dfp.empty:
         st.info("Sem dados para esta visão.")
         return
-    if ano_global != "Todos":
-        dfm = dfm[dfm["ano"] == int(ano_global)]
-    if mes_global != "Todos":
-        dfm = dfm[dfm["mes"] == int(mes_global)]
-    if ano_global != "Todos" and mes_global != "Todos":
-        alvo = pd.Period(f"{int(ano_global)}-{int(mes_global):02d}", freq="M")
-        dfm = dfm[dfm["period"] == alvo]
 
-    dfm = dfm.sort_values("period_ts")
-    show = dfm[["mes_str","period_ts","Criados","Resolvidos"]].copy()
-    show["Criados"] = show["Criados"].astype(int)
-    show["Resolvidos"] = show["Resolvidos"].astype(int)
+    import pandas as pd
+    import plotly.express as px
 
-    fig = px.bar(show, x="mes_str", y=["Criados","Resolvidos"], barmode="group", text_auto=True, height=440)
+    df = dfp.copy()
+
+    # --- helpers de data: para mês correto em BRT (sem mexer no resto do app)
+    def _to_brt_period(s):
+        # tenta tratar timezone → BRT e volta para "naive" (sem tz) já no mês certo
+        ser = pd.to_datetime(s, errors="coerce", utc=True)
+        try:
+            ser = ser.dt.tz_convert(TZ_BR)
+        except Exception:
+            # se já estiver naive, apenas assume BRT sem conversão (melhor que estourar)
+            pass
+        # remove tz para evitar surpresas em groupby
+        return ser.dt.tz_localize(None).dt.to_period("M").dt.to_timestamp()
+
+    # --- created
+    if "created" not in df.columns:
+        st.info("Dataset sem coluna 'created' para esta visão.")
+        return
+    dfc = df.dropna(subset=["created"]).copy()
+    dfc["period"] = _to_brt_period(dfc["created"])
+    dfc = aplicar_filtro_global(dfc, "period", ano_global, mes_global)
+    created = dfc.groupby("period").size().rename("Criados")
+
+    # --- resolved (usa 'resolved' ou 'resolutiondate' como fallback)
+    res_col = None
+    if "resolved" in df.columns and df["resolved"].notna().sum() > 0:
+        res_col = "resolved"
+    elif "resolutiondate" in df.columns and df["resolutiondate"].notna().sum() > 0:
+        res_col = "resolutiondate"
+
+    if res_col:
+        dfr = df.dropna(subset=[res_col]).copy()
+        dfr["period"] = _to_brt_period(dfr[res_col])
+        dfr = aplicar_filtro_global(dfr, "period", ano_global, mes_global)
+        resolved = dfr.groupby("period").size().rename("Resolvidos")
+    else:
+        # nenhum resolvido disponível → série vazia (evita barras “fantasmas”)
+        resolved = pd.Series(dtype=int, name="Resolvidos")
+
+    # Combina séries e ordena
+    monthly = (
+        pd.concat([created, resolved], axis=1)
+          .fillna(0).astype(int)
+          .reset_index()
+          .sort_values("period")
+    )
+    if monthly.empty:
+        st.info("Sem dados para exibir nos filtros atuais.")
+        return
+
+    monthly["mes_str"] = monthly["period"].dt.strftime("%b/%Y")
+
+    fig = px.bar(
+        monthly, x="mes_str", y=["Criados", "Resolvidos"],
+        barmode="group", text_auto=True, height=440
+    )
     fig.update_traces(textangle=0, textfont_size=14, cliponaxis=False)
-    fig.update_xaxes(categoryorder="array", categoryarray=show["mes_str"].tolist())
+    fig.update_xaxes(categoryorder="array", categoryarray=monthly["mes_str"].tolist())
     show_plot(fig, "criados_resolvidos", projeto, ano_global, mes_global)
 
 def render_sla(dfp: pd.DataFrame, projeto: str, ano_global: str, mes_global: str):
