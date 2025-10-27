@@ -24,7 +24,6 @@ import requests
 import streamlit as st
 from requests.auth import HTTPBasicAuth
 from uuid import uuid4
-import os
 
 # =====================
 # Config de página
@@ -398,49 +397,29 @@ def ensure_assunto_nome(df_proj: pd.DataFrame, projeto: str) -> pd.DataFrame:
             df_proj["assunto_nome"] = df_proj["assunto"].apply(lambda x: safe_get_value(x, "value"))
     return df_proj
 
-def render_criados_resolvidos(dfp, projeto, ano_global, mes_global):
+def render_criados_resolvidos(dfp: pd.DataFrame, projeto: str, ano_global: str, mes_global: str):
     st.markdown("### 📈 Tickets Criados vs Resolvidos")
 
-    if dfp is None or dfp.empty:
+    dfm = df_monthly_all[df_monthly_all["projeto"] == projeto].copy()
+    if dfm.empty:
         st.info("Sem dados para esta visão.")
         return
+    if ano_global != "Todos":
+        dfm = dfm[dfm["ano"] == int(ano_global)]
+    if mes_global != "Todos":
+        dfm = dfm[dfm["mes"] == int(mes_global)]
+    if ano_global != "Todos" and mes_global != "Todos":
+        alvo = pd.Period(f"{int(ano_global)}-{int(mes_global):02d}", freq="M")
+        dfm = dfm[dfm["period"] == alvo]
 
-    import pandas as pd
-    import plotly.express as px
+    dfm = dfm.sort_values("period_ts")
+    show = dfm[["mes_str","period_ts","Criados","Resolvidos"]].copy()
+    show["Criados"] = show["Criados"].astype(int)
+    show["Resolvidos"] = show["Resolvidos"].astype(int)
 
-    df = dfp.copy()
-    df["created"] = pd.to_datetime(df["created"], errors="coerce")
-    df["resolved"] = pd.to_datetime(df["resolved"], errors="coerce")
-
-    # CRIADOS por mês
-    dfc = df.dropna(subset=["created"]).copy()
-    dfc["period"] = dfc["created"].dt.to_period("M").dt.to_timestamp()
-    dfc = aplicar_filtro_global(dfc, "period", ano_global, mes_global)
-    created = dfc.groupby("period").size().rename("Criados")
-
-    # RESOLVIDOS por mês
-    dfr = df.dropna(subset=["resolved"]).copy()
-    dfr["period"] = dfr["resolved"].dt.to_period("M").dt.to_timestamp()
-    dfr = aplicar_filtro_global(dfr, "period", ano_global, mes_global)
-    resolved = dfr.groupby("period").size().rename("Resolvidos")
-
-    monthly = (
-        pd.concat([created, resolved], axis=1)
-          .fillna(0).astype(int)
-          .reset_index().sort_values("period")
-    )
-    if monthly.empty:
-        st.info("Sem dados para exibir nos filtros atuais.")
-        return
-
-    monthly["mes_str"] = monthly["period"].dt.strftime("%b/%Y")
-
-    fig = px.bar(
-        monthly, x="mes_str", y=["Criados", "Resolvidos"],
-        barmode="group", text_auto=True, height=440
-    )
+    fig = px.bar(show, x="mes_str", y=["Criados","Resolvidos"], barmode="group", text_auto=True, height=440)
     fig.update_traces(textangle=0, textfont_size=14, cliponaxis=False)
-    fig.update_xaxes(categoryorder="array", categoryarray=monthly["mes_str"].tolist())
+    fig.update_xaxes(categoryorder="array", categoryarray=show["mes_str"].tolist())
     show_plot(fig, "criados_resolvidos", projeto, ano_global, mes_global)
 
 def render_sla(dfp: pd.DataFrame, projeto: str, ano_global: str, mes_global: str):
@@ -686,26 +665,11 @@ def render_onboarding(dfp: pd.DataFrame, ano_global: str, mes_global: str):
 
     dfp = ensure_assunto_nome(dfp.copy(), "INT")
     df_onb = aplicar_filtro_global(dfp.copy(), "mes_created", ano_global, mes_global)
-    # ======================
-
-
-    total_clientes_novos = int((df_onb["assunto_nome"] == ASSUNTO_CLIENTE_NOVO).sum())
-    df_erros = df_onb[df_onb["assunto_nome"].isin(ASSUNTOS_ERROS)].copy()
-    pend_mask = df_onb["status"].isin(STATUS_PENDENCIAS)
-
-    tickets_pendencias = int(pend_mask.sum())
-    possiveis_clientes = int(pend_mask.sum())
-
-    c1,c2,c3,c4 = st.columns(4)
-    c1.metric("Tickets clientes novos", total_clientes_novos)
-    c2.metric("Erros onboarding", int(len(df_erros)))
-    c3.metric("Tickets com pendências", tickets_pendencias)
-    c4.metric("Possíveis clientes", possiveis_clientes)
 
     # ======================
-    # NOVOS GRÁFICOS — Onboarding (ordem: Cliente novo, Tipo de Integração)
+    # NOVOS GRÁFICOS — Onboarding (alinhados)
     # ======================
-    # 1) Tickets – Cliente novo (mensal com variação % e labels alinhados no topo)
+    # 1) Tickets – Cliente novo (mensal com variação % e labels alinhados)
     df_cli_novo = df_onb[df_onb["assunto_nome"].astype(str).str.contains("cliente novo", case=False, na=False)].copy()
     if not df_cli_novo.empty:
         serie = (
@@ -726,49 +690,41 @@ def render_onboarding(dfp: pd.DataFrame, ano_global: str, mes_global: str):
             )
             serie["qtd"] = serie["qtd"].astype(int)
             serie["pct"] = serie["qtd"].pct_change() * 100.0
-            # substitui infinitos por NaN para evitar Overflow no anotador
-            serie["pct"].replace([float("inf"), float("-inf")], float("nan"), inplace=True)
+
             def _ann(v):
-                import math
-                try:
-                    # None/NaN/Inf → sem label
-                    if v is None:
-                        return ""
-                    if isinstance(v, float) and (math.isnan(v) or math.isinf(v)):
-                        return ""
-                    # converte para inteiro com proteção
-                    v2 = int(round(v))
-                    if v2 > 0:
-                        return f"▲ {v2}%"
-                    if v2 < 0:
-                        return f"▼ {abs(v2)}%"
-                    return "0%"
-                except Exception:
+                import math, numpy as np
+                if v is None or (isinstance(v, float) and pd.isna(v)):
                     return ""
+                v2 = int(round(v))
+                if v2 > 0:  return f"▲ {v2}%"
+                if v2 < 0:  return f"▼ {abs(v2)}%"
+                return "0%"
+
             serie["annot"] = serie["pct"].map(_ann)
             serie["mes_str"] = serie["created"].dt.strftime("%Y %b")
 
             fig_cli = px.bar(serie, x="mes_str", y="qtd", text="qtd", title="Tickets – Cliente novo", height=420)
             fig_cli.update_traces(textposition="outside", cliponaxis=False)
-            # alinhar % no topo do gráfico (fixo, acima do plot)
-            fig_cli.update_layout(margin=dict(l=10, r=10, t=60, b=10))
-            for _, r in serie.iterrows():
-                txt = r.get("annot") or ""
-                if not txt:
-                    continue
-                color = "blue" if (r.get("pct") or 0) >= 0 else "red"
-                fig_cli.add_annotation(
-                    x=r["mes_str"],
-                    y=1.02,
-                    xref="x",
-                    yref="paper",
-                    text=txt,
-                    showarrow=False,
-                    font=dict(size=12, color=color),
-                    yanchor="bottom"
-                )
+            # alinhar % no topo do gráfico (fixo)
+            if "annot" in serie.columns:
+                fig_cli.update_layout(margin=dict(l=10, r=10, t=60, b=10))
+                for _, r in serie.iterrows():
+                    txt = r.get("annot") or ""
+                    if not txt:
+                        continue
+                    color = "blue" if (r.get("pct") or 0) >= 0 else "red"
+                    fig_cli.add_annotation(
+                        x=r["mes_str"],
+                        y=1.02,
+                        xref="x",
+                        yref="paper",
+                        text=txt,
+                        showarrow=False,
+                        font=dict(size=12, color=color),
+                        yanchor="bottom"
+                    )
 
-    # 2) Tipo de Integração (horizontal) — números visíveis na direita
+    # 2) Tipo de Integração (horizontal)
     def _tipo_from_assunto(s: str) -> str:
         s = (s or "").strip().lower()
         if "cliente novo" in s: return "Cliente novo"
@@ -786,21 +742,30 @@ def render_onboarding(dfp: pd.DataFrame, ano_global: str, mes_global: str):
 
     fig_tipo = px.bar(tipo_counts, x="Qtd", y="tipo", orientation="h", text="Qtd", title="Tipo de Integração", height=420)
     fig_tipo.update_traces(textposition="outside", cliponaxis=False)
-    # margem direita e padding no eixo X para não cortar o número
-    fig_tipo.update_layout(margin=dict(l=10, r=90, t=45, b=10))
-    try:
-        _max_q = float(tipo_counts["Qtd"].max())
-        fig_tipo.update_xaxes(range=[0, _max_q * 1.12])
-    except Exception:
-        pass
 
-    # Layout vertical conforme solicitado
-    if "fig_cli" in locals():
-        show_plot(fig_cli, "onb_cli_novo", "INT", ano_global, mes_global)
-    else:
-        st.info("Sem dados para 'Cliente novo' com os filtros atuais.")
-    show_plot(fig_tipo, "onb_tipo_int", "INT", ano_global, mes_global)
+    c1, c2 = st.columns((2, 1))
+    with c1:
+        if "fig_cli" in locals():
+            show_plot(fig_cli, "onb_cli_novo", "INT", ano_global, mes_global)
+        else:
+            st.info("Sem dados para 'Cliente novo' com os filtros atuais.")
+    with c2:
+        show_plot(fig_tipo, "onb_tipo_int", "INT", ano_global, mes_global)
     # ======================
+
+
+    total_clientes_novos = int((df_onb["assunto_nome"] == ASSUNTO_CLIENTE_NOVO).sum())
+    df_erros = df_onb[df_onb["assunto_nome"].isin(ASSUNTOS_ERROS)].copy()
+    pend_mask = df_onb["status"].isin(STATUS_PENDENCIAS)
+
+    tickets_pendencias = int(pend_mask.sum())
+    possiveis_clientes = int(pend_mask.sum())
+
+    c1,c2,c3,c4 = st.columns(4)
+    c1.metric("Tickets clientes novos", total_clientes_novos)
+    c2.metric("Erros onboarding", int(len(df_erros)))
+    c3.metric("Tickets com pendências", tickets_pendencias)
+    c4.metric("Possíveis clientes", possiveis_clientes)
 
     # gráfico horizontal por erros
     if not df_erros.empty:
@@ -831,6 +796,7 @@ def render_onboarding(dfp: pd.DataFrame, ano_global: str, mes_global: str):
     dinheiro_perdido = float(possiveis_clientes) * float(receita_cliente)
     st.markdown(f"### **R$ {dinheiro_perdido:,.2f}**",
                 help="Cálculo: Clientes novos (simulação) × Cenário Receita por Cliente")
+
 # ======================
 # Abas por Projeto/Visão
 # ======================
