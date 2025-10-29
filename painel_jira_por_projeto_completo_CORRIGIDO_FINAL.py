@@ -1,17 +1,15 @@
-# === PATCH: Filtros locais também nas visualizações ===
-# Esta versão busca do Jira uma única vez (JQL fixo desde DATA_INICIO)
-# e aplica todos os filtros (globais e das visualizações) apenas em memória (pandas/df_monthly_all).
-# Gerado em 2025-10-10T21:12:08
-# ======================================================
 # -*- coding: utf-8 -*-
 # ============================================================
 # Painel de Indicadores — Jira (Nuvemshop)
-# FULL — corrigido: element_id único p/ Plotly + Rotinas Manuais + filtros "Todos"
+# FULL — com chaves únicas para Plotly, filtros "Todos",
+# busca única no Jira e Rotinas Manuais (TDS) filtrando
+# Áreas Ops + customfield_13666 > 0 (sem alterar o restante).
 # ============================================================
 
 from __future__ import annotations
 
 import base64
+import os
 import re
 import unicodedata
 from datetime import datetime, date
@@ -51,7 +49,7 @@ SLA_CAMPOS = {
     "TDS": "customfield_13744",   # SLA resolução (SUP) - TDS/TINE
     "TINE": "customfield_13744",
     "INT": "customfield_13686",   # SLA INT/INTEL
-    "INTEL": "customfield_13686"
+    "INTEL": "customfield_13686",
 }
 
 CAMPOS_ASSUNTO = {
@@ -75,7 +73,7 @@ TITULOS  = {"TDS": "Tech Support", "INT": "Integrations", "TINE": "IT Support NE
 # Campos a buscar no /search/jql
 JIRA_FIELDS_BASE = [
     "key", "summary", "created", "updated", "resolutiondate", "resolved", "status", "issuetype",
-    CAMPO_AREA, CAMPO_N3, CAMPO_ORIGEM, CAMPO_QTD_ENCOMENDAS
+    CAMPO_AREA, CAMPO_N3, CAMPO_ORIGEM, CAMPO_QTD_ENCOMENDAS,
 ]
 FIELDS_SLA_ALL = list(set(SLA_CAMPOS.values()))
 FIELDS_ASSUNTO_ALL = list(set([v for v in CAMPOS_ASSUNTO.values() if v != "issuetype"]))
@@ -111,7 +109,7 @@ def _render_logo_and_title():
         st.image(logo_bytes, width=300)
         st.markdown('<span style="color:#111827;font-weight:600;font-size:15px;">Painel interno</span>', unsafe_allow_html=True)
     else:
-        st.markdown('<span style="color:#111827;font-weight:600;font-size:15px;">Nuvemshop · Painel interno</span>', unsafe_allow_html=True)
+        st.markdown('<span style="color:#111827;font-weight:600;font-size:15px;">Nuvemshop · Painro interno</span>', unsafe_allow_html=True)
     st.markdown("</div>", unsafe_allow_html=True)
 
 _render_logo_and_title()
@@ -135,14 +133,8 @@ st.markdown("</div>", unsafe_allow_html=True)
 # Helper: Plotly com chave única
 # ==========================
 def show_plot(fig, nome_bloco: str, projeto: str, ano: str, mes: str):
-    """
-    Renderiza um gráfico Plotly com key única, evitando StreamlitDuplicateElementId.
-    """
-    st.plotly_chart(
-        fig,
-        use_container_width=True,
-        key=f"plt-{nome_bloco}-{projeto}-{ano}-{mes}-{uuid4()}",
-    )
+    """Renderiza um gráfico Plotly com key única, evitando StreamlitDuplicateElementId."""
+    st.plotly_chart(fig, use_container_width=True, key=f"plt-{nome_bloco}-{projeto}-{ano}-{mes}-{uuid4()}")
 
 # =================
 # Helpers de dados
@@ -205,15 +197,9 @@ def parse_qtd_encomendas(v):
 # Jira Enhanced Search
 # =====================
 def _jira_search_jql(jql: str, next_page_token: Optional[str] = None, max_results: int = 100) -> Dict[str, Any]:
-    """
-    GET /rest/api/3/search/jql (Enhanced)
-    """
+    """GET /rest/api/3/search/jql (Enhanced)"""
     url = f"{JIRA_URL}/rest/api/3/search/jql"
-    params = {
-        "jql": jql,
-        "fields": ",".join(FIELDS_ALL),
-        "maxResults": max_results
-    }
+    params = {"jql": jql, "fields": ",".join(FIELDS_ALL), "maxResults": max_results}
     if next_page_token:
         params["nextPageToken"] = next_page_token
 
@@ -403,36 +389,32 @@ def render_criados_resolvidos(dfp, projeto, ano_global, mes_global):
         st.info("Sem dados para esta visão.")
         return
 
-    import pandas as pd
-    import plotly.express as px
-
     df = dfp.copy()
 
-    # --- coluna de chave única (evita duplicar contagens)
+    # coluna de chave única (evita duplicar contagens)
     key_col = "key" if "key" in df.columns else ("issue_key" if "issue_key" in df.columns else None)
 
-    # --- helper: mês correto em BRT (sem estourar se a série vier 'naive')
+    # helper: mês correto em BRT (sem estourar se a série vier 'naive')
     def _to_brt_period(s):
         ser = pd.to_datetime(s, errors="coerce", utc=True)
         try:
             ser = ser.dt.tz_convert(TZ_BR)
         except Exception:
-            # se já estiver 'naive', assume BRT
             ser = pd.to_datetime(s, errors="coerce")
         return ser.dt.tz_localize(None).dt.to_period("M").dt.to_timestamp()
 
-    # -------- CRIADOS
+    # CRIADOS
     if "created" not in df.columns:
         st.info("Dataset sem coluna 'created' para esta visão.")
         return
     dfc = df.dropna(subset=["created"]).copy()
     if key_col:
-        dfc = dfc.drop_duplicates(subset=[key_col])  # <— de-dup
+        dfc = dfc.drop_duplicates(subset=[key_col])
     dfc["period"] = _to_brt_period(dfc["created"])
     dfc = aplicar_filtro_global(dfc, "period", ano_global, mes_global)
     created = dfc.groupby("period").size().rename("Criados")
 
-    # -------- RESOLVIDOS (resolved ou resolutiondate)
+    # RESOLVIDOS (resolved ou resolutiondate)
     res_col = None
     if "resolved" in df.columns and df["resolved"].notna().sum() > 0:
         res_col = "resolved"
@@ -442,14 +424,14 @@ def render_criados_resolvidos(dfp, projeto, ano_global, mes_global):
     if res_col:
         dfr = df.dropna(subset=[res_col]).copy()
         if key_col:
-            dfr = dfr.drop_duplicates(subset=[key_col])  # <— de-dup
+            dfr = dfr.drop_duplicates(subset=[key_col])
         dfr["period"] = _to_brt_period(dfr[res_col])
         dfr = aplicar_filtro_global(dfr, "period", ano_global, mes_global)
         resolved = dfr.groupby("period").size().rename("Resolvidos")
     else:
         resolved = pd.Series(dtype=int, name="Resolvidos")
 
-    # -------- Junta e plota
+    # Junta e plota
     monthly = (
         pd.concat([created, resolved], axis=1)
           .fillna(0).astype(int)
@@ -460,10 +442,7 @@ def render_criados_resolvidos(dfp, projeto, ano_global, mes_global):
         return
 
     monthly["mes_str"] = monthly["period"].dt.strftime("%b/%Y")
-    fig = px.bar(
-        monthly, x="mes_str", y=["Criados", "Resolvidos"],
-        barmode="group", text_auto=True, height=440
-    )
+    fig = px.bar(monthly, x="mes_str", y=["Criados", "Resolvidos"], barmode="group", text_auto=True, height=440)
     fig.update_traces(textangle=0, textfont_size=14, cliponaxis=False)
     fig.update_xaxes(categoryorder="array", categoryarray=monthly["mes_str"].tolist())
     show_plot(fig, "criados_resolvidos", projeto, ano_global, mes_global)
@@ -490,11 +469,8 @@ def render_sla(dfp: pd.DataFrame, projeto: str, ano_global: str, mes_global: str
     show = dfm[["mes_str","period_ts","pct_dentro","pct_fora"]].sort_values("period_ts")
     show = show.rename(columns={"pct_dentro": "% Dentro SLA", "pct_fora":"% Fora SLA"})
 
-    fig = px.bar(
-        show, x="mes_str", y=["% Dentro SLA","% Fora SLA"], barmode="group",
-        title=titulo, color_discrete_map={"% Dentro SLA":"green","% Fora SLA":"red"},
-        height=440
-    )
+    fig = px.bar(show, x="mes_str", y=["% Dentro SLA","% Fora SLA"], barmode="group",
+                 title=titulo, color_discrete_map={"% Dentro SLA":"green","% Fora SLA":"red"}, height=440)
     fig.update_traces(texttemplate="%{y:.2f}%", textposition="outside", textfont_size=14, cliponaxis=False)
     fig.update_yaxes(ticksuffix="%")
     fig.update_xaxes(categoryorder="array", categoryarray=show["mes_str"].tolist())
@@ -604,7 +580,7 @@ def render_app_ne(dfp: pd.DataFrame, ano_global: str, mes_global: str):
     show_plot(fig_app, "app_ne", "TDS", ano_global, mes_global)
 
 # ===========================
-# Rotinas Manuais — TDS (com dois títulos aceitos + normalização)
+# Rotinas Manuais — TDS (Áreas Ops + customfield_13666 > 0)
 # ===========================
 def _canonical(s: str) -> str:
     """normaliza texto: sem acentos, minúsculo, sem pontuação, 1 espaço, strip."""
@@ -619,70 +595,74 @@ def _canonical(s: str) -> str:
 
 def render_rotinas_manuais(dfp: pd.DataFrame, ano_global: str, mes_global: str):
     st.markdown("### 🛠️ Rotinas Manuais")
-
     if dfp.empty:
         st.info("Sem tickets para o período.")
         return
 
-    # títulos aceitos (normalizados)
-    TITULOS_ROTINAS = [
-        "Volumetria / Tabela de erro CTE",
-        "Volumetria Correção de Erro de CTE",
+    # Áreas alvo (Ops)
+    OPS_AREAS = [
+        "Ops - Conferência",
+        "Ops - Cubagem",
+        "Ops - Logística",
+        "Ops - Coletas",
+        "Ops - Expedição",
+        "Ops - Divergências",
     ]
-    alvos = [_canonical(t) for t in TITULOS_ROTINAS]
 
-    # normaliza summaries e filtra tolerante (igual ou contém)
-    summ_norm = dfp["summary"].fillna("").map(_canonical)
-    mask = summ_norm.isin(alvos) | summ_norm.apply(lambda s: any(a in s for a in alvos))
-    df_rot = dfp.loc[mask].copy()
+    df = dfp.copy()
+    df["area_nome"] = df["area"].apply(lambda x: safe_get_value(x, "value"))
 
-    # quantidade numérica > 0
-    df_rot[CAMPO_QTD_ENCOMENDAS] = pd.to_numeric(df_rot[CAMPO_QTD_ENCOMENDAS], errors="coerce").fillna(0)
-    df_rot = df_rot[df_rot[CAMPO_QTD_ENCOMENDAS] > 0]
-
-    # resolved válido
-    df_rot["resolved"] = pd.to_datetime(df_rot["resolved"], errors="coerce")
-    df_rot = df_rot.dropna(subset=["resolved"])
-
-    # filtros globais
-    if ano_global and str(ano_global).lower() != "todos":
-        df_rot = df_rot[df_rot["resolved"].dt.year.astype(str) == str(ano_global)]
-    if mes_global and str(mes_global).lower() != "todos":
-        m = f"{int(mes_global):02d}"
-        df_rot = df_rot[df_rot["resolved"].dt.month.astype(str).str.zfill(2) == m]
-
-    if df_rot.empty:
-        st.info("Sem tickets de Rotinas Manuais (títulos alvo) no período.")
+    # 1) Filtra somente as áreas Ops
+    base = df[df["area_nome"].isin(OPS_AREAS)].copy()
+    if base.empty:
+        st.info("Sem tickets de Rotinas Manuais nas áreas Ops com os filtros atuais.")
         return
 
-    # série mensal
-    df_rot["mes_str"] = df_rot["resolved"].dt.to_period("M").dt.strftime("%b/%Y")
-    serie = (
-        df_rot.groupby("mes_str", as_index=False)[CAMPO_QTD_ENCOMENDAS]
-              .sum()
-              .rename(columns={CAMPO_QTD_ENCOMENDAS: "qtd_encomendas"})
-    )
-    serie["mes_ord"] = pd.to_datetime(serie["mes_str"], format="%b/%Y")
-    serie = serie.sort_values("mes_ord").drop(columns=["mes_ord"])
+    # 2) Quantidade de encomendas (customfield_13666) > 0 (usa parser robusto)
+    base["qtd_encomendas"] = base[CAMPO_QTD_ENCOMENDAS].apply(parse_qtd_encomendas)
+    base = base[base["qtd_encomendas"] > 0].copy()
+    if base.empty:
+        st.info("Sem tickets com 'Quantidade de encomendas' > 0 nas áreas Ops.")
+        return
 
-    # gráfico
+    # 3) Usa RESOLVED para série mensal (mantém lógica atual)
+    base["resolved"] = pd.to_datetime(base["resolved"], errors="coerce")
+    base = base.dropna(subset=["resolved"]).copy()
+    base["mes_dt"] = base["resolved"].dt.to_period("M").dt.to_timestamp()
+
+    # 4) Aplica filtros globais (ano/mês) sobre a coluna mensal
+    base = aplicar_filtro_global(base, "mes_dt", ano_global, mes_global)
+    if base.empty:
+        st.info("Sem dados para exibir com os filtros atuais.")
+        return
+
+    # 5) Agrega mês a mês e monta o gráfico como está hoje
+    serie = base.groupby("mes_dt", as_index=False)["qtd_encomendas"].sum()
+    serie["mes_str"] = serie["mes_dt"].dt.strftime("%b/%Y")
+    serie = serie.sort_values("mes_dt")
+
     fig = px.bar(
-        serie, x="mes_str", y="qtd_encomendas", text="qtd_encomendas"
+        serie, x="mes_str", y="qtd_encomendas", text="qtd_encomendas",
+        title="Rotinas Manuais (TDS) — Quantidade de encomendas • Áreas Ops"
     )
-    fig.update_traces(texttemplate="%{text:,}", textposition="outside")
+    fig.update_traces(textposition="outside", cliponaxis=False)
     fig.update_layout(
-        yaxis_title="Qtd encomendas", xaxis_title="mes_str",
-        uniformtext_minsize=8, uniformtext_mode="hide",
+        yaxis_title="Qtd encomendas",
+        xaxis_title="Mês",
+        uniformtext_minsize=8,
+        uniformtext_mode="hide",
+        margin=dict(t=50, r=20, b=30, l=50),
     )
-    show_plot(fig, "rotinas", "TDS", ano_global, mes_global)
+    show_plot(fig, "rotinas_ops_qtd", "TDS", ano_global, mes_global)
 
-    # amostra
+    # Amostra
     with st.expander("🔎 Tickets usados (amostra)"):
         st.dataframe(
-            df_rot[["key", "summary", "resolved", CAMPO_QTD_ENCOMENDAS]]
+            base[["key", "summary", "area_nome", "resolved", "qtd_encomendas"]]
             .sort_values("resolved", ascending=True)
             .head(50),
             use_container_width=True,
+            hide_index=True,
         )
 
 # ===================
@@ -711,8 +691,6 @@ def render_onboarding(dfp: pd.DataFrame, ano_global: str, mes_global: str):
 
     dfp = ensure_assunto_nome(dfp.copy(), "INT")
     df_onb = aplicar_filtro_global(dfp.copy(), "mes_created", ano_global, mes_global)
-    # ======================
-
 
     total_clientes_novos = int((df_onb["assunto_nome"] == ASSUNTO_CLIENTE_NOVO).sum())
     df_erros = df_onb[df_onb["assunto_nome"].isin(ASSUNTOS_ERROS)].copy()
@@ -727,73 +705,39 @@ def render_onboarding(dfp: pd.DataFrame, ano_global: str, mes_global: str):
     c3.metric("Tickets com pendências", tickets_pendencias)
     c4.metric("Possíveis clientes", possiveis_clientes)
 
-    # ======================
-    # NOVOS GRÁFICOS — Onboarding (ordem: Cliente novo, Tipo de Integração)
-    # ======================
-    # 1) Tickets – Cliente novo (mensal com variação % e labels alinhados no topo)
+    # 1) Tickets – Cliente novo (mensal com variação % e labels no topo)
     df_cli_novo = df_onb[df_onb["assunto_nome"].astype(str).str.contains("cliente novo", case=False, na=False)].copy()
     if not df_cli_novo.empty:
-        serie = (
-            df_cli_novo
-            .groupby(pd.Grouper(key="created", freq="MS"))
-            .size()
-            .rename("qtd")
-            .reset_index()
-        )
+        serie = df_cli_novo.groupby(pd.Grouper(key="created", freq="MS")).size().rename("qtd").reset_index()
         if not serie.empty:
             idx = pd.date_range(serie["created"].min(), serie["created"].max(), freq="MS")
-            serie = (
-                serie.set_index("created")
-                     .reindex(idx)
-                     .fillna(0.0)
-                     .rename_axis("created")
-                     .reset_index()
-            )
+            serie = serie.set_index("created").reindex(idx).fillna(0.0).rename_axis("created").reset_index()
             serie["qtd"] = serie["qtd"].astype(int)
             serie["pct"] = serie["qtd"].pct_change() * 100.0
-            # substitui infinitos por NaN para evitar Overflow no anotador
-            serie["pct"].replace([float("inf"), float("-inf")], float("nan"), inplace=True)
+
             def _ann(v):
                 import math
-                try:
-                    # None/NaN/Inf → sem label
-                    if v is None:
-                        return ""
-                    if isinstance(v, float) and (math.isnan(v) or math.isinf(v)):
-                        return ""
-                    # converte para inteiro com proteção
-                    v2 = int(round(v))
-                    if v2 > 0:
-                        return f"▲ {v2}%"
-                    if v2 < 0:
-                        return f"▼ {abs(v2)}%"
-                    return "0%"
-                except Exception:
-                    return ""
+                if v is None: return ""
+                if isinstance(v, float) and (math.isnan(v) or math.isinf(v)): return ""
+                v2 = int(round(v))
+                if v2 > 0:  return f"▲ {v2}%"
+                if v2 < 0:  return f"▼ {abs(v2)}%"
+                return "0%"
+
             serie["annot"] = serie["pct"].map(_ann)
             serie["mes_str"] = serie["created"].dt.strftime("%Y %b")
 
             fig_cli = px.bar(serie, x="mes_str", y="qtd", text="qtd", title="Tickets – Cliente novo", height=420)
             fig_cli.update_traces(textposition="outside", cliponaxis=False)
-            # alinhar % no topo do gráfico (fixo, acima do plot)
             fig_cli.update_layout(margin=dict(l=10, r=10, t=60, b=10))
             for _, r in serie.iterrows():
                 txt = r.get("annot") or ""
-                if not txt:
-                    continue
+                if not txt: continue
                 color = "blue" if (r.get("pct") or 0) >= 0 else "red"
-                fig_cli.add_annotation(
-                    x=r["mes_str"],
-                    y=1.02,
-                    xref="x",
-                    yref="paper",
-                    text=txt,
-                    showarrow=False,
-                    font=dict(size=12, color=color),
-                    yanchor="bottom"
-                )
+                fig_cli.add_annotation(x=r["mes_str"], y=1.02, xref="x", yref="paper",
+                                       text=txt, showarrow=False, font=dict(size=12, color=color), yanchor="bottom")
 
-    # 2) Tipo de Integração (horizontal) — números visíveis na direita
+    # 2) Tipo de Integração (horizontal)
     def _tipo_from_assunto(s: str) -> str:
         s = (s or "").strip().lower()
         if "cliente novo" in s: return "Cliente novo"
@@ -801,17 +745,14 @@ def render_onboarding(dfp: pd.DataFrame, ano_global: str, mes_global: str):
         if "conta filho" in s: return "Conta filho"
         return "Outros"
 
-    tipo_counts = (
-        df_onb.assign(tipo=df_onb["assunto_nome"].map(_tipo_from_assunto))
-              .groupby("tipo").size().rename("Qtd").reset_index()
-    )
+    tipo_counts = (df_onb.assign(tipo=df_onb["assunto_nome"].map(_tipo_from_assunto))
+                        .groupby("tipo").size().rename("Qtd").reset_index())
     priority = ["Cliente novo","Outros","Alteração de plataforma","Conta filho"]
     tipo_counts["ord"] = tipo_counts["tipo"].apply(lambda x: priority.index(x) if x in priority else len(priority)+1)
     tipo_counts = tipo_counts.sort_values(["ord","Qtd"], ascending=[True, False])
 
     fig_tipo = px.bar(tipo_counts, x="Qtd", y="tipo", orientation="h", text="Qtd", title="Tipo de Integração", height=420)
     fig_tipo.update_traces(textposition="outside", cliponaxis=False)
-    # margem direita e padding no eixo X para não cortar o número
     fig_tipo.update_layout(margin=dict(l=10, r=90, t=45, b=10))
     try:
         _max_q = float(tipo_counts["Qtd"].max())
@@ -819,43 +760,23 @@ def render_onboarding(dfp: pd.DataFrame, ano_global: str, mes_global: str):
     except Exception:
         pass
 
-    # Layout vertical conforme solicitado
     if "fig_cli" in locals():
         show_plot(fig_cli, "onb_cli_novo", "INT", ano_global, mes_global)
     else:
         st.info("Sem dados para 'Cliente novo' com os filtros atuais.")
     show_plot(fig_tipo, "onb_tipo_int", "INT", ano_global, mes_global)
-    # ======================
 
     # gráfico horizontal por erros
     if not df_erros.empty:
-        cont_erros = (df_erros["assunto_nome"].value_counts()
-                      .reindex(ASSUNTOS_ERROS, fill_value=0).reset_index())
+        cont_erros = df_erros["assunto_nome"].value_counts().reindex(ASSUNTOS_ERROS, fill_value=0).reset_index()
         cont_erros.columns = ["Categoria","Qtd"]
-
-        fig_onb = px.bar(cont_erros, x="Qtd", y="Categoria", orientation="h",
-                         text="Qtd", title="Erros Onboarding", height=420)
-        fig_onb.update_traces(texttemplate="%{text:.0f}", textposition="outside",
-                              textfont_size=16, cliponaxis=False)
+        fig_onb = px.bar(cont_erros, x="Qtd", y="Categoria", orientation="h", text="Qtd", title="Erros Onboarding", height=420)
+        fig_onb.update_traces(texttemplate="%{text:.0f}", textposition="outside", textfont_size=16, cliponaxis=False)
         max_q = int(cont_erros["Qtd"].max()) if not cont_erros.empty else 0
         if max_q > 0:
             fig_onb.update_xaxes(range=[0, max_q*1.25])
         fig_onb.update_layout(margin=dict(t=50, r=20, b=30, l=10), bargap=0.25)
         show_plot(fig_onb, "onboarding", "INT", ano_global, mes_global)
-
-    # simulação de dinheiro perdido
-    st.markdown("---")
-    st.subheader("💸 Dinheiro perdido (simulação)")
-    c_left,c_right = st.columns([1,1])
-    with c_left:
-        st.number_input("Clientes novos (simulação)", value=possiveis_clientes, disabled=True, key="sim_clientes_onb")
-    with c_right:
-        receita_cliente = st.slider("Cenário Receita por Cliente (R$)",
-                                    min_value=0, max_value=100000, step=500, value=20000,
-                                    key="sim_receita_onb")
-    dinheiro_perdido = float(possiveis_clientes) * float(receita_cliente)
-    st.markdown(f"### **R$ {dinheiro_perdido:,.2f}**",
-                help="Cálculo: Clientes novos (simulação) × Cenário Receita por Cliente")
 
 # ======================
 # Abas por Projeto/Visão
@@ -883,67 +804,49 @@ for projeto, tab in zip(PROJETOS, tabs):
             st.info("Sem dados carregados para este projeto.")
             continue
 
-        # garantir colunas auxiliares
+        # colunas auxiliares
         dfp["mes_created"] = pd.to_datetime(dfp["created"], errors="coerce")
         dfp["mes_resolved"] = pd.to_datetime(dfp["resolved"], errors="coerce")
 
         dfp = ensure_assunto_nome(dfp, projeto)
         visao = st.selectbox("Visão", opcoes, key=f"visao_{projeto}")
 
-        # 1) Criados vs Resolvidos
         if visao == "Criados vs Resolvidos":
             render_criados_resolvidos(dfp, projeto, ano_global, mes_global)
-
-        # 2) SLA
         elif visao == "SLA":
             render_sla(dfp, projeto, ano_global, mes_global)
-
-        # 3) Assunto
         elif visao == "Assunto Relacionado":
             render_assunto(dfp, projeto, ano_global, mes_global)
-
-        # 4) Área
         elif visao == "Área Solicitante":
             if projeto == "INTEL":
                 st.info("Este projeto não possui Área Solicitante.")
             else:
                 render_area(dfp, ano_global, mes_global)
-
-        # 5) Onboarding
         elif visao == "Onboarding":
             if projeto == "INT":
                 render_onboarding(dfp, ano_global, mes_global)
             else:
                 st.info("Onboarding disponível somente para Integrations.")
-
-        # 6) APP NE
         elif visao == "APP NE":
             if projeto == "TDS":
                 render_app_ne(dfp, ano_global, mes_global)
             else:
                 st.info("APP NE disponível somente para Tech Support.")
-
-        # 7) Rotinas Manuais
         elif visao == "Rotinas Manuais":
             render_rotinas_manuais(dfp, ano_global, mes_global)
-
-        # Geral — ordem fixa
         else:
+            # Geral — ordem fixa
             render_criados_resolvidos(dfp, projeto, ano_global, mes_global)
             render_sla(dfp, projeto, ano_global, mes_global)
             render_assunto(dfp, projeto, ano_global, mes_global)
-
             if projeto != "INTEL":
                 render_area(dfp, ano_global, mes_global)
-
             if projeto in ("TDS","INT"):
                 render_encaminhamentos(dfp, ano_global, mes_global)
-
             if projeto == "TDS":
                 render_app_ne(dfp, ano_global, mes_global)
                 with st.expander("🛠️ Rotinas Manuais", expanded=False):
                     render_rotinas_manuais(dfp, ano_global, mes_global)
-
             if projeto == "INT":
                 with st.expander("🧭 Onboarding", expanded=False):
                     render_onboarding(dfp, ano_global, mes_global)
