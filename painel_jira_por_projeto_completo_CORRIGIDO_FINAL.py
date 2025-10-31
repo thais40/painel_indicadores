@@ -480,8 +480,6 @@ def render_rotinas_manuais(dfp: pd.DataFrame, ano_global: str, mes_global: str):
         st.info("Sem tickets para o período.")
         return
 
-    import plotly.express as px
-
     OPS_AREAS = [
         "Ops - Conferência",
         "Ops - Cubagem",
@@ -491,9 +489,19 @@ def render_rotinas_manuais(dfp: pd.DataFrame, ano_global: str, mes_global: str):
         "Ops - Divergências",
     ]
 
-    # Assuntos que definem "Manual"
-    MANUAL_ASSUNTOS = {"Correção IE (Qlik)", "Correção CTE", "Divergência Conferência"}
-    MANUAL_ASSUNTOS_CANON = {_canonical(s) for s in MANUAL_ASSUNTOS}
+    # Palavras-chave para capturar MANUAL (tolerante a variações)
+    def _is_manual_text(txt: str) -> bool:
+        c = _canonical(txt)
+        # Correção IE (Qlik)
+        if ("correcao" in c and "ie" in c and "qlik" in c): 
+            return True
+        # Correção CTE
+        if ("correcao" in c and "cte" in c):
+            return True
+        # Divergência Conferência
+        if ("divergencia" in c and "conferencia" in c):
+            return True
+        return False
 
     df = dfp.copy()
     df = ensure_assunto_nome(df, "TDS")
@@ -505,7 +513,7 @@ def render_rotinas_manuais(dfp: pd.DataFrame, ano_global: str, mes_global: str):
         st.info("Sem tickets de Rotinas Manuais nas áreas Ops com os filtros atuais.")
         return
 
-    # 2) Qtd encomendas > 0
+    # 2) Quantidade de encomendas > 0
     base["qtd_encomendas"] = base[CAMPO_QTD_ENCOMENDAS].apply(parse_qtd_encomendas)
     base = base[base["qtd_encomendas"] > 0].copy()
     if base.empty:
@@ -517,11 +525,15 @@ def render_rotinas_manuais(dfp: pd.DataFrame, ano_global: str, mes_global: str):
     base = base.dropna(subset=["resolved"]).copy()
     base["mes_dt"] = base["resolved"].dt.to_period("M").dt.to_timestamp()
 
-    # 4) Classificação
-    def _classifica(assunto):
-        return "Manual" if _canonical(assunto) in MANUAL_ASSUNTOS_CANON else "Encomendas TDS"
+    # 4) Texto para classificar: assunto + summary (fallback)
     base["assunto_nome"] = base["assunto_nome"].astype(str)
-    base["tipo_encomenda"] = base["assunto_nome"].map(_classifica)
+    base["summary_txt"]  = base["summary"].astype(str)
+    base["texto_manual"] = (base["assunto_nome"].fillna("") + " " + base["summary_txt"].fillna("")).str.strip()
+
+    def _classifica(txt):
+        return "Manual" if _is_manual_text(txt) else "Encomendas TDS"
+
+    base["tipo_encomenda"] = base["texto_manual"].map(_classifica)
 
     # 5) Filtros globais
     base = aplicar_filtro_global(base, "mes_dt", ano_global, mes_global)
@@ -529,33 +541,48 @@ def render_rotinas_manuais(dfp: pd.DataFrame, ano_global: str, mes_global: str):
         st.info("Sem dados para exibir com os filtros atuais.")
         return
 
-    # (A) Gráfico mensal Manual × Encomendas TDS
-    serie = (base.groupby(["mes_dt","tipo_encomenda"], as_index=False)["qtd_encomendas"].sum())
-    serie_w = serie.pivot(index="mes_dt", columns="tipo_encomenda", values="qtd_encomendas").fillna(0).reset_index()
-    serie_w["mes_str"] = serie_w["mes_dt"].dt.strftime("%b/%Y")
-    ycols = [c for c in ["Manual","Encomendas TDS"] if c in serie_w.columns]
+    # ===== (A) Gráfico mensal Manual × Encomendas TDS
+    serie = (
+        base.groupby(["mes_dt", "tipo_encomenda"], as_index=False)["qtd_encomendas"].sum()
+        .sort_values(["mes_dt", "tipo_encomenda"])
+    )
+    # Garante as duas colunas no pivot (mesmo que uma seja 0)
+    categorias = ["Manual", "Encomendas TDS"]
+    pivot = (serie
+        .pivot(index="mes_dt", columns="tipo_encomenda", values="qtd_encomendas")
+        .reindex(columns=categorias)
+        .fillna(0)
+        .reset_index()
+    )
+    pivot["mes_str"] = pivot["mes_dt"].dt.strftime("%b/%Y")
 
-    fig = px.bar(serie_w, x="mes_str", y=ycols, barmode="group", text_auto=True,
-                 title="Encomendas corrigidas — Manual | TDS (mês a mês)", height=420)
+    fig = px.bar(
+        pivot, x="mes_str", y=categorias, barmode="group", text_auto=True,
+        title="Encomendas corrigidas — Manual | TDS (mês a mês)", height=420
+    )
     fig.update_traces(textangle=0, cliponaxis=False)
-    fig.update_xaxes(categoryorder="array", categoryarray=serie_w["mes_str"].tolist())
+    fig.update_xaxes(categoryorder="array", categoryarray=pivot["mes_str"].tolist())
     show_plot(fig, "rotinas_ops_mensal_manual_tds", "TDS", ano_global, mes_global)
 
-    # (B) Donut
-    totais = base.groupby("tipo_encomenda")["qtd_encomendas"].sum().reset_index()
-    if not totais.empty:
-        fig_donut = px.pie(totais, values="qtd_encomendas", names="tipo_encomenda",
-                           hole=0.6, title="Manual | TDS — Participação")
-        fig_donut.update_traces(textposition="inside", textinfo="percent+label")
-        show_plot(fig_donut, "rotinas_ops_donut_manual_tds", "TDS", ano_global, mes_global)
+    # ===== (B) Donut de participação
+    totais = (base.groupby("tipo_encomenda")["qtd_encomendas"].sum()
+              .reindex(categorias, fill_value=0).reset_index())
+    fig_donut = px.pie(
+        totais, values="qtd_encomendas", names="tipo_encomenda",
+        hole=0.6, title="Manual | TDS — Participação"
+    )
+    fig_donut.update_traces(textposition="inside", textinfo="percent+label")
+    show_plot(fig_donut, "rotinas_ops_donut_manual_tds", "TDS", ano_global, mes_global)
 
-    # (C) Manual | Assunto
+    # ===== (C) Manual | Assunto (ranking)
     df_manual = base[base["tipo_encomenda"] == "Manual"].copy()
     if not df_manual.empty:
-        rank = (df_manual.groupby("assunto_nome")["qtd_encomendas"].sum()
-                .sort_values(ascending=False).reset_index())
-        fig_ass = px.bar(rank, x="qtd_encomendas", y="assunto_nome", orientation="h",
-                         text="qtd_encomendas", title="Manual | Assunto", height=420)
+        rank = (df_manual.groupby("assunto_nome")["qtd_encomendas"]
+                .sum().sort_values(ascending=False).reset_index())
+        fig_ass = px.bar(
+            rank, x="qtd_encomendas", y="assunto_nome", orientation="h",
+            text="qtd_encomendas", title="Manual | Assunto", height=420
+        )
         fig_ass.update_traces(textposition="outside", cliponaxis=False)
         fig_ass.update_layout(margin=dict(l=10, r=90, t=45, b=10))
         try:
@@ -565,14 +592,14 @@ def render_rotinas_manuais(dfp: pd.DataFrame, ano_global: str, mes_global: str):
             pass
         show_plot(fig_ass, "rotinas_ops_manual_assunto", "TDS", ano_global, mes_global)
 
-    # Amostra
+    # Amostra para conferência
     with st.expander("🔎 Tickets usados (amostra)"):
         st.dataframe(
             base[["key","summary","assunto_nome","area_nome","resolved","qtd_encomendas","tipo_encomenda"]]
-              .sort_values("resolved", ascending=True).head(50),
+            .sort_values("resolved", ascending=True).head(50),
             use_container_width=True, hide_index=True
         )
-
+        
 # --------- Onboarding (INT) ---------
 def render_onboarding(dfp: pd.DataFrame, ano_global: str, mes_global: str):
     st.markdown("### 🧭 Onboarding")
