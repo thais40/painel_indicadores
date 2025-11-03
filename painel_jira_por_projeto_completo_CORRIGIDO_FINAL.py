@@ -33,7 +33,7 @@ if not EMAIL or not TOKEN:
 
 auth = HTTPBasicAuth(EMAIL, TOKEN)
 TZ_BR = ZoneInfo("America/Sao_Paulo")
-DATA_INICIO = "2024-05-01"
+DATA_INICIO = "2024-06-01"
 
 # ------------------ Campos ------------------
 SLA_CAMPOS = {
