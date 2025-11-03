@@ -676,6 +676,11 @@ def render_rotinas_manuais(dfp: pd.DataFrame, ano_global: str, mes_global: str):
         "Volumetria - Tabela Divergência",
         "Volumetria - Tabela Erro",
         "Encomendas sem registro",
+        "Remover do painel de divergências",
+        "Exibição de ocorrências",
+        "Erro no processamento - Não encontrada",
+        "Alteração de status - Cancelada",
+        "Volumetria - Painel sem registro",
     ]
 
     # normaliza e cria máscara por Assunto Relacionado
