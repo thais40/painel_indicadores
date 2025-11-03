@@ -40,7 +40,7 @@ if not EMAIL or not TOKEN:
 
 auth = HTTPBasicAuth(EMAIL, TOKEN)
 TZ_BR = ZoneInfo("America/Sao_Paulo")
-DATA_INICIO = "2024-05-01"
+DATA_INICIO = "2024-06-01"
 
 # ================= Campos / Constantes =====================
 SLA_CAMPOS = {
@@ -681,6 +681,7 @@ def render_rotinas_manuais(dfp: pd.DataFrame, ano_global: str, mes_global: str):
         "Erro no processamento - Não encontrada",
         "Alteração de status - Cancelada",
         "Volumetria - Painel sem registro",
+        "Exibição de ocorrências"
     ]
 
     # normaliza e cria máscara por Assunto Relacionado
