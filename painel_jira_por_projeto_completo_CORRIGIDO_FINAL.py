@@ -630,6 +630,16 @@ def render_rotinas_manuais(dfp: pd.DataFrame, ano_global: str, mes_global: str):
         "Correção CTE",
         "Divergência Conferência",
         "Outros",
+        "Divergências na Conferência",
+        "Correção da IE (QlikSense)",
+        "Correção p/ Cotação/ Kill Bill (Grafana)",
+        "Correção Cotação",
+        "Correção de Erro na CTE (Tabela)",
+        "Limpeza do Painel (Webapp) - Sem registro",
+        "Limpeza sem registro",     
+        "Correção IE Tabela",
+        "Correção IE Tabela",
+        "Outros",
     ]
     EXATOS_CANON = [_canonical(s) for s in MANUAL_TDS_ASSUNTOS_EXATOS]
 
