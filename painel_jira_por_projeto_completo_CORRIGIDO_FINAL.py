@@ -657,6 +657,7 @@ def render_rotinas_manuais(dfp: pd.DataFrame, ano_global: str, mes_global: str):
     base["assunto_nome"] = base["assunto_nome"].astype(str)
     base["tipo_encomenda"] = base["assunto_nome"].map(lambda s: "Manual" if _is_assunto_manual(s) else "Encomendas TDS")
 
+    full_base = base.copy()
     base = aplicar_filtro_global(base, "mes_dt", ano_global, mes_global)
     if base.empty:
         st.info("Sem dados para exibir com os filtros atuais.")
@@ -720,6 +721,18 @@ def render_rotinas_manuais(dfp: pd.DataFrame, ano_global: str, mes_global: str):
         except Exception:
             pass
         show_plot(fig_ass, "rotinas_ops_manual_assunto", "TDS", ano_global, mes_global)
+
+    with st.expander("📤 Exportar / diagnóstico — tickets com 'Quantidade de encomendas' > 0", expanded=False):
+        st.write("Abaixo estão **todos** os tickets do Jira (desde 2024-05-01) com o campo preenchido, independente dos filtros globais.")
+        df_export = full_base[["key","resolved","mes_dt","area_nome","assunto_nome","qtd_encomendas","tipo_encomenda"]].sort_values("resolved")
+        c1, c2, c3, c4 = st.columns(4)
+        c1.metric("Tickets", int(df_export["key"].nunique()))
+        c2.metric("Soma de encomendas", int(df_export["qtd_encomendas"].sum()))
+        c3.metric("Assuntos distintos", int(df_export["assunto_nome"].nunique()))
+        c4.metric("Áreas distintas", int(df_export["area_nome"].nunique()))
+        csv = df_export.to_csv(index=False).encode("utf-8-sig")
+        st.download_button("Baixar CSV (todos)", data=csv, file_name=f"rotinas_manuais_qtd_encomendas_{date.today():%Y%m%d}.csv", mime="text/csv")
+        st.dataframe(df_export.head(5000), use_container_width=True, hide_index=True)
 
     with st.expander("🔎 Tickets usados (amostra)"):
         st.dataframe(
