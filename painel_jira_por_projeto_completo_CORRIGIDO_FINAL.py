@@ -663,7 +663,15 @@ def render_rotinas_manuais(dfp: pd.DataFrame, ano_global: str, mes_global: str):
         st.info("Sem dados para exibir com os filtros atuais.")
         return
 
-    serie = base.groupby(["mes_dt", "tipo_encomenda"], as_index=False)["qtd_encomendas"].sum()
+    # --- Reclassificação por palavras-chave no texto (assunto + summary)
+    KEYWORDS_MANUAL = [\"divergencia\", \"ie qliksense\", \"cte\", \"ie tabela\"]
+    base[\"texto_busca\"] = (base[\"assunto_nome\"].fillna(\"\") + \" \" + base[\"summary\"].fillna(\"\")).astype(str)
+    def _is_manual_by_keywords(text: str) -> bool:
+        c = _canonical(text or \"\")
+        return any(k in c for k in KEYWORDS_MANUAL)
+    base[\"tipo_encomenda\"] = base[\"texto_busca\"].map(lambda s: \"Manual\" if _is_manual_by_keywords(s) else \"Encomendas TDS\")
+
+    serie = base.groupby([\"mes_dt\", \"tipo_encomenda\"], as_index=False)[\"qtd_encomendas\"].sum()
     categorias = ["Manual", "Encomendas TDS"]
     pivot = (
         serie.pivot(index="mes_dt", columns="tipo_encomenda", values="qtd_encomendas")
