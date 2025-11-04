@@ -689,7 +689,7 @@ def render_rotinas_manuais(dfp: pd.DataFrame, ano_global: str, mes_global: str):
     base["texto_busca"] = (base["assunto_nome"].fillna("") + " " + base["summary"].fillna("")).astype(str)
 
     # Regra Manual (palavras-chave normalizadas)
-    KEYWORDS_MANUAL = ["divergencia", "ie qliksense", "cte", "ie tabela", "inscrição estadual", "conferência", "processamento", "ie", "divergência", "qlik", "qliksense",]
+    KEYWORDS_MANUAL = ["divergencia", "ie qliksense", "cte", "ie tabela", "inscrição estadual", "conferência", "processamento", "ie", "divergência", "qlik", "qliksense", "alteração de status",]
     def _is_manual_by_keywords(text: str) -> bool:
         c = _canonical(text or "")
         return any(k in c for k in KEYWORDS_MANUAL)
