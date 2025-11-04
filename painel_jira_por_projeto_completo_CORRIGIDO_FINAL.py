@@ -631,6 +631,7 @@ def render_rotinas_manuais(dfp: pd.DataFrame, ano_global: str, mes_global: str):
         "ie",
         "inscrição estadual",
         "conferência",
+        "volumetria",
     ]
 
     # --- base inicial
