@@ -646,14 +646,33 @@ def render_rotinas_manuais(dfp: pd.DataFrame, ano_global: str, mes_global: str):
     base = base.dropna(subset=["resolved"]).copy()
     base["mes_dt"] = base["resolved"].dt.to_period("M").dt.to_timestamp()
 
-    # 4) DEDUP por key (mantém o último resolved)
+    # 4) DEDUP por key (usa o PRIMEIRO resolved válido para não concentrar tudo em um mês)
+    #    - se não houver resolved (NaT), cai no created mais antigo
+    base["created"] = pd.to_datetime(base.get("created"), errors="coerce")
+
+    # escolhe a melhor data por linha
+    base["_best_dt"] = base["resolved"]
+    mask_na = base["_best_dt"].isna() & base["created"].notna()
+    base.loc[mask_na, "_best_dt"] = base.loc[mask_na, "created"]
+
+    # agora consolida 1 linha por issue key, pegando o PRIMEIRO momento do ticket
+    agg_cols = {
+        "_best_dt": "min",                 # primeiro carimbo de data
+        "qtd_encomendas": "max",           # quantidade final por ticket
+        "assunto_nome": "first",
+        "summary": "first",
+        "area_nome": "first",
+    }
     base = (
-        base.sort_values(["key", "resolved"])
-            .drop_duplicates(subset="key", keep="last")
+        base.sort_values(["key", "_best_dt"])
+            .groupby("key", as_index=False)
+            .agg(agg_cols)
+            .rename(columns={"_best_dt": "resolved"})
             .copy()
     )
-
-    # 5) Texto de busca = assunto + título
+    
+    # 5) mês de agregação a partir do resolved consolidado
+    base["mes_dt"] = base["resolved"].dt.to_period("M").dt.to_timestamp()
     base["assunto_nome"] = base["assunto_nome"].astype(str)
     base["summary"] = base["summary"].astype(str)
     base["texto_busca"] = (base["assunto_nome"].fillna("") + " " + base["summary"].fillna("")).astype(str)
