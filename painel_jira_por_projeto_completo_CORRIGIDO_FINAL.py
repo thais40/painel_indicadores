@@ -40,7 +40,7 @@ if not EMAIL or not TOKEN:
 
 auth = HTTPBasicAuth(EMAIL, TOKEN)
 TZ_BR = ZoneInfo("America/Sao_Paulo")
-DATA_INICIO = "2024-05-01"
+DATA_INICIO = "2024-06-01"
 
 # ================= Campos / Constantes =====================
 SLA_CAMPOS = {
@@ -331,52 +331,76 @@ def build_monthly_tables(df_all: pd.DataFrame) -> pd.DataFrame:
 
 # ================= Visuais Genéricos ======================
 
-def render_criados_resolvidos(dfp, projeto, ano_global, mes_global):
-    st.markdown("### 📈 Tickets Criados vs Resolvidos")
-    if dfp is None or dfp.empty:
-        st.info("Sem dados para esta visão.")
-        return
-
-    def _to_brt_period(s):
-        ser = pd.to_datetime(s, errors="coerce", utc=True)
-        try:
-            ser = ser.dt.tz_convert(TZ_BR)
-        except Exception:
-            ser = pd.to_datetime(s, errors="coerce")
-        return ser.dt.tz_localize(None).dt.to_period("M").dt.to_timestamp()
+def render_criados_resolvidos_tds(dfp: pd.DataFrame, ano_global: str, mes_global: str):
+    """
+    TDS — Tickets Criados vs Resolvidos (TODAS as áreas), eixo mensal contínuo.
+    - 'Criados': primeiro 'created' por key (mês de criação do ticket)
+    - 'Resolvidos': último 'resolved' por key (mês de resolução final)
+    - Sem filtro de área.
+    """
+    import pandas as pd
+    import plotly.express as px
+    import streamlit as st
 
     df = dfp.copy()
 
-    # CRIADOS
-    dfc = df.dropna(subset=["created"]).copy()
-    if "key" in dfc.columns:
-        dfc = dfc.drop_duplicates(subset=["key"])
-    dfc["period"] = _to_brt_period(dfc["created"])
-    dfc = aplicar_filtro_global(dfc, "period", ano_global, mes_global)
-    created = dfc.groupby("period").size().rename("Criados")
+    # Datas
+    df["created"]  = pd.to_datetime(df.get("created"),  errors="coerce")
+    df["resolved"] = pd.to_datetime(df.get("resolved"), errors="coerce")
 
-    # RESOLVIDOS
-    res_col = "resolved" if df["resolved"].notna().sum() > 0 else ("resolutiondate" if "resolutiondate" in df.columns else None)
-    if res_col:
-        dfr = df.dropna(subset=[res_col]).copy()
-        if "key" in dfr.columns:
-            dfr = dfr.drop_duplicates(subset=["key"])
-        dfr["period"] = _to_brt_period(dfr[res_col])
-        dfr = aplicar_filtro_global(dfr, "period", ano_global, mes_global)
-        resolved = dfr.groupby("period").size().rename("Resolvidos")
-    else:
-        resolved = pd.Series(dtype=int, name="Resolvidos")
+    # Séries por mês
+    # Criados: 1ª criação por key
+    cdf = (df.dropna(subset=["created"])
+             .sort_values(["key","created"])
+             .drop_duplicates("key", keep="first")
+             .copy())
+    cdf["mes_dt"] = cdf["created"].dt.to_period("M").dt.to_timestamp()
 
-    monthly = pd.concat([created, resolved], axis=1).fillna(0).astype(int).reset_index().sort_values("period")
-    if monthly.empty:
-        st.info("Sem dados para exibir nos filtros atuais.")
+    # Resolvidos: última resolução por key
+    rdf = (df.dropna(subset=["resolved"])
+             .sort_values(["key","resolved"])
+             .drop_duplicates("key", keep="last")
+             .copy())
+    rdf["mes_dt"] = rdf["resolved"].dt.to_period("M").dt.to_timestamp()
+
+    if cdf.empty and rdf.empty:
+        st.info("Sem dados de created/resolved para montar a série.")
         return
-    monthly["mes_str"] = monthly["period"].dt.strftime("%b/%Y")
 
-    fig = px.bar(monthly, x="mes_str", y=["Criados", "Resolvidos"], barmode="group", text_auto=True, height=440)
+    # Eixo mensal contínuo (não 'pula' meses)
+    min_m = min(x for x in [
+        cdf["mes_dt"].min() if not cdf.empty else None,
+        rdf["mes_dt"].min() if not rdf.empty else None
+    ] if x is not None)
+    max_m = max(x for x in [
+        cdf["mes_dt"].max() if not cdf.empty else None,
+        rdf["mes_dt"].max() if not rdf.empty else None
+    ] if x is not None)
+
+    idx = pd.date_range(min_m, max_m, freq="MS")
+
+    s_criados    = cdf.groupby("mes_dt")["key"].nunique().reindex(idx, fill_value=0).rename("Criados")
+    s_resolvidos = rdf.groupby("mes_dt")["key"].nunique().reindex(idx, fill_value=0).rename("Resolvidos")
+
+    monthly = pd.concat([s_criados, s_resolvidos], axis=1).reset_index().rename(columns={"index":"mes_dt"})
+    monthly = aplicar_filtro_global(monthly, "mes_dt", ano_global, mes_global)
+    if monthly.empty:
+        st.info("Sem dados para os filtros selecionados.")
+        return
+
+    monthly["mes_str"] = monthly["mes_dt"].dt.strftime("%b/%Y")
+
+    fig = px.bar(
+        monthly, x="mes_str", y=["Criados","Resolvidos"],
+        barmode="group", text_auto=True,
+        title="Tickets Criados vs Resolvidos — TDS (todas as áreas)",
+        height=420,
+    )
     fig.update_traces(textangle=0, cliponaxis=False)
     fig.update_xaxes(categoryorder="array", categoryarray=monthly["mes_str"].tolist())
-    show_plot(fig, "criados_resolvidos", projeto, ano_global, mes_global)
+
+    # mantém o mesmo helper de salvar/mostrar que você já usa
+    show_plot(fig, "tds_criados_resolvidos_all", "TDS", ano_global, mes_global)
 
 
 def render_sla_table(df_monthly_all: pd.DataFrame, projeto: str, ano_global: str, mes_global: str):
