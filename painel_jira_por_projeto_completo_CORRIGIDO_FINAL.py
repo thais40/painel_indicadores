@@ -610,12 +610,11 @@ def render_rotinas_manuais(dfp: pd.DataFrame, ano_global: str, mes_global: str):
     """
     Rotinas Manuais (TDS)
     - Encomendas TDS = TOTAL mensal de 'Quantidade de encomendas' > 0
-    - Manual = subconjunto do total se (assunto + título) contiver:
+    - Manual = subconjunto se (assunto + título) contiver:
         'divergência', 'IE (Qliksense)', 'CTE', 'IE (tabela)', 'alteração de status'
-      (match feito em texto normalizado, sem acento/caixa)
+      (match normalizado, sem acento/caixa)
     - Todas as áreas por padrão.
-    - Dedup por key para evitar somas duplicadas.
-    - Reindex mensal para não colapsar a série.
+    - Dedup por key usando o PRIMEIRO momento do ticket (resolved, senão created).
     """
     import pandas as pd
     import plotly.express as px
@@ -628,10 +627,10 @@ def render_rotinas_manuais(dfp: pd.DataFrame, ano_global: str, mes_global: str):
 
     # 1) Base + assunto consolidado
     df = dfp.copy()
-    df = ensure_assunto_nome(df, "TDS")  # seu helper
+    df = ensure_assunto_nome(df, "TDS")
     df["area_nome"] = df["area"].apply(lambda x: safe_get_value(x, "value"))
 
-    # Todas as áreas (sem filtro)
+    # Todas as áreas
     base = df.copy()
 
     # 2) Quantidade de encomendas > 0
@@ -641,24 +640,18 @@ def render_rotinas_manuais(dfp: pd.DataFrame, ano_global: str, mes_global: str):
         st.info("Sem tickets com 'Quantidade de encomendas' > 0.")
         return
 
-    # 3) Datas e mês
+    # 3) Datas
     base["resolved"] = pd.to_datetime(base["resolved"], errors="coerce")
-    base = base.dropna(subset=["resolved"]).copy()
-    base["mes_dt"] = base["resolved"].dt.to_period("M").dt.to_timestamp()
+    base["created"]  = pd.to_datetime(base.get("created"), errors="coerce")
 
-    # 4) DEDUP por key (usa o PRIMEIRO resolved válido para não concentrar tudo em um mês)
-    #    - se não houver resolved (NaT), cai no created mais antigo
-    base["created"] = pd.to_datetime(base.get("created"), errors="coerce")
-    
-    # escolhe a melhor data por linha
+    # 4) Dedup por key usando o PRIMEIRO momento (evita concentrar tudo no último mês)
     base["_best_dt"] = base["resolved"]
     mask_na = base["_best_dt"].isna() & base["created"].notna()
     base.loc[mask_na, "_best_dt"] = base.loc[mask_na, "created"]
-    
-    # agora consolida 1 linha por issue key, pegando o PRIMEIRO momento do ticket
+
     agg_cols = {
-        "_best_dt": "min",                 # primeiro carimbo de data
-        "qtd_encomendas": "max",           # quantidade final por ticket
+        "_best_dt": "min",                 # primeiro carimbo do ticket
+        "qtd_encomendas": "max",           # quantidade final por ticket (evita duplicidade)
         "assunto_nome": "first",
         "summary": "first",
         "area_nome": "first",
@@ -670,11 +663,16 @@ def render_rotinas_manuais(dfp: pd.DataFrame, ano_global: str, mes_global: str):
             .rename(columns={"_best_dt": "resolved"})
             .copy()
     )
-    
-    # 5) mês de agregação a partir do resolved consolidado
-    base["mes_dt"] = base["resolved"].dt.to_period("M").dt.to_timestamp()
 
-    # 6) Regra Manual
+    # 5) Mês de agregação
+    base["mes_dt"] = pd.to_datetime(base["resolved"], errors="coerce").dt.to_period("M").dt.to_timestamp()
+
+    # 6) (RE)montar texto_busca AGORA (dps da dedup!)
+    base["assunto_nome"] = base["assunto_nome"].astype(str)
+    base["summary"]      = base["summary"].astype(str)
+    base["texto_busca"]  = (base["assunto_nome"].fillna("") + " " + base["summary"].fillna("")).astype(str)
+
+    # Regra Manual
     KEYWORDS_MANUAL = [
         "divergencia",
         "ie qliksense",
@@ -689,22 +687,22 @@ def render_rotinas_manuais(dfp: pd.DataFrame, ano_global: str, mes_global: str):
             return True
         return any(k in c for k in KEYWORDS_MANUAL)
 
-    # Guarda base completa (antes do filtro global) p/ export
+    # Guardar base completa antes do filtro global
     full_base = base.copy()
 
-    # 7) Filtro global (ano/mês) só para os gráficos
+    # 7) Filtro global (ano/mês) só para gráficos
     base = aplicar_filtro_global(base, "mes_dt", ano_global, mes_global)
     if base.empty:
         st.info("Sem dados para exibir com os filtros atuais.")
         return
 
-    # 8) Série mensal com REINDEX do intervalo de meses
+    # 8) Série mensal com reindex
     manual_mask = base["texto_busca"].apply(_is_manual_by_keywords)
 
-    monthly_total = base.groupby("mes_dt")["qtd_encomendas"].sum().rename("Encomendas TDS")
+    monthly_total  = base.groupby("mes_dt")["qtd_encomendas"].sum().rename("Encomendas TDS")
     monthly_manual = base[manual_mask].groupby("mes_dt")["qtd_encomendas"].sum().rename("Manual")
 
-    # índice mensal contínuo (1º dia do mês)
+    # índice mensal contínuo
     idx = pd.date_range(
         start=base["mes_dt"].min().to_period("M").to_timestamp(),
         end=base["mes_dt"].max().to_period("M").to_timestamp(),
@@ -714,7 +712,7 @@ def render_rotinas_manuais(dfp: pd.DataFrame, ano_global: str, mes_global: str):
     monthly = monthly.rename_axis("mes_dt").reset_index()
     monthly["mes_str"] = monthly["mes_dt"].dt.strftime("%b/%Y")
 
-    # 9) Barras (Manual vs total TDS)
+    # 9) Barras
     fig = px.bar(
         monthly,
         x="mes_str",
@@ -728,7 +726,7 @@ def render_rotinas_manuais(dfp: pd.DataFrame, ano_global: str, mes_global: str):
     fig.update_xaxes(categoryorder="array", categoryarray=monthly["mes_str"].tolist())
     show_plot(fig, "rotinas_ops_mensal_manual_tds", "TDS", ano_global, mes_global)
 
-    # 10) Donut (Manual dentro do total TDS)
+    # 10) Donut
     total_sum  = float(monthly["Encomendas TDS"].sum())
     manual_sum = float(monthly["Manual"].sum())
     restante   = max(total_sum - manual_sum, 0.0)
@@ -738,16 +736,18 @@ def render_rotinas_manuais(dfp: pd.DataFrame, ano_global: str, mes_global: str):
     fig_donut.update_traces(textposition="inside", textinfo="percent+label")
     show_plot(fig_donut, "rotinas_ops_donut_manual_tds", "TDS", ano_global, mes_global)
 
-    # 11) Ranking de assuntos (apenas Manual)
+    # 11) Ranking (apenas Manual)
     df_manual = base[manual_mask].copy()
     if not df_manual.empty:
         rank = (
             df_manual.groupby("assunto_nome")["qtd_encomendas"]
             .sum().sort_values(ascending=False).reset_index()
         )
-        fig_ass = px.bar(rank, x="qtd_encomendas", y="assunto_nome",
-                         orientation="h", text="qtd_encomendas",
-                         title="Manual | Assunto", height=420)
+        fig_ass = px.bar(
+            rank, x="qtd_encomendas", y="assunto_nome",
+            orientation="h", text="qtd_encomendas",
+            title="Manual | Assunto", height=420
+        )
         fig_ass.update_traces(textposition="outside", cliponaxis=False)
         fig_ass.update_layout(margin=dict(l=10, r=90, t=45, b=10))
         try:
@@ -764,8 +764,9 @@ def render_rotinas_manuais(dfp: pd.DataFrame, ano_global: str, mes_global: str):
         df_export["tipo_encomenda"] = df_export["texto_busca"].apply(
             lambda s: "Manual" if _is_manual_by_keywords(s) else "Encomendas TDS"
         )
-        df_export = df_export[["key","resolved","mes_dt","area_nome","assunto_nome","qtd_encomendas","tipo_encomenda"]]\
-            .sort_values("resolved")
+        df_export = df_export[
+            ["key","resolved","mes_dt","area_nome","assunto_nome","qtd_encomendas","tipo_encomenda"]
+        ].sort_values("resolved")
 
         c1, c2, c3, c4 = st.columns(4)
         c1.metric("Tickets (únicos)", int(df_export["key"].nunique()))
