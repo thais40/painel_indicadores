@@ -647,12 +647,18 @@ def render_rotinas_manuais(dfp: pd.DataFrame, ano_global: str, mes_global: str):
       (match normalizado, sem acento/caixa)
     - Dedup por key usando o PRIMEIRO instante confiável (resolved → created → updated).
     - Reindex mensal, então todos os meses aparecem (com zero).
+    - Expander de DEBUG para investigar picos mensais.
     """
     import pandas as pd
     import plotly.express as px
     import streamlit as st
+    try:
+        from unidecode import unidecode as _unidecode
+    except Exception:
+        _unidecode = lambda s: s
 
     st.markdown("### 🛠️ Rotinas Manuais")
+
     if dfp.empty:
         st.info("Sem tickets para o período.")
         return
@@ -662,7 +668,15 @@ def render_rotinas_manuais(dfp: pd.DataFrame, ano_global: str, mes_global: str):
         "Ops - Coletas", "Ops - Expedição", "Ops - Divergências",
     ]
 
+    def _canonical_local(txt: str) -> str:
+        """Normaliza texto: minúsculas, sem acentos, sem quebras extras."""
+        s = (txt or "")
+        s = _unidecode(str(s)).lower()
+        # normaliza espaços
+        return " ".join(s.split())
+
     def _parse_dt_col(s):
+        """Parse de datas robusto (tenta ISO e depois dayfirst)."""
         x = pd.to_datetime(s, errors="coerce", utc=False, infer_datetime_format=True)
         if x.notna().sum() == 0:
             x = pd.to_datetime(s, errors="coerce", utc=False, dayfirst=True)
@@ -675,18 +689,16 @@ def render_rotinas_manuais(dfp: pd.DataFrame, ano_global: str, mes_global: str):
         "ie tabela",
         "alteracao de status",
         "alteracao status",
-        "inscricao estadual",
-        "inscrição estadual",
-        "conferencia"
-        "processamento",
     ]
+
     def _is_manual_by_keywords(text: str) -> bool:
-        c = _canonical(text or "")
+        c = _canonical_local(text)
+        # garante casar "alteracao ... status" mesmo com palavras no meio
         if ("alteracao" in c and "status" in c):
             return True
         return any(k in c for k in KEYWORDS_MANUAL)
 
-    # 1) Base + assunto consolidado
+    # 1) Base + assunto consolidado + área
     df = dfp.copy()
     df = ensure_assunto_nome(df, "TDS")
     df["area_nome"] = df["area"].apply(lambda x: safe_get_value(x, "value"))
@@ -697,7 +709,7 @@ def render_rotinas_manuais(dfp: pd.DataFrame, ano_global: str, mes_global: str):
         st.info("Sem tickets nas áreas Ops para os filtros atuais.")
         return
 
-    # 3) Quantidade de encomendas > 0
+    # 3) Quantidade de encomendas > 0 (usa seu parser)
     base["qtd_encomendas"] = base[CAMPO_QTD_ENCOMENDAS].apply(parse_qtd_encomendas)
     base = base[base["qtd_encomendas"] > 0].copy()
     if base.empty:
@@ -709,13 +721,14 @@ def render_rotinas_manuais(dfp: pd.DataFrame, ano_global: str, mes_global: str):
     base["created"]  = _parse_dt_col(base.get("created"))
     base["updated"]  = _parse_dt_col(base.get("updated"))
 
-    # 5) PRIMEIRO instante por ticket (evita concentrar tudo num mês)
+    # 5) PRIMEIRO instante por ticket (evita concentrar tudo no último mês)
     base["_best_dt"] = base["resolved"]
     m = base["_best_dt"].isna() & base["created"].notna()
     base.loc[m, "_best_dt"] = base.loc[m, "created"]
     m = base["_best_dt"].isna() & base["updated"].notna()
     base.loc[m, "_best_dt"] = base.loc[m, "updated"]
     base = base[base["_best_dt"].notna()].copy()
+
     agg_cols = {
         "_best_dt": "min",
         "qtd_encomendas": "max",
@@ -748,6 +761,89 @@ def render_rotinas_manuais(dfp: pd.DataFrame, ano_global: str, mes_global: str):
 
     # 8) Série mensal (Manual x TOTAL) com reindex
     manual_mask = base["texto_busca"].apply(_is_manual_by_keywords)
+
+    # ================= DEBUG DE MÊS (abrir mês e entender pico) =================
+    with st.expander("🔍 Debug de mês (Manual | TDS)", expanded=False):
+
+        def _manual_reason(text: str) -> str:
+            c = _canonical_local(text)
+            reasons = []
+            if ("alteracao" in c and "status" in c):
+                reasons.append("alteração de status")
+            for k in KEYWORDS_MANUAL:
+                if k in ("alteracao de status", "alteracao status"):
+                    continue
+                if k in c:
+                    reasons.append(k)
+            return ", ".join(sorted(set(reasons))) or "—"
+
+        dbg = base.copy()
+        dbg["is_manual"] = dbg["texto_busca"].apply(_is_manual_by_keywords)
+        dbg["reason"]    = dbg["texto_busca"].apply(_manual_reason)
+
+        mensal_manual = dbg[dbg["is_manual"]].groupby("mes_dt")["qtd_encomendas"].sum()
+        mes_default = mensal_manual.idxmax() if not mensal_manual.empty else dbg["mes_dt"].min()
+
+        meses_disponiveis = sorted(dbg["mes_dt"].dropna().unique())
+        mes_debug = st.selectbox(
+            "Mês para investigar",
+            meses_disponiveis,
+            index=max(0, meses_disponiveis.index(mes_default) if mes_default in meses_disponiveis else 0),
+            format_func=lambda d: pd.to_datetime(d).strftime("%b/%Y"),
+        )
+
+        dm = dbg[dbg["mes_dt"] == mes_debug].copy()
+        dm_manual = dm[dm["is_manual"]].copy()
+
+        c1, c2, c3 = st.columns(3)
+        c1.metric("Tickets (mês)", int(dm["key"].nunique()))
+        c2.metric("Manual — soma", int(dm_manual["qtd_encomendas"].sum()))
+        c3.metric("Total — soma", int(dm["qtd_encomendas"].sum()))
+
+        st.markdown("**Por motivo (keyword)**")
+        st.dataframe(
+            dm_manual.groupby("reason")["qtd_encomendas"]
+                .sum().sort_values(ascending=False).reset_index(),
+            use_container_width=True, hide_index=True
+        )
+
+        st.markdown("**Por assunto**")
+        st.dataframe(
+            dm_manual.groupby("assunto_nome")["qtd_encomendas"]
+                .sum().sort_values(ascending=False).reset_index().head(30),
+            use_container_width=True, hide_index=True
+        )
+
+        st.markdown("**Por área**")
+        st.dataframe(
+            dm_manual.groupby("area_nome")["qtd_encomendas"]
+                .sum().sort_values(ascending=False).reset_index(),
+            use_container_width=True, hide_index=True
+        )
+
+        if not dm_manual.empty:
+            p99 = dm_manual["qtd_encomendas"].quantile(0.99)
+            med = dm_manual["qtd_encomendas"].median()
+            lim = max(p99, med * 5)
+
+            top = (dm_manual.assign(outlier=lambda x: x["qtd_encomendas"] >= lim)
+                   .sort_values("qtd_encomendas", ascending=False)
+                   [["key","resolved","area_nome","assunto_nome","summary","reason","qtd_encomendas","outlier"]]
+                   .head(50))
+
+            st.markdown("**Top 50 tickets (Manual) do mês**")
+            st.dataframe(top, use_container_width=True, hide_index=True)
+
+            st.download_button(
+                "Baixar CSV (Manual do mês)",
+                data=dm_manual[["key","resolved","mes_dt","area_nome","assunto_nome","summary","reason","qtd_encomendas"]]
+                    .sort_values("qtd_encomendas", ascending=False)
+                    .to_csv(index=False).encode("utf-8-sig"),
+                file_name=f"debug_manual_{pd.to_datetime(mes_debug).strftime('%Y_%m')}.csv",
+                mime="text/csv",
+            )
+    # ============================================================================
+
     monthly_total  = base.groupby("mes_dt")["qtd_encomendas"].sum().rename("Encomendas TDS")
     monthly_manual = base[manual_mask].groupby("mes_dt")["qtd_encomendas"].sum().rename("Manual")
 
@@ -760,9 +856,13 @@ def render_rotinas_manuais(dfp: pd.DataFrame, ano_global: str, mes_global: str):
     monthly = monthly.rename_axis("mes_dt").reset_index()
     monthly["mes_str"] = monthly["mes_dt"].dt.strftime("%b/%Y")
 
+    # 9) Barras Manual x TDS
     fig = px.bar(
-        monthly, x="mes_str", y=["Manual", "Encomendas TDS"],
-        barmode="group", text_auto=True,
+        monthly,
+        x="mes_str",
+        y=["Manual", "Encomendas TDS"],
+        barmode="group",
+        text_auto=True,
         title="Encomendas corrigidas — Manual | TDS (mês a mês)",
         height=420,
     )
@@ -770,7 +870,7 @@ def render_rotinas_manuais(dfp: pd.DataFrame, ano_global: str, mes_global: str):
     fig.update_xaxes(categoryorder="array", categoryarray=monthly["mes_str"].tolist())
     show_plot(fig, "rotinas_ops_mensal_manual_tds", "TDS", ano_global, mes_global)
 
-    # 9) Donut
+    # 10) Donut de participação
     total_sum  = float(monthly["Encomendas TDS"].sum())
     manual_sum = float(monthly["Manual"].sum())
     restante   = max(total_sum - manual_sum, 0.0)
@@ -779,14 +879,16 @@ def render_rotinas_manuais(dfp: pd.DataFrame, ano_global: str, mes_global: str):
     fig_donut.update_traces(textposition="inside", textinfo="percent+label")
     show_plot(fig_donut, "rotinas_ops_donut_manual_tds", "TDS", ano_global, mes_global)
 
-    # 10) Ranking (apenas Manual)
+    # 11) Ranking por Assunto (Manual)
     df_manual = base[manual_mask].copy()
     if not df_manual.empty:
         rank = (df_manual.groupby("assunto_nome")["qtd_encomendas"]
                 .sum().sort_values(ascending=False).reset_index())
-        fig_ass = px.bar(rank, x="qtd_encomendas", y="assunto_nome",
-                         orientation="h", text="qtd_encomendas",
-                         title="Manual | Assunto", height=420)
+        fig_ass = px.bar(
+            rank, x="qtd_encomendas", y="assunto_nome",
+            orientation="h", text="qtd_encomendas",
+            title="Manual | Assunto", height=420
+        )
         fig_ass.update_traces(textposition="outside", cliponaxis=False)
         fig_ass.update_layout(margin=dict(l=10, r=90, t=45, b=10))
         try:
@@ -796,15 +898,17 @@ def render_rotinas_manuais(dfp: pd.DataFrame, ano_global: str, mes_global: str):
             pass
         show_plot(fig_ass, "rotinas_ops_manual_assunto", "TDS", ano_global, mes_global)
 
-    # 11) Export/diagnóstico (sem filtro global)
-    with st.expander("📤 Exportar / diagnóstico — Ops (qtd > 0)"):
+    # 12) Export/diagnóstico (sem filtro global)
+    with st.expander("📤 Exportar / diagnóstico — Ops (qtd > 0)", expanded=False):
         df_export = full_base.copy()
         df_export["texto_busca"] = (df_export["assunto_nome"].fillna("") + " " + df_export["summary"].fillna("")).astype(str)
         df_export["tipo_encomenda"] = df_export["texto_busca"].apply(
             lambda s: "Manual" if _is_manual_by_keywords(s) else "Encomendas TDS"
         )
-        df_export = df_export[["key","resolved","mes_dt","area_nome","assunto_nome","summary","qtd_encomendas","tipo_encomenda"]]\
-            .sort_values("resolved")
+        df_export = df_export[
+            ["key","resolved","mes_dt","area_nome","assunto_nome","summary","qtd_encomendas","tipo_encomenda"]
+        ].sort_values("resolved")
+
         csv = df_export.to_csv(index=False).encode("utf-8-sig")
         st.download_button("Baixar CSV (todos)", data=csv, file_name="rotinas_manuais_ops.csv", mime="text/csv")
         st.dataframe(df_export.head(5000), use_container_width=True, hide_index=True)
