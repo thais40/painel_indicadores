@@ -690,7 +690,7 @@ def render_rotinas_manuais(dfp: pd.DataFrame, ano_global: str, mes_global: str):
 
     # Regra Manual (palavras-chave normalizadas)
     KEYWORDS_MANUAL = ["divergencia", "ie qliksense", "cte", "ie tabela", "inscrição estadual", "conferência", "processamento", "ie", "divergência", "qlik", "qliksense", 
-                       "alteração de status - Reprocessamento", "Alteração de status - Cancelada", "Alteração de status - Devolução"]
+                       "%alteração de status%",]
     def _is_manual_by_keywords(text: str) -> bool:
         c = _canonical(text or "")
         return any(k in c for k in KEYWORDS_MANUAL)
