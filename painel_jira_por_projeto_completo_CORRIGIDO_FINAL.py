@@ -607,18 +607,22 @@ def render_onboarding(dfp: pd.DataFrame, ano_global: str, mes_global: str):
 # ---- Rotinas Manuais (TDS) — 100% por Jira
 
 def render_rotinas_manuais(dfp: pd.DataFrame, ano_global: str, mes_global: str):
+    import pandas as pd
+    import plotly.express as px
+    import streamlit as st
+
     st.markdown("### 🛠️ Rotinas Manuais")
     if dfp.empty:
         st.info("Sem tickets para o período.")
         return
 
-    # Áreas Ops consideradas
+    # Áreas Ops consideradas (mantive igual ao que vínhamos usando)
     OPS_AREAS = [
         "Ops - Conferência", "Ops - Cubagem", "Ops - Logística",
         "Ops - Coletas", "Ops - Expedição", "Ops - Divergências",
     ]
 
-    # Palavras-chave que definem "Manual" (sem acento/caixa; usamos normalização)
+    # Palavras-chave que definem "Manual" (normalizadas)
     KEYWORDS_MANUAL = [
         "divergencia",      # "divergência"
         "ie qliksense",     # "IE (Qliksense)"
@@ -629,6 +633,8 @@ def render_rotinas_manuais(dfp: pd.DataFrame, ano_global: str, mes_global: str):
     # --- base inicial
     df = dfp.copy()
     df = ensure_assunto_nome(df, "TDS")
+
+    # Área solicitante
     df["area_nome"] = df["area"].apply(lambda x: safe_get_value(x, "value"))
     base = df[df["area_nome"].isin(OPS_AREAS)].copy()
     if base.empty:
@@ -652,64 +658,76 @@ def render_rotinas_manuais(dfp: pd.DataFrame, ano_global: str, mes_global: str):
     base["summary"] = base["summary"].astype(str)
     base["texto_busca"] = (base["assunto_nome"].fillna("") + " " + base["summary"].fillna("")).astype(str)
 
-    # Classificação por palavras-chave
+    # Classificação por palavras-chave (usa _canonical já existente no arquivo)
     def _is_manual_by_keywords(text: str) -> bool:
         c = _canonical(text or "")
         return any(k in c for k in KEYWORDS_MANUAL)
 
-    base["tipo_encomenda"] = base["texto_busca"].apply(
-        lambda s: "Manual" if _is_manual_by_keywords(s) else "Encomendas TDS"
-    )
-
-    # Guardamos o conjunto completo (para export/diagnóstico)
+    # Guardamos o conjunto completo para export/diagnóstico
     full_base = base.copy()
 
-    # Aplicar filtros globais
+    # Aplicar filtros globais (ano/mês) APENAS para os gráficos
     base = aplicar_filtro_global(base, "mes_dt", ano_global, mes_global)
     if base.empty:
         st.info("Sem dados para exibir com os filtros atuais.")
         return
 
-    # Série mês a mês (Manual x TDS)
-    serie = base.groupby(["mes_dt", "tipo_encomenda"], as_index=False)["qtd_encomendas"].sum()
-    categorias = ["Manual", "Encomendas TDS"]
-    pivot = (
-        serie.pivot(index="mes_dt", columns="tipo_encomenda", values="qtd_encomendas")
-        .reindex(columns=categorias)
-        .fillna(0)
-        .reset_index()
+    # --------------------------------------------
+    # SÉRIE MENSAL (Manual x TOTAL TDS)
+    # - Encomendas TDS  => total mensal (qtd_encomendas > 0)
+    # - Manual          => subconjunto por palavras-chave
+    # --------------------------------------------
+    manual_mask = base["texto_busca"].apply(_is_manual_by_keywords)
+
+    monthly_total = (
+        base.groupby("mes_dt")["qtd_encomendas"].sum().rename("Encomendas TDS")
     )
-    pivot["mes_str"] = pivot["mes_dt"].dt.strftime("%b/%Y")
+    monthly_manual = (
+        base[manual_mask].groupby("mes_dt")["qtd_encomendas"].sum().rename("Manual")
+    )
+
+    monthly = pd.concat([monthly_manual, monthly_total], axis=1).fillna(0).reset_index()
+    monthly["mes_str"] = monthly["mes_dt"].dt.strftime("%b/%Y")
 
     fig = px.bar(
-        pivot,
+        monthly,
         x="mes_str",
-        y=categorias,
+        y=["Manual", "Encomendas TDS"],
         barmode="group",
         text_auto=True,
         title="Encomendas corrigidas — Manual | TDS (mês a mês)",
         height=420,
     )
     fig.update_traces(textangle=0, cliponaxis=False)
-    fig.update_xaxes(categoryorder="array", categoryarray=pivot["mes_str"].tolist())
+    fig.update_xaxes(categoryorder="array", categoryarray=monthly["mes_str"].tolist())
     show_plot(fig, "rotinas_ops_mensal_manual_tds", "TDS", ano_global, mes_global)
 
-    # Donut
-    totais = base.groupby("tipo_encomenda")["qtd_encomendas"].sum().reindex(categorias, fill_value=0).reset_index()
+    # --------------------------------------------
+    # DONUT: participação do Manual dentro do TOTAL TDS
+    # (rótulos iguais ao BI: "Manual" x "Encomendas TDS" = restante)
+    # --------------------------------------------
+    total_sum  = float(monthly_total.sum())
+    manual_sum = float(monthly_manual.sum())
+    restante   = max(total_sum - manual_sum, 0.0)
+
+    df_donut = pd.DataFrame({
+        "tipo": ["Manual", "Encomendas TDS"],
+        "qtd":  [manual_sum, restante],
+    })
     fig_donut = px.pie(
-        totais,
-        values="qtd_encomendas",
-        names="tipo_encomenda",
-        hole=0.6,
-        title="Manual | TDS — Participação",
+        df_donut, values="qtd", names="tipo", hole=0.6,
+        title="Manual | TDS — Participação"
     )
     fig_donut.update_traces(textposition="inside", textinfo="percent+label")
     show_plot(fig_donut, "rotinas_ops_donut_manual_tds", "TDS", ano_global, mes_global)
 
-    # Ranking de assuntos (apenas Manual)
-    df_manual = base[base["tipo_encomenda"] == "Manual"].copy()
+    # Ranking de assuntos (apenas Manual) – útil p/ auditoria
+    df_manual = base[manual_mask].copy()
     if not df_manual.empty:
-        rank = df_manual.groupby("assunto_nome")["qtd_encomendas"].sum().sort_values(ascending=False).reset_index()
+        rank = (
+            df_manual.groupby("assunto_nome")["qtd_encomendas"]
+            .sum().sort_values(ascending=False).reset_index()
+        )
         fig_ass = px.bar(
             rank,
             x="qtd_encomendas",
@@ -728,26 +746,32 @@ def render_rotinas_manuais(dfp: pd.DataFrame, ano_global: str, mes_global: str):
             pass
         show_plot(fig_ass, "rotinas_ops_manual_assunto", "TDS", ano_global, mes_global)
 
-    # Export/diagnóstico com TODOS os tickets (sem filtros)
+    # Export / diagnóstico (TODOS os tickets com quantidade > 0 – sem filtros)
     with st.expander("📤 Exportar / diagnóstico — tickets com 'Quantidade de encomendas' > 0", expanded=False):
-        st.write("Abaixo estão **todos** os tickets do Jira (desde 2024-05-01) com o campo preenchido, independente dos filtros globais.")
-        df_export = full_base[
+        df_export = full_base.copy()
+        df_export["texto_busca"] = (df_export["assunto_nome"].fillna("") + " " + df_export["summary"].fillna("")).astype(str)
+        df_export["tipo_encomenda"] = df_export["texto_busca"].apply(
+            lambda s: "Manual" if _is_manual_by_keywords(s) else "Encomendas TDS"
+        )
+        df_export = df_export[
             ["key", "resolved", "mes_dt", "area_nome", "assunto_nome", "qtd_encomendas", "tipo_encomenda"]
         ].sort_values("resolved")
+
         c1, c2, c3, c4 = st.columns(4)
         c1.metric("Tickets", int(df_export["key"].nunique()))
         c2.metric("Soma de encomendas", int(df_export["qtd_encomendas"].sum()))
         c3.metric("Assuntos distintos", int(df_export["assunto_nome"].nunique()))
         c4.metric("Áreas distintas", int(df_export["area_nome"].nunique()))
+
         csv = df_export.to_csv(index=False).encode("utf-8-sig")
         st.download_button(
             "Baixar CSV (todos)",
             data=csv,
-            file_name=f"rotinas_manuais_qtd_encomendas_{date.today():%Y%m%d}.csv",
+            file_name="rotinas_manuais_qtd_encomendas.csv",
             mime="text/csv",
         )
-        st.dataframe(df_export.head(5000), use_container_width=True, hide_index=True)
 
+        st.dataframe(df_export.head(5000), use_container_width=True, hide_index=True)
 
 # ================= Filtros Globais ========================
 
