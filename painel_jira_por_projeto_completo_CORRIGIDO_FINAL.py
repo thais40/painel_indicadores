@@ -1,15 +1,15 @@
 # -*- coding: utf-8 -*-
 """
 Painel de Indicadores — Jira (Nuvemshop)
-Arquivo completo com a função ensure_assunto_nome corrigida e ajustes
-em Rotinas Manuais (TDS) conforme solicitado:
- - Ler Assunto Relacionado do campo **customfield_13747** (com fallback 13712)
- - Classificar "Manual" usando a lista de assuntos fornecida (opção 1) e fallback
-   das regras por texto (assunto + summary).
- - Sem alterar os demais comportamentos do painel.
+Arquivo COMPLETO sem dependência de planilhas do BI.
+Classificação de Rotinas Manuais (TDS) 100% por campos do Jira:
+  - Área Solicitante (customfield_13719) ∈ {Ops - Conferência, Ops - Cubagem, Ops - Logística, Ops - Coletas, Ops - Expedição, Ops - Divergências}
+  - Quantidade de encomendas (customfield_13666) > 0
+  - Data base: mês de resolved
+  - Manual x Encomendas TDS por "Assunto Relacionado" (customfield_13747; fallback 13712).
 
-Observação: o app usa somente dados do Jira (API /search/jql) e cache do
-Streamlit. Necessário configurar EMAIL e TOKEN em st.secrets.
+Mantém cache de dados (st.cache_data) e botão de Atualizar — não refaz fetch a cada filtro.
+Necessário EMAIL e TOKEN em st.secrets.
 """
 
 from __future__ import annotations
@@ -27,7 +27,7 @@ import requests
 import streamlit as st
 from requests.auth import HTTPBasicAuth
 
-# ================= Configuração da página ==================
+# ================= Config da página =======================
 st.set_page_config(page_title="Painel de Indicadores", page_icon="📊", layout="wide")
 
 # ================= Credenciais Jira ========================
@@ -40,7 +40,7 @@ if not EMAIL or not TOKEN:
 
 auth = HTTPBasicAuth(EMAIL, TOKEN)
 TZ_BR = ZoneInfo("America/Sao_Paulo")
-DATA_INICIO = "2024-06-01"
+DATA_INICIO = "2024-05-01"
 
 # ================= Campos / Constantes =====================
 SLA_CAMPOS = {
@@ -50,9 +50,8 @@ SLA_CAMPOS = {
     "INTEL": "customfield_13686",
 }
 
-# ⚠️ TDS usa 13747; manter fallback 13712 na coleta
-ASSUNTO_TDS_PRIMARY = "customfield_13747"
-ASSUNTO_TDS_FALLBACK = "customfield_13712"
+ASSUNTO_TDS_PRIMARY = "customfield_13747"   # Assunto Relacionado
+ASSUNTO_TDS_FALLBACK = "customfield_13712"  # fallback
 
 CAMPOS_ASSUNTO = {
     "TDS": ASSUNTO_TDS_PRIMARY,
@@ -77,7 +76,6 @@ JIRA_FIELDS_BASE = [
 ]
 FIELDS_SLA_ALL = list(set(SLA_CAMPOS.values()))
 FIELDS_ASSUNTO_ALL = list(set([v for v in CAMPOS_ASSUNTO.values() if v != "issuetype"]))
-# inclui 13712 como fallback explícito
 FIELDS_ALL: List[str] = list(
     dict.fromkeys(JIRA_FIELDS_BASE + FIELDS_SLA_ALL + FIELDS_ASSUNTO_ALL + [ASSUNTO_TDS_FALLBACK])
 )
@@ -88,10 +86,9 @@ def _render_head():
     st.markdown(
         """
         <style>
-        html, body, [class*="css"] { font-family: Inter, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial !important; }
+        html, body, [class*=\"css\"] { font-family: Inter, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial !important; }
         .update-row{ display:flex; align-items:center; gap:12px; margin:8px 0 18px 0; }
         .update-caption{ color:#6B7280; font-size:.85rem; }
-        .metric-center .stMetric-value { justify-content:center; }
         </style>
         """,
         unsafe_allow_html=True,
@@ -197,14 +194,9 @@ def aplicar_filtro_global(df_in: pd.DataFrame, col_dt: str, ano: str, mes: str) 
     return out
 
 
-# 👉 Função corrigida: garantir assunto_nome antes do uso
+# 👉 Garante 'assunto_nome' antes do uso
+
 def ensure_assunto_nome(df_proj: pd.DataFrame, projeto: str) -> pd.DataFrame:
-    """
-    Garante a coluna 'assunto_nome' para o projeto informado.
-    - TDS/INT/TINE: vem do campo mapeado em CAMPOS_ASSUNTO e pode ser dict {'value': ...}.
-    - INTEL: usa issuetype.name.
-    - Fallback para a coluna 'assunto' coletada no fetch.
-    """
     if df_proj is None or df_proj.empty:
         return df_proj
 
@@ -218,10 +210,8 @@ def ensure_assunto_nome(df_proj: pd.DataFrame, projeto: str) -> pd.DataFrame:
         if CAMPOS_ASSUNTO.get(projeto) == "issuetype":
             df_proj[col] = df_proj["issuetype"].apply(_from_field)
         else:
-            # usa o campo 'assunto' já coletado
             df_proj[col] = df_proj["assunto"].apply(_from_field)
 
-    # Caso tenha vindo vazio, reforça fallback
     if df_proj[col].isna().all() or (df_proj[col].astype(str).str.strip() == "").all():
         if CAMPOS_ASSUNTO.get(projeto) == "issuetype":
             df_proj[col] = df_proj["issuetype"].apply(_from_field)
@@ -232,6 +222,7 @@ def ensure_assunto_nome(df_proj: pd.DataFrame, projeto: str) -> pd.DataFrame:
 
 
 # ================= Jira fetch =============================
+
 def _jira_search_jql(jql: str, next_page_token: Optional[str] = None, max_results: int = 100) -> Dict[str, Any]:
     url = f"{JIRA_URL}/rest/api/3/search/jql"
     params = {"jql": jql, "fields": ",".join(FIELDS_ALL), "maxResults": max_results}
@@ -261,7 +252,6 @@ def buscar_issues(projeto: str, jql: str, max_pages: int = 500) -> pd.DataFrame:
             break
         for it in issues:
             f = it.get("fields", {}) or {}
-            # Assunto: TDS usa 13747 com fallback em 13712
             if projeto == "TDS":
                 assunto_val = f.get(ASSUNTO_TDS_PRIMARY) or f.get(ASSUNTO_TDS_FALLBACK) or f.get("issuetype")
             else:
@@ -308,6 +298,7 @@ def buscar_issues(projeto: str, jql: str, max_pages: int = 500) -> pd.DataFrame:
 
 
 # ================= Builders / SLA =========================
+
 def build_monthly_tables(df_all: pd.DataFrame) -> pd.DataFrame:
     if df_all.empty:
         return df_all
@@ -339,6 +330,7 @@ def build_monthly_tables(df_all: pd.DataFrame) -> pd.DataFrame:
 
 
 # ================= Visuais Genéricos ======================
+
 def render_criados_resolvidos(dfp, projeto, ano_global, mes_global):
     st.markdown("### 📈 Tickets Criados vs Resolvidos")
     if dfp is None or dfp.empty:
@@ -466,6 +458,7 @@ def render_encaminhamentos(dfp: pd.DataFrame, ano_global: str, mes_global: str):
 
 # ================= Módulos específicos ====================
 # ---- APP NE (TDS)
+
 def render_app_ne(dfp: pd.DataFrame, ano_global: str, mes_global: str):
     st.markdown("### 📱 APP NE")
     if dfp.empty:
@@ -524,6 +517,7 @@ def render_app_ne(dfp: pd.DataFrame, ano_global: str, mes_global: str):
 
 
 # ---- Onboarding (INT)
+
 def render_onboarding(dfp: pd.DataFrame, ano_global: str, mes_global: str):
     st.markdown("### 🧭 Onboarding")
     if dfp.empty:
@@ -560,7 +554,6 @@ def render_onboarding(dfp: pd.DataFrame, ano_global: str, mes_global: str):
     c3.metric("Tickets com pendências", tickets_pendencias)
     c4.metric("Possíveis clientes", possiveis_clientes)
 
-    # Cliente novo (mensal)
     df_cli_novo = df_onb[
         df_onb["assunto_nome"].astype(str).str.contains("cliente novo", case=False, na=False)
     ].copy()
@@ -580,7 +573,6 @@ def render_onboarding(dfp: pd.DataFrame, ano_global: str, mes_global: str):
             fig_cli.update_layout(margin=dict(l=10, r=10, t=60, b=10))
             show_plot(fig_cli, "onb_cli_novo", "INT", ano_global, mes_global)
 
-    # Tipo de Integração
     def _tipo_from_assunto(s: str) -> str:
         s = (s or "").strip().lower()
         if "cliente novo" in s:
@@ -612,7 +604,8 @@ def render_onboarding(dfp: pd.DataFrame, ano_global: str, mes_global: str):
     show_plot(fig_tipo, "onb_tipo_int", "INT", ano_global, mes_global)
 
 
-# ---- Rotinas Manuais (TDS) — OPÇÃO 1
+# ---- Rotinas Manuais (TDS) — 100% por Jira
+
 def render_rotinas_manuais(dfp: pd.DataFrame, ano_global: str, mes_global: str):
     st.markdown("### 🛠️ Rotinas Manuais")
     if dfp.empty:
@@ -624,37 +617,28 @@ def render_rotinas_manuais(dfp: pd.DataFrame, ano_global: str, mes_global: str):
         "Ops - Coletas", "Ops - Expedição", "Ops - Divergências",
     ]
 
-    # Regras por texto (fallback já existente)
-    MANUAL_TDS_ASSUNTOS_EXATOS = [
-        "Correção IE (Qlik)",
-        "Correção CTE",
-        "Divergência Conferência",
-        "Outros",
-        "Divergências na Conferência",
-        "Correção da IE (QlikSense)",
-        "Correção p/ Cotação/ Kill Bill (Grafana)",
-        "Correção Cotação",
-        "Correção de Erro na CTE (Tabela)",
-        "Limpeza do Painel (Webapp) - Sem registro",
-        "Limpeza sem registro",     
-        "Correção IE Tabela",
-        "Correção IE Tabela",
-        "Outros",
+    MANUAL_ASSUNTOS_ALVOS = [
+        "Erro no processamento - CTE",
+        "Erro no processamento - Inscrição Estadual",
+        "Erro no processamento - Outros",
+        "Erro no processamento - Cotação/CEP no custo",
+        "Alteração de status - Reprocessamento",
+        "Erro SYNC 404 - Encomenda não existe",
+        "Alteração de status - Devolução",
+        "Volumetria - Tabela Divergência",
+        "Volumetria - Tabela Erro",
+        "Encomendas sem registro",
     ]
-    EXATOS_CANON = [_canonical(s) for s in MANUAL_TDS_ASSUNTOS_EXATOS]
+    alvos_norm = [_canonical(s) for s in MANUAL_ASSUNTOS_ALVOS]
 
-    def _is_manual_text(txt: str) -> bool:
-        c = _canonical(txt or "")
-        for expr in EXATOS_CANON:
-            tokens = expr.split()
-            if all(tok in c for tok in tokens):
-                return True
-        return False
+    def _is_assunto_manual(s: str) -> bool:
+        s = _canonical(s or "")
+        return any(t in s for t in alvos_norm)
 
     df = dfp.copy()
     df = ensure_assunto_nome(df, "TDS")
-    df["area_nome"] = df["area"].apply(lambda x: safe_get_value(x, "value"))
 
+    df["area_nome"] = df["area"].apply(lambda x: safe_get_value(x, "value"))
     base = df[df["area_nome"].isin(OPS_AREAS)].copy()
     if base.empty:
         st.info("Sem tickets de Rotinas Manuais nas áreas Ops com os filtros atuais.")
@@ -671,51 +655,13 @@ def render_rotinas_manuais(dfp: pd.DataFrame, ano_global: str, mes_global: str):
     base["mes_dt"] = base["resolved"].dt.to_period("M").dt.to_timestamp()
 
     base["assunto_nome"] = base["assunto_nome"].astype(str)
-    base["summary_txt"] = base["summary"].astype(str)
-    base["texto_manual"] = (base["assunto_nome"].fillna("") + " " + base["summary_txt"].fillna("")).str.strip()
-
-    # --- Assuntos que definem "Encomenda Manual" (lista fornecida)
-    MANUAL_ASSUNTOS_ALVOS = [
-        "Erro no processamento - CTE",
-        "Erro no processamento - Inscrição Estadual",
-        "Erro no processamento - Outros",
-        "Erro no processamento - Cotação/CEP no custo",
-        "Alteração de status - Reprocessamento",
-        "Erro SYNC 404 - Encomenda não existe",
-        "Alteração de status - Devolução",
-        "Volumetria - Tabela Divergência",
-        "Volumetria - Tabela Erro",
-        "Encomendas sem registro",
-        "Remover do painel de divergências",
-        "Exibição de ocorrências",
-        "Erro no processamento - Não encontrada",
-        "Alteração de status - Cancelada",
-        "Volumetria - Painel sem registro",
-        "Exibição de ocorrências"
-    ]
-
-    # normaliza e cria máscara por Assunto Relacionado
-    alvos_norm = [_canonical(s) for s in MANUAL_ASSUNTOS_ALVOS]
-    base["assunto_norm"] = base["assunto_nome"].astype(str).map(_canonical)
-
-    def _is_assunto_alvo(s_norm: str) -> bool:
-        return any(t in s_norm for t in alvos_norm)
-
-    mask_assunto_manual = base["assunto_norm"].map(_is_assunto_alvo)
-
-    # mantém o fallback por texto (assunto + summary) já existente
-    mask_manual_texto = base["texto_manual"].map(_is_manual_text)
-
-    # Manual se (Assunto alvo) OU (texto bater nas regras anteriores)
-    mask_manual = mask_assunto_manual | mask_manual_texto
-    base["tipo_encomenda"] = mask_manual.map({True: "Manual", False: "Encomendas TDS"})
+    base["tipo_encomenda"] = base["assunto_nome"].map(lambda s: "Manual" if _is_assunto_manual(s) else "Encomendas TDS")
 
     base = aplicar_filtro_global(base, "mes_dt", ano_global, mes_global)
     if base.empty:
         st.info("Sem dados para exibir com os filtros atuais.")
         return
 
-    # Mensal Manual × Encomendas TDS
     serie = base.groupby(["mes_dt", "tipo_encomenda"], as_index=False)["qtd_encomendas"].sum()
     categorias = ["Manual", "Encomendas TDS"]
     pivot = (
@@ -739,7 +685,6 @@ def render_rotinas_manuais(dfp: pd.DataFrame, ano_global: str, mes_global: str):
     fig.update_xaxes(categoryorder="array", categoryarray=pivot["mes_str"].tolist())
     show_plot(fig, "rotinas_ops_mensal_manual_tds", "TDS", ano_global, mes_global)
 
-    # Donut participação
     totais = (
         base.groupby("tipo_encomenda")["qtd_encomendas"].sum().reindex(categorias, fill_value=0).reset_index()
     )
@@ -753,7 +698,6 @@ def render_rotinas_manuais(dfp: pd.DataFrame, ano_global: str, mes_global: str):
     fig_donut.update_traces(textposition="inside", textinfo="percent+label")
     show_plot(fig_donut, "rotinas_ops_donut_manual_tds", "TDS", ano_global, mes_global)
 
-    # Manual | Assunto (ranking)
     df_manual = base[base["tipo_encomenda"] == "Manual"].copy()
     if not df_manual.empty:
         rank = (
@@ -788,6 +732,7 @@ def render_rotinas_manuais(dfp: pd.DataFrame, ano_global: str, mes_global: str):
 
 
 # ================= Filtros Globais ========================
+
 st.markdown("### 🔍 Filtros Globais")
 ano_atual = date.today().year
 opcoes_ano = ["Todos"] + [str(y) for y in range(2024, ano_atual + 1)]
@@ -799,6 +744,7 @@ with colB:
     mes_global = st.selectbox("Mês (global)", opcoes_mes, index=0, key="mes_global")
 
 # ================= Coleta de dados ========================
+
 def jql_projeto(project_key: str, ano_sel: str, mes_sel: str) -> str:
     base = f'project = "{project_key}" AND created >= "{DATA_INICIO}"'
     if mes_sel != "Todos" and ano_sel != "Todos":
@@ -829,13 +775,13 @@ if all(d.empty for d in [df_tds, df_int, df_tine, df_intel]):
     st.warning("Sem dados do Jira em nenhum projeto (verifique credenciais e permissões).")
     st.stop()
 
-# SLA tables
 _df_monthly_all = pd.concat(
     [build_monthly_tables(d) for d in [df_tds, df_int, df_tine, df_intel] if not d.empty],
     ignore_index=True,
 ) if not all(d.empty for d in [df_tds, df_int, df_tine, df_intel]) else pd.DataFrame()
 
 # ================= Abas / Vistas ==========================
+
 tabs = st.tabs([TITULOS[p] for p in PROJETOS])
 
 for projeto, tab in zip(PROJETOS, tabs):
@@ -907,7 +853,7 @@ for projeto, tab in zip(PROJETOS, tabs):
             else:
                 st.info("Rotinas Manuais disponível somente para Tech Support.")
         else:
-            # Geral — mantém ordem usual
+            # Geral
             render_criados_resolvidos(dfp, projeto, ano_global, mes_global)
             render_sla_table(_df_monthly_all, projeto, ano_global, mes_global)
             render_assunto(dfp, projeto, ano_global, mes_global)
@@ -923,6 +869,5 @@ for projeto, tab in zip(PROJETOS, tabs):
                 with st.expander("🧭 Onboarding", expanded=False):
                     render_onboarding(dfp, ano_global, mes_global)
 
-# ================= Rodapé =================================
 st.markdown("---")
-st.caption("💙 Desenvolvido por Thaís Franco — build com ensure_assunto_nome e Rotinas Manuais (opção 1)")
+st.caption("💙 Desenvolvido por Thaís Franco.")
