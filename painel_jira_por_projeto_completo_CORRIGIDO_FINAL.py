@@ -705,6 +705,8 @@ def render_rotinas_manuais(dfp: pd.DataFrame, ano_global: str, mes_global: str):
         "volumetria",
         "ie",
         "inscrição estadual",
+        "conferencia",
+        "ct-e",
     ]
     def _is_manual_by_keywords(text: str) -> bool:
         c = _canonical_local(text)
