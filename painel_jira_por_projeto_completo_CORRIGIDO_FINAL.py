@@ -668,6 +668,9 @@ def render_rotinas_manuais(dfp: pd.DataFrame, ano_global: str, mes_global: str):
         "ie (tabela)",
         "ie (qliksense)",
         "divergência",
+        "volumetria",
+        "inscrição estadual",
+        "ie",
     ]
     # -----------------------------------------------
 
