@@ -664,8 +664,7 @@ def render_rotinas_manuais(dfp: pd.DataFrame, ano_global: str, mes_global: str):
         return
 
     OPS_AREAS = [
-        "Ops - Conferência", "Ops - Cubagem", "Ops - Logística",
-        "Ops - Coletas", "Ops - Expedição", "Ops - Divergências", "Tech Support",
+    "Tech Support",
     ]
 
     def _canonical_local(txt: str) -> str:
