@@ -671,6 +671,8 @@ def render_rotinas_manuais(dfp: pd.DataFrame, ano_global: str, mes_global: str):
         "volumetria",
         "inscrição estadual",
         "ie",
+        "ct-e",
+        "encomenda não existe",
     ]
     # -----------------------------------------------
 
