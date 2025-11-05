@@ -646,7 +646,7 @@ def render_rotinas_manuais(dfp: pd.DataFrame, ano_global: str, mes_global: str):
         'divergência', 'IE (Qliksense)', 'CTE', 'IE (tabela)', 'alteração de status'
       (match normalizado, sem acento/caixa)
     - Dedup por key usando o PRIMEIRO instante confiável (resolved → created → updated).
-    - Reindex mensal, então todos os meses aparecem (com zero).
+    - Reindex mensal (todos os meses aparecem, mesmo com zero).
     - Expander de DEBUG para investigar picos mensais.
     """
     import pandas as pd
@@ -663,19 +663,19 @@ def render_rotinas_manuais(dfp: pd.DataFrame, ano_global: str, mes_global: str):
         st.info("Sem tickets para o período.")
         return
 
+    # Áreas Ops
     OPS_AREAS = [
-    "Tech Support",
+        "Ops - Conferência", "Ops - Cubagem", "Ops - Logística",
+        "Ops - Coletas", "Ops - Expedição", "Ops - Divergências",
     ]
 
+    # ---- helpers locais ----
     def _canonical_local(txt: str) -> str:
-        """Normaliza texto: minúsculas, sem acentos, sem quebras extras."""
         s = (txt or "")
         s = _unidecode(str(s)).lower()
-        # normaliza espaços
         return " ".join(s.split())
 
     def _parse_dt_col(s):
-        """Parse de datas robusto (tenta ISO e depois dayfirst)."""
         x = pd.to_datetime(s, errors="coerce", utc=False, infer_datetime_format=True)
         if x.notna().sum() == 0:
             x = pd.to_datetime(s, errors="coerce", utc=False, dayfirst=True)
@@ -688,19 +688,15 @@ def render_rotinas_manuais(dfp: pd.DataFrame, ano_global: str, mes_global: str):
         "ie tabela",
         "alteracao de status",
         "alteracao status",
-        "volumetria",
-        "inscrição estadual",
-        "inscricao estadual",
-        "conferencia"
-        "correção"
     ]
 
     def _is_manual_by_keywords(text: str) -> bool:
         c = _canonical_local(text)
-        # garante casar "alteracao ... status" mesmo com palavras no meio
+        # garante match mesmo se "alteracao ... status" vier com palavras no meio
         if ("alteracao" in c and "status" in c):
             return True
         return any(k in c for k in KEYWORDS_MANUAL)
+    # ------------------------
 
     # 1) Base + assunto consolidado + área
     df = dfp.copy()
@@ -766,7 +762,7 @@ def render_rotinas_manuais(dfp: pd.DataFrame, ano_global: str, mes_global: str):
     # 8) Série mensal (Manual x TOTAL) com reindex
     manual_mask = base["texto_busca"].apply(_is_manual_by_keywords)
 
-    # ================= DEBUG DE MÊS (abrir mês e entender pico) =================
+    # ----------------- DEBUG DE MÊS -----------------
     with st.expander("🔍 Debug de mês (Manual | TDS)", expanded=False):
 
         def _manual_reason(text: str) -> str:
@@ -846,7 +842,7 @@ def render_rotinas_manuais(dfp: pd.DataFrame, ano_global: str, mes_global: str):
                 file_name=f"debug_manual_{pd.to_datetime(mes_debug).strftime('%Y_%m')}.csv",
                 mime="text/csv",
             )
-    # ============================================================================
+    # -----------------------------------------------
 
     monthly_total  = base.groupby("mes_dt")["qtd_encomendas"].sum().rename("Encomendas TDS")
     monthly_manual = base[manual_mask].groupby("mes_dt")["qtd_encomendas"].sum().rename("Manual")
