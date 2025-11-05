@@ -640,35 +640,30 @@ def render_onboarding(dfp: pd.DataFrame, ano_global: str, mes_global: str):
 def render_rotinas_manuais(dfp: pd.DataFrame, ano_global: str, mes_global: str):
     """
     Rotinas Manuais (TDS)
-    - TDS (total) = SOMENTE áreas Ops.
-    - Manual = Manual (Ops) + Manual (Tech Support).  (TS não entra no total TDS)
-    - Classificação Manual por keywords (normalizadas): 'divergência', 'IE (Qliksense)', 'CTE',
-      'IE (tabela)', 'alteração de status' (inclui variações).
-    - Dedup por key usando o PRIMEIRO instante confiável (resolved → created → updated).
-    - Eixo mensal contínuo + expander de debug + export.
+    - Encomendas TDS (barras cinzas): SOMENTE áreas Ops (todas as categorias), qtd_encomendas > 0.
+    - Encomendas manuais (barras azuis): SOMENTE Tech Support, filtrando por títulos/termos
+      informados manualmente (procura em 'assunto + título', normalizado).
+    - Dedup por ticket (primeiro instante confiável: resolved -> created -> updated).
+    - Eixo mensal contínuo (não pula meses).
     """
     import pandas as pd
     import plotly.express as px
     import streamlit as st
+
+    # ------------------ helpers locais ------------------
     try:
         from unidecode import unidecode as _unidecode
     except Exception:
         _unidecode = lambda s: s
 
-    st.markdown("### 🛠️ Rotinas Manuais")
-
-    if dfp.empty:
-        st.info("Sem tickets para o período.")
-        return
-
-    # ----- listas de áreas -----
-    OPS_AREAS = [
-        "Ops - Conferência", "Ops - Cubagem", "Ops - Logística",
-        "Ops - Coletas", "Ops - Expedição", "Ops - Divergências",
-    ]
-
     def _canon(s: str) -> str:
         return " ".join(_unidecode(str(s or "")).lower().split())
+
+    def _parse_dt_col(s):
+        x = pd.to_datetime(s, errors="coerce", utc=False, infer_datetime_format=True)
+        if x.notna().sum() == 0:
+            x = pd.to_datetime(s, errors="coerce", utc=False, dayfirst=True)
+        return x
 
     def discover_tech_support_areas(df):
         if "area_nome" not in df.columns:
@@ -684,56 +679,37 @@ def render_rotinas_manuais(dfp: pd.DataFrame, ano_global: str, mes_global: str):
         if not tech:
             tech = [a for a in areas if "tech support" in _canon(a) or "suporte tecnico" in _canon(a)]
         return sorted(set(tech))
+    # ----------------------------------------------------
 
-    # ----- helpers locais -----
-    def _canonical_local(txt: str) -> str:
-        return _canon(txt)
+    st.markdown("### 🛠️ Rotinas Manuais — Ops (TDS) vs Tech Support (títulos informados)")
 
-    def _parse_dt_col(s):
-        x = pd.to_datetime(s, errors="coerce", utc=False, infer_datetime_format=True)
-        if x.notna().sum() == 0:
-            x = pd.to_datetime(s, errors="coerce", utc=False, dayfirst=True)
-        return x
-
-    KEYWORDS_MANUAL = [
-        "divergencia",
-        "ie qliksense",
-        "cte",
-        "ie tabela",
-        "alteracao de status",
-        "alteracao status",
-        "volumetria",
-        "ie",
-        "inscrição estadual",
-        "conferencia",
-        "ct-e",
-    ]
-    def _is_manual_by_keywords(text: str) -> bool:
-        c = _canonical_local(text)
-        if ("alteracao" in c and "status" in c):
-            return True
-        return any(k in c for k in KEYWORDS_MANUAL)
+    if dfp.empty:
+        st.info("Sem tickets para o período.")
+        return
 
     # 1) Base + assunto consolidado + área
     df = dfp.copy()
-    df = ensure_assunto_nome(df, "TDS")
+    df = ensure_assunto_nome(df, "TDS")  # helper do seu projeto
     df["area_nome"] = df["area"].apply(lambda x: safe_get_value(x, "value"))
 
+    OPS_AREAS = [
+        "Ops - Conferência", "Ops - Cubagem", "Ops - Logística",
+        "Ops - Coletas", "Ops - Expedição", "Ops - Divergências",
+    ]
     tech_areas = discover_tech_support_areas(df)
 
-    # 2) Quantidade de encomendas > 0 (usa seu parser)
+    # 2) Quantidade de encomendas > 0
     df["qtd_encomendas"] = df[CAMPO_QTD_ENCOMENDAS].apply(parse_qtd_encomendas)
     df = df[df["qtd_encomendas"] > 0].copy()
     if df.empty:
         st.info("Sem tickets com 'Quantidade de encomendas' > 0.")
         return
 
-    # 3) Datas robustas
+    # 3) Datas robustas + dedup por key (primeiro instante confiável)
     df["resolved"] = _parse_dt_col(df.get("resolved"))
     df["created"]  = _parse_dt_col(df.get("created"))
     df["updated"]  = _parse_dt_col(df.get("updated"))
 
-    # 4) PRIMEIRO instante por ticket (dedup global antes de separar áreas)
     df["_best_dt"] = df["resolved"]
     m = df["_best_dt"].isna() & df["created"].notna()
     df.loc[m, "_best_dt"] = df.loc[m, "created"]
@@ -756,13 +732,14 @@ def render_rotinas_manuais(dfp: pd.DataFrame, ano_global: str, mes_global: str):
           .copy()
     )
 
-    # 5) Campos derivados
+    # 4) Campos derivados comuns
     df["mes_dt"] = df["resolved"].dt.to_period("M").dt.to_timestamp()
     df["assunto_nome"] = df["assunto_nome"].astype(str)
     df["summary"]      = df["summary"].astype(str)
     df["texto_busca"]  = (df["assunto_nome"].fillna("") + " " + df["summary"].fillna("")).astype(str)
+    df["texto_busca_canon"] = df["texto_busca"].apply(_canon)
 
-    # 6) Partições: Ops vs Tech Support
+    # 5) Partições: Ops para TDS total | Tech Support para Manual
     base_ops = df[df["area_nome"].isin(OPS_AREAS)].copy()
     base_ts  = df[df["area_nome"].isin(tech_areas)].copy()
 
@@ -770,141 +747,119 @@ def render_rotinas_manuais(dfp: pd.DataFrame, ano_global: str, mes_global: str):
         st.info("Sem tickets nas áreas Ops/Tech Support para os filtros atuais.")
         return
 
-    # Guardar cópia para export
+    # 6) UI — títulos/termos para classificar MANUAL (somente TS)
+    st.caption(f"Áreas Ops: {', '.join(OPS_AREAS)}")
+    st.caption(f"Áreas Tech Support detectadas: {', '.join(tech_areas) or '—'}")
+
+    raw_terms = st.text_area(
+        "Informe os títulos/termos para 'Encomendas manuais' (um por linha)",
+        value="alteração de status\ncte\nie (tabela)\nie (qliksense)\ndivergência",
+        help="Procura (contém) em 'assunto + título', sem acento/caixa. Use um termo por linha."
+    )
+    # normaliza termos
+    user_terms = [t.strip() for t in (raw_terms or "").splitlines() if t.strip()]
+    user_terms_canon = [_canon(t) for t in user_terms]
+    st.caption("Termos considerados: " + (", ".join(user_terms) if user_terms else "—"))
+
+    # Guardar cópias p/ export antes dos filtros globais
     full_ops = base_ops.copy()
     full_ts  = base_ts.copy()
 
-    # 7) Aplicar filtros globais (ano/mês) para os gráficos
+    # 7) Aplica filtros globais (ano/mês) para os dois conjuntos
     if not base_ops.empty:
         base_ops = aplicar_filtro_global(base_ops, "mes_dt", ano_global, mes_global)
     if not base_ts.empty:
         base_ts  = aplicar_filtro_global(base_ts,  "mes_dt", ano_global, mes_global)
 
-    if (base_ops.empty) and (base_ts.empty):
+    if base_ops.empty and base_ts.empty:
         st.info("Sem dados para exibir com os filtros atuais.")
         return
 
-    # 8) Série mensal
-    # Total TDS = SOMENTE Ops (todas as categorias)
-    monthly_total_ops = (
+    # 8) Séries mensais
+    # TDS total (só Ops, sem filtro por título)
+    monthly_tds = (
         base_ops.groupby("mes_dt")["qtd_encomendas"].sum().rename("Encomendas TDS")
         if not base_ops.empty else pd.Series(dtype=float, name="Encomendas TDS")
     )
 
-    # Manual Ops
-    manual_mask_ops = (base_ops["texto_busca"].apply(_is_manual_by_keywords)
-                       if not base_ops.empty else pd.Series(dtype=bool))
-    monthly_manual_ops = (
-        base_ops[manual_mask_ops].groupby("mes_dt")["qtd_encomendas"].sum().rename("Manual_Ops")
-        if not base_ops.empty else pd.Series(dtype=float, name="Manual_Ops")
-    )
+    # MANUAL: Tech Support filtrado pelos títulos/termos informados
+    if user_terms_canon and not base_ts.empty:
+        ts_mask_manual = base_ts["texto_busca_canon"].apply(
+            lambda c: any(term in c for term in user_terms_canon)
+        )
+        monthly_manual = (
+            base_ts[ts_mask_manual].groupby("mes_dt")["qtd_encomendas"].sum().rename("Encomendas manuais")
+        )
+    else:
+        # sem termos, manual = 0
+        monthly_manual = pd.Series(dtype=float, name="Encomendas manuais")
 
-    # Manual Tech Support (TS entra SOMENTE como Manual)
-    manual_mask_ts = (base_ts["texto_busca"].apply(_is_manual_by_keywords)
-                      if not base_ts.empty else pd.Series(dtype=bool))
-    monthly_manual_ts = (
-        base_ts[manual_mask_ts].groupby("mes_dt")["qtd_encomendas"].sum().rename("Manual_TS")
-        if not base_ts.empty else pd.Series(dtype=float, name="Manual_TS")
-    )
-
-    # Índice mensal contínuo com base no intervalo Ops∪TS
-    min_m = pd.concat([base_ops["mes_dt"] if not base_ops.empty else pd.Series(dtype="datetime64[ns]"),
-                       base_ts["mes_dt"]  if not base_ts.empty  else pd.Series(dtype="datetime64[ns]")]).min()
-    max_m = pd.concat([base_ops["mes_dt"] if not base_ops.empty else pd.Series(dtype="datetime64[ns]"),
-                       base_ts["mes_dt"]  if not base_ts.empty  else pd.Series(dtype="datetime64[ns]")]).max()
+    # Índice mensal contínuo cobrindo Ops ∪ TS
+    min_m = pd.concat([
+        base_ops["mes_dt"] if not base_ops.empty else pd.Series(dtype="datetime64[ns]"),
+        base_ts["mes_dt"]  if not base_ts.empty  else pd.Series(dtype="datetime64[ns]")
+    ]).min()
+    max_m = pd.concat([
+        base_ops["mes_dt"] if not base_ops.empty else pd.Series(dtype="datetime64[ns]"),
+        base_ts["mes_dt"]  if not base_ts.empty  else pd.Series(dtype="datetime64[ns]")
+    ]).max()
     idx = pd.date_range(min_m, max_m, freq="MS")
 
-    s_total = monthly_total_ops.reindex(idx, fill_value=0.0)
-    s_man_ops = monthly_manual_ops.reindex(idx, fill_value=0.0)
-    s_man_ts  = monthly_manual_ts.reindex(idx, fill_value=0.0)
-    s_manual  = (s_man_ops + s_man_ts).rename("Manual")
+    s_tds    = monthly_tds.reindex(idx, fill_value=0.0)
+    s_manual = monthly_manual.reindex(idx, fill_value=0.0)
 
-    monthly = pd.concat([s_manual, s_total], axis=1).reset_index().rename(columns={"index":"mes_dt"})
+    monthly = pd.concat([s_manual.rename("Encomendas manuais"),
+                         s_tds.rename("Encomendas TDS")], axis=1)\
+                .reset_index().rename(columns={"index": "mes_dt"})
     monthly["mes_str"] = monthly["mes_dt"].dt.strftime("%b/%Y")
 
-    # 9) Barras Manual x TDS (TS só no Manual)
+    # 9) Barras
     fig = px.bar(
         monthly,
         x="mes_str",
-        y=["Manual", "Encomendas TDS"],
+        y=["Encomendas manuais", "Encomendas TDS"],
         barmode="group",
         text_auto=True,
-        title="Encomendas corrigidas — Manual (Ops+TS) | TDS (só Ops)",
+        title="Encomendas manuais (Tech Support | títulos informados) vs Encomendas TDS (somente Ops)",
         height=420,
     )
     fig.update_traces(textangle=0, cliponaxis=False)
     fig.update_xaxes(categoryorder="array", categoryarray=monthly["mes_str"].tolist())
-    show_plot(fig, "rotinas_manual_ops_ts_vs_tds_ops", "TDS", ano_global, mes_global)
+    show_plot(fig, "rotinas_manual_ts_vs_tds_ops", "TDS", ano_global, mes_global)
 
-    # 10) Donut (manual pode exceder TDS; clamp no zero para 'restante')
-    total_sum  = float(s_total.sum())
+    # 10) Donut (manual pode exceder TDS; clamp no zero no restante)
+    total_sum  = float(s_tds.sum())
     manual_sum = float(s_manual.sum())
     restante   = max(total_sum - manual_sum, 0.0)
-    df_donut = pd.DataFrame({"tipo": ["Manual", "Encomendas TDS"], "qtd": [manual_sum, restante]})
+    df_donut = pd.DataFrame({"tipo": ["Encomendas manuais", "Encomendas TDS"], "qtd": [manual_sum, restante]})
     fig_donut = px.pie(df_donut, values="qtd", names="tipo", hole=0.6,
-                       title="Manual (Ops+TS) | TDS (só Ops) — Participação")
+                       title="Participação — Manuais (TS) vs TDS (Ops)")
     fig_donut.update_traces(textposition="inside", textinfo="percent+label")
-    show_plot(fig_donut, "rotinas_manual_ops_ts_donut", "TDS", ano_global, mes_global)
+    show_plot(fig_donut, "rotinas_manual_ts_donut_vs_tds_ops", "TDS", ano_global, mes_global)
 
-    # 11) Debug (opcional): ver quanto do Manual vem de TS
-    with st.expander("🔍 Debug Manual — Ops x Tech Support", expanded=False):
-        comp = pd.DataFrame({
-            "mes_dt": idx,
-            "Manual_Ops": s_man_ops.values,
-            "Manual_TS":  s_man_ts.values,
-            "Manual_Total": s_manual.values,
-            "TDS_Only_Ops": s_total.values
-        })
-        comp["mes_str"] = comp["mes_dt"].dt.strftime("%b/%Y")
-        st.dataframe(comp, use_container_width=True, hide_index=True)
-        st.caption(f"Áreas Tech Support detectadas: {', '.join(tech_areas) or '—'}")
-
-    # 12) Ranking por Assunto (Manual Ops+TS)
-    base_manual_union = pd.concat([
-        base_ops[manual_mask_ops] if not base_ops.empty else pd.DataFrame(columns=df.columns),
-        base_ts[manual_mask_ts]  if not base_ts.empty  else pd.DataFrame(columns=df.columns)
-    ], ignore_index=True)
-
-    if not base_manual_union.empty:
-        rank = (base_manual_union.groupby("assunto_nome")["qtd_encomendas"]
-                .sum().sort_values(ascending=False).reset_index())
-        fig_ass = px.bar(
-            rank, x="qtd_encomendas", y="assunto_nome",
-            orientation="h", text="qtd_encomendas",
-            title="Manual (Ops+TS) | Assunto", height=420
-        )
-        fig_ass.update_traces(textposition="outside", cliponaxis=False)
-        fig_ass.update_layout(margin=dict(l=10, r=90, t=45, b=10))
-        try:
-            _max_q = float(rank["qtd_encomendas"].max())
-            fig_ass.update_xaxes(range=[0, _max_q * 1.12])
-        except Exception:
-            pass
-        show_plot(fig_ass, "rotinas_manual_ops_ts_assunto", "TDS", ano_global, mes_global)
-
-    # 13) Export/diagnóstico
+    # 11) Export/diagnóstico
     with st.expander("📤 Exportar / diagnóstico", expanded=False):
-        def _prep_export(dd: pd.DataFrame, origem: str) -> pd.DataFrame:
+        def _prep_export(dd: pd.DataFrame, origem: str, somente_termos: bool = False) -> pd.DataFrame:
             if dd.empty:
-                return pd.DataFrame(columns=["key","resolved","mes_dt","area_nome","assunto_nome","summary","qtd_encomendas","origem_area","tipo_encomenda"])
+                return pd.DataFrame(columns=["key","resolved","mes_dt","area_nome","assunto_nome","summary","qtd_encomendas","origem"])
             tmp = dd.copy()
-            tmp["texto_busca"] = (tmp["assunto_nome"].fillna("") + " " + tmp["summary"].fillna("")).astype(str)
-            tmp["tipo_encomenda"] = tmp["texto_busca"].apply(lambda s: "Manual" if _is_manual_by_keywords(s) else "Encomendas TDS")
-            tmp["origem_area"] = origem
-            return tmp[["key","resolved","mes_dt","area_nome","assunto_nome","summary","qtd_encomendas","origem_area","tipo_encomenda"]]
+            tmp["texto_busca_canon"] = tmp["texto_busca"].apply(_canon)
+            if somente_termos and user_terms_canon:
+                tmp = tmp[tmp["texto_busca_canon"].apply(lambda c: any(t in c for t in user_terms_canon))].copy()
+            tmp["origem"] = origem
+            return tmp[["key","resolved","mes_dt","area_nome","assunto_nome","summary","qtd_encomendas","origem"]]
 
-        exp_ops = _prep_export(full_ops, "Ops")
-        exp_ts  = _prep_export(full_ts,  "Tech Support")
+        exp_ops = _prep_export(full_ops, "Ops (TDS total)")
+        exp_ts  = _prep_export(full_ts,  "Tech Support (manuais | termos)", somente_termos=True)
         df_export = pd.concat([exp_ops, exp_ts], ignore_index=True).sort_values("resolved")
 
-        c1, c2, c3, c4 = st.columns(4)
-        c1.metric("Tickets únicos", int(df_export["key"].nunique()))
-        c2.metric("Soma encomendas (Ops+TS Manual)", int(base_manual_union["qtd_encomendas"].sum()))
-        c3.metric("Soma TDS (só Ops)", int(s_total.sum()))
-        c4.metric("Áreas TS detectadas", len(tech_areas))
+        c1, c2, c3 = st.columns(3)
+        c1.metric("Tickets únicos (Ops+TS)", int(df_export["key"].nunique()))
+        c2.metric("Soma TDS (Ops)", int(s_tds.sum()))
+        c3.metric("Soma Manuais (TS | termos)", int(s_manual.sum()))
 
         csv = df_export.to_csv(index=False).encode("utf-8-sig")
-        st.download_button("Baixar CSV (Ops + TS)", data=csv, file_name="rotinas_ops_ts_export.csv", mime="text/csv")
+        st.download_button("Baixar CSV", data=csv, file_name="rotinas_ops_tds_vs_manual_ts.csv", mime="text/csv")
         st.dataframe(df_export.head(5000), use_container_width=True, hide_index=True)
 
 # ================= Filtros Globais ========================
