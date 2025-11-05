@@ -689,6 +689,9 @@ def render_rotinas_manuais(dfp: pd.DataFrame, ano_global: str, mes_global: str):
         "ie tabela",
         "alteracao de status",
         "alteracao status",
+        "volumetria",
+        "inscrição estadual",
+        "inscricao estadual",
     ]
 
     def _is_manual_by_keywords(text: str) -> bool:
