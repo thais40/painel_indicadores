@@ -645,36 +645,17 @@ def render_rotinas_manuais(dfp: pd.DataFrame, ano_global: str, mes_global: str):
       (procura em 'assunto + título' já normalizados).
     - Dedup por ticket usando o primeiro instante confiável (resolved -> created -> updated).
     - Eixo mensal contínuo + donut + export.
+    - Expander de diagnóstico: Panorama histórico sem filtros globais (para checar meses “sumidos”).
     """
     import pandas as pd
     import plotly.express as px
     import streamlit as st
+
+    # ---------- Helpers ----------
     try:
         from unidecode import unidecode as _unidecode
     except Exception:
         _unidecode = lambda s: s
-
-    # --------- CONFIGURÁVEL (edite aqui) -----------
-    # Áreas Ops (TDS total)
-    OPS_AREAS = [
-        "Ops - Conferência", "Ops - Cubagem", "Ops - Logística",
-        "Ops - Coletas", "Ops - Expedição", "Ops - Divergências",
-    ]
-    # TERMOS para classificar "Encomendas manuais" (apenas Tech Support)
-    # Escreva como você quer ver; eu normalizo (sem acento/caixa) para casar.
-    MANUAL_TS_TERMS = [
-        "alteração de status",
-        "cte",
-        "ie (tabela)",
-        "ie (qliksense)",
-        "divergência",
-        "volumetria",
-        "inscrição estadual",
-        "ie",
-        "ct-e",
-        "encomenda não existe",
-    ]
-    # -----------------------------------------------
 
     def _canon(s: str) -> str:
         return " ".join(_unidecode(str(s or "")).lower().split())
@@ -700,6 +681,22 @@ def render_rotinas_manuais(dfp: pd.DataFrame, ano_global: str, mes_global: str):
         if not tech:
             tech = [a for a in areas if "tech support" in _canon(a) or "suporte tecnico" in _canon(a)]
         return sorted(set(tech))
+    # -----------------------------
+
+    # --------- CONFIGURÁVEL (edite aqui) ----------
+    OPS_AREAS = [
+        "Ops - Conferência", "Ops - Cubagem", "Ops - Logística",
+        "Ops - Coletas", "Ops - Expedição", "Ops - Divergências",
+    ]
+    MANUAL_TS_TERMS = [
+        "alteração de status",
+        "cte",
+        "ie (tabela)",
+        "ie (qliksense)",
+        "divergência",
+    ]
+    terms_canon = [_canon(t) for t in MANUAL_TS_TERMS if t.strip()]
+    # ----------------------------------------------
 
     st.markdown("### 🛠️ Rotinas Manuais — TDS (Ops) vs Manuais (Tech Support)")
 
@@ -709,7 +706,7 @@ def render_rotinas_manuais(dfp: pd.DataFrame, ano_global: str, mes_global: str):
 
     # 1) Base, assunto consolidado e área
     df = dfp.copy()
-    df = ensure_assunto_nome(df, "TDS")
+    df = ensure_assunto_nome(df, "TDS")  # helper do seu projeto
     df["area_nome"] = df["area"].apply(lambda x: safe_get_value(x, "value"))
 
     tech_areas = discover_tech_support_areas(df)
@@ -754,13 +751,42 @@ def render_rotinas_manuais(dfp: pd.DataFrame, ano_global: str, mes_global: str):
     df["texto_busca"]  = (df["assunto_nome"].fillna("") + " " + df["summary"].fillna("")).astype(str)
     df["texto_busca_canon"] = df["texto_busca"].apply(_canon)
 
-    # Listas canon para matching
-    terms_canon = [_canon(t) for t in MANUAL_TS_TERMS if t.strip()]
+    # 🔎 4.1 Panorama histórico (sem filtros globais)
+    with st.expander("🔎 Panorama histórico (sem filtros globais)", expanded=False):
+        hist = df.copy()
+        hist["mes_dt"] = hist["resolved"].dt.to_period("M").dt.to_timestamp()
 
-    # 5) Partições
-    base_ops = df[df["area_nome"].isin(OPS_AREAS)].copy()       # TDS
-    base_ts  = df[df["area_nome"].isin(tech_areas)].copy()      # Manuais (por termos)
+        # TDS (somente Ops)
+        ops_hist = (
+            hist[hist["area_nome"].isin(OPS_AREAS)]
+            .groupby("mes_dt")
+            .agg(tickets=("key", "nunique"), soma=("qtd_encomendas", "sum"))
+            .reset_index()
+        )
+        st.markdown("**Ops (TDS) — histórico**")
+        st.dataframe(ops_hist, use_container_width=True, hide_index=True)
 
+        # TS manuais (somente Tech Support + termos fixos)
+        ts_all = hist[hist["area_nome"].isin(discover_tech_support_areas(hist))].copy()
+        ts_all["texto_busca_canon"] = ts_all["texto_busca"].apply(_canon)
+        ts_all["is_manual"] = ts_all["texto_busca_canon"].apply(
+            lambda c: any(t in c for t in terms_canon)
+        )
+        ts_hist = (
+            ts_all[ts_all["is_manual"]]
+            .groupby("mes_dt")
+            .agg(tickets=("key", "nunique"), soma=("qtd_encomendas", "sum"))
+            .reset_index()
+        )
+        st.markdown("**Tech Support — manuais (termos fixos) — histórico**")
+        st.dataframe(ts_hist, use_container_width=True, hide_index=True)
+
+        prim = hist["resolved"]
+        st.caption(f"Primeira data após dedup: {prim.min().date() if prim.notna().any() else '—'}")
+
+    # 5) Partições para os gráficos
+    base_ops = df[df["area_nome"].isin(OPS_AREAS)].copy()   # TDS
+    base_ts  = df[df["area_nome"].isin(tech_areas)].copy()  # Manuais (por termos)
     if base_ops.empty and base_ts.empty:
         st.info("Sem tickets nas áreas Ops/Tech Support para os filtros atuais.")
         return
@@ -786,7 +812,7 @@ def render_rotinas_manuais(dfp: pd.DataFrame, ano_global: str, mes_global: str):
         if not base_ops.empty else pd.Series(dtype=float, name="Encomendas TDS")
     )
 
-    # MANUAIS (só Tech Support) por termos em texto_busca_canon
+    # MANUAIS (só Tech Support) por termos
     if terms_canon and not base_ts.empty:
         ts_mask_manual = base_ts["texto_busca_canon"].apply(lambda c: any(t in c for t in terms_canon))
         monthly_manual = (
