@@ -641,7 +641,8 @@ def render_rotinas_manuais(dfp: pd.DataFrame, ano_global: str, mes_global: str):
     """
     Rotinas Manuais (TDS)
     - Encomendas TDS = SOMENTE áreas Ops (qtd_encomendas > 0).
-    - Encomendas manuais = SOMENTE Tech Support, filtrado por 'assunto_nome' (lista fixa abaixo).
+    - Encomendas manuais = SOMENTE Tech Support + áreas extras (ex.: 'Suporte - Infra'),
+      filtrado por 'assunto_nome' (lista fixa MANUAL_TS_ASSUNTOS).
     - Dedup por ticket usando o primeiro instante confiável (resolved -> created -> updated).
     - Eixo mensal contínuo + donut + export.
     """
@@ -687,7 +688,7 @@ def render_rotinas_manuais(dfp: pd.DataFrame, ano_global: str, mes_global: str):
         "Ops - Coletas", "Ops - Expedição", "Ops - Divergências",
     ]
 
-    # Assuntos (do Jira) que serão somados em "Encomendas manuais" (somente tickets de Tech Support)
+    # Assuntos (do Jira) que serão somados em "Encomendas manuais" (somente tickets de Tech Support + extras)
     MANUAL_TS_ASSUNTOS = [
         "Volumetria - Tabela Divergência",
         "Volumetria - Tabela Erro",
@@ -695,10 +696,15 @@ def render_rotinas_manuais(dfp: pd.DataFrame, ano_global: str, mes_global: str):
         "Volumetria - IE / Qliksense",
         "Volumetria - Painel sem registro",
     ]
+
+    # Áreas extras que DEVEM entrar em "Encomendas manuais" (além das detectadas como Tech Support)
+    MANUAL_TS_AREAS_EXTRA = ["Suporte - Infra"]
+
     assuntos_canon = {_canon(a) for a in MANUAL_TS_ASSUNTOS}
+    extras_canon   = {_canon(a) for a in MANUAL_TS_AREAS_EXTRA}
     # ------------------------------------------
 
-    st.markdown("### 🛠️ Rotinas Manuais — TDS (Ops) vs Manuais por Assunto (Tech Support)")
+    st.markdown("### 🛠️ Rotinas Manuais — TDS (Ops) vs Manuais por Assunto (Tech Support + extras)")
 
     if dfp.empty:
         st.info("Sem tickets para o período.")
@@ -710,6 +716,11 @@ def render_rotinas_manuais(dfp: pd.DataFrame, ano_global: str, mes_global: str):
     df["area_nome"] = df["area"].apply(lambda x: safe_get_value(x, "value"))
 
     tech_areas = discover_tech_support_areas(df)
+    # inclui as áreas extras (ex.: "Suporte - Infra"), checando por nome canônico
+    tech_areas = sorted(
+        set(tech_areas) |
+        {a for a in df["area_nome"].dropna().unique() if _canon(a) in extras_canon}
+    )
 
     # 2) Quantidade de encomendas > 0
     df["qtd_encomendas"] = df[CAMPO_QTD_ENCOMENDAS].apply(parse_qtd_encomendas)
@@ -777,7 +788,7 @@ def render_rotinas_manuais(dfp: pd.DataFrame, ano_global: str, mes_global: str):
         if not base_ops.empty else pd.Series(dtype=float, name="Encomendas TDS")
     )
 
-    # MANUAIS (só Tech Support) por assunto
+    # MANUAIS (TS + extras) por assunto
     if not base_ts.empty and assuntos_canon:
         ts_mask_manual = base_ts["assunto_canon"].isin(assuntos_canon)  # igualdade de assunto
         monthly_manual = (
@@ -813,12 +824,12 @@ def render_rotinas_manuais(dfp: pd.DataFrame, ano_global: str, mes_global: str):
         y=["Encomendas manuais", "Encomendas TDS"],
         barmode="group",
         text_auto=True,
-        title="Encomendas manuais (Tech Support | por Assunto) vs Encomendas TDS (somente Ops)",
+        title="Encomendas manuais (TS + extras | por Assunto) vs Encomendas TDS (somente Ops)",
         height=420,
     )
     fig.update_traces(textangle=0, cliponaxis=False)
     fig.update_xaxes(categoryorder="array", categoryarray=monthly["mes_str"].tolist())
-    show_plot(fig, "rotinas_manual_ts_assunto_vs_tds_ops", "TDS", ano_global, mes_global)
+    show_plot(fig, "rotinas_manual_ts_assunto_vs_tds_ops_extras", "TDS", ano_global, mes_global)
 
     # 9) Donut
     total_sum  = float(s_tds.sum())
@@ -826,9 +837,9 @@ def render_rotinas_manuais(dfp: pd.DataFrame, ano_global: str, mes_global: str):
     restante   = max(total_sum - manual_sum, 0.0)
     df_donut = pd.DataFrame({"tipo": ["Encomendas manuais", "Encomendas TDS"], "qtd": [manual_sum, restante]})
     fig_donut = px.pie(df_donut, values="qtd", names="tipo", hole=0.6,
-                       title="Participação — Manuais (TS | por Assunto) vs TDS (Ops)")
+                       title="Participação — Manuais (TS + extras | por Assunto) vs TDS (Ops)")
     fig_donut.update_traces(textposition="inside", textinfo="percent+label")
-    show_plot(fig_donut, "rotinas_manual_ts_assunto_donut_vs_tds_ops", "TDS", ano_global, mes_global)
+    show_plot(fig_donut, "rotinas_manual_ts_assunto_donut_vs_tds_ops_extras", "TDS", ano_global, mes_global)
 
     # 10) Export/diagnóstico
     with st.expander("📤 Exportar / diagnóstico", expanded=False):
@@ -843,16 +854,16 @@ def render_rotinas_manuais(dfp: pd.DataFrame, ano_global: str, mes_global: str):
             return tmp[["key","resolved","mes_dt","area_nome","assunto_nome","summary","qtd_encomendas","origem"]]
 
         exp_ops = _prep_export(full_ops, "Ops (TDS total)")
-        exp_ts  = _prep_export(full_ts,  "Tech Support (manuais | assunto)", somente_assuntos=True)
+        exp_ts  = _prep_export(full_ts,  "TS + extras (manuais | assunto)", somente_assuntos=True)
         df_export = pd.concat([exp_ops, exp_ts], ignore_index=True).sort_values("resolved")
 
         c1, c2, c3 = st.columns(3)
-        c1.metric("Tickets únicos (Ops+TS)", int(df_export["key"].nunique()))
+        c1.metric("Tickets únicos (Ops + TS+extras)", int(df_export["key"].nunique()))
         c2.metric("Soma TDS (Ops)", int(s_tds.sum()))
-        c3.metric("Soma Manuais (TS | assunto)", int(s_manual.sum()))
+        c3.metric("Soma Manuais (TS+extras | assunto)", int(s_manual.sum()))
 
         csv = df_export.to_csv(index=False).encode("utf-8-sig")
-        st.download_button("Baixar CSV", data=csv, file_name="rotinas_ops_tds_vs_manual_ts_por_assunto.csv", mime="text/csv")
+        st.download_button("Baixar CSV", data=csv, file_name="rotinas_ops_tds_vs_manual_ts_extras_por_assunto.csv", mime="text/csv")
         st.dataframe(df_export.head(5000), use_container_width=True, hide_index=True)
 
 # ================= Filtros Globais ========================
