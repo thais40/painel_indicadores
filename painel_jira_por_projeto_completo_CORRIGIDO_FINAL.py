@@ -695,10 +695,12 @@ def render_rotinas_manuais(dfp: pd.DataFrame, ano_global: str, mes_global: str):
         "Volumetria - Cotação/Grafana",
         "Volumetria - IE / Qliksense",
         "Volumetria - Painel sem registro",
+        "Volumetria - Acionamento Slack",
+        "Volumetria - Tabela F25 DC",
     ]
 
     # Áreas extras que DEVEM entrar em "Encomendas manuais" (além das detectadas como Tech Support)
-    MANUAL_TS_AREAS_EXTRA = ["Suporte - Infra"]
+    MANUAL_TS_AREAS_EXTRA = ["Suporte - Infra", "Outra / Não Encontrada"]
 
     assuntos_canon = {_canon(a) for a in MANUAL_TS_ASSUNTOS}
     extras_canon   = {_canon(a) for a in MANUAL_TS_AREAS_EXTRA}
