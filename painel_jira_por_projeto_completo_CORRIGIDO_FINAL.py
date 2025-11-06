@@ -640,10 +640,10 @@ def render_onboarding(dfp: pd.DataFrame, ano_global: str, mes_global: str):
 def render_rotinas_manuais(dfp: pd.DataFrame, ano_global: str, mes_global: str):
     """
     Rotinas Manuais (TDS fixo)
-    - Encomendas TDS (FIXO): SOMENTE áreas Ops (qtd_encomendas > 0), independente dos assuntos dos manuais.
+    - Encomendas TDS (FIXO): SOMENTE áreas Ops (qtd_encomendas > 0).
     - Encomendas manuais: QUALQUER área, se 'assunto_nome' CONTÉM um dos termos configurados (normalizado).
-    - Dedup por ticket usando o primeiro instante confiável (resolved -> created -> updated).
-    - Barras lado a lado + donut (totais independentes).
+    - Dedup por ticket (resolved -> created -> updated).
+    - Barras (Manuais x TDS) + Donut (totais independentes) + Manual | Assunto (horizontal).
     """
     import pandas as pd
     import plotly.express as px
@@ -673,7 +673,7 @@ def render_rotinas_manuais(dfp: pd.DataFrame, ano_global: str, mes_global: str):
         "Ops - Coletas", "Ops - Expedição", "Ops - Divergências",
     ]
 
-    # Assuntos que definem "Encomendas manuais"
+    # Assuntos que definem "Encomendas manuais" (CONTAINS, normalizado)
     MANUAL_ASSUNTOS = [
         # Volumetrias
         "Volumetria - Tabela Divergência",
@@ -802,11 +802,52 @@ def render_rotinas_manuais(dfp: pd.DataFrame, ano_global: str, mes_global: str):
     tds_sum    = float(s_tds.sum())
     df_donut = pd.DataFrame({"tipo": ["Encomendas manuais", "Encomendas TDS"], "qtd": [manual_sum, tds_sum]})
     fig_donut = px.pie(df_donut, values="qtd", names="tipo", hole=0.6,
-                       title="Manual | TDS")
+                       title="Totais independentes — pode haver sobreposição")
     fig_donut.update_traces(textposition="inside", textinfo="percent+label")
     show_plot(fig_donut, "rotinas_manuais_assunto_donut_tds_ops_fixo", "TDS", ano_global, mes_global)
 
-    st.caption("**Observação:** TDS é fixo (apenas Ops). Os gráficos não são partições; pode haver sobreposição entre Manuais e TDS.")
+    # 11) 📊 Manual | Assunto (horizontal) — Top 5 + 'Outros'
+    if not df_manual.empty:
+        # bucketização: mapeia cada ticket ao primeiro termo que bater; senão 'Outros'
+        def _bucket_row(canon_text: str) -> str:
+            for label, needle in zip(MANUAL_ASSUNTOS, assuntos_contains):
+                if needle in canon_text:
+                    return label
+            return "Outros"
+
+        df_manual["bucket_assunto"] = df_manual["assunto_canon"].apply(_bucket_row)
+
+        serie = (df_manual
+                 .groupby("bucket_assunto")["qtd_encomendas"]
+                 .sum()
+                 .sort_values(ascending=False))
+
+        TOP = 5
+        if len(serie) > TOP:
+            top = serie.iloc[:TOP-1]
+            outros = serie.iloc[TOP-1:].sum()
+            serie_plot = pd.concat([top, pd.Series({"Outros": outros})])
+        else:
+            serie_plot = serie
+
+        df_ass = serie_plot.reset_index().rename(columns={
+            "bucket_assunto": "assunto", "qtd_encomendas": "qtd"
+        })
+
+        fig_ass = px.bar(
+            df_ass,
+            x="qtd",
+            y="assunto",
+            orientation="h",
+            text="qtd",
+            title="Manual | Assunto",
+            height=380,
+        )
+        fig_ass.update_yaxes(categoryorder="total ascending")
+        fig_ass.update_traces(textposition="inside",
+                              texttemplate="%{text:,.0f}")  # formatação com milhar
+        fig_ass.update_layout(margin=dict(l=10, r=10, t=50, b=10))
+        show_plot(fig_ass, "rotinas_manuais_breakdown_assunto", "TDS", ano_global, mes_global)
 
 # ================= Filtros Globais ========================
 
