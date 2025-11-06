@@ -682,8 +682,6 @@ def render_rotinas_manuais(dfp: pd.DataFrame, ano_global: str, mes_global: str):
         "Volumetria - IE / Qliksense",
         "Volumetria - Painel sem registro",
         # Erros de processamento
-        "Erro no processamento - Inscrição Estadual",
-        "Erro no processamento - CTE",
     ]
     assuntos_contains = [_canon(a) for a in MANUAL_ASSUNTOS if str(a).strip()]
     # ---------------------------
