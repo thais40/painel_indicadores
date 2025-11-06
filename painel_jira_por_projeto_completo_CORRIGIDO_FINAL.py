@@ -640,10 +640,10 @@ def render_onboarding(dfp: pd.DataFrame, ano_global: str, mes_global: str):
 def render_rotinas_manuais(dfp: pd.DataFrame, ano_global: str, mes_global: str):
     """
     Rotinas Manuais (TDS fixo)
-    - Encomendas TDS (FIXO): SOMENTE áreas Ops (qtd_encomendas > 0), independente de como classificamos os manuais.
+    - Encomendas TDS (FIXO): SOMENTE áreas Ops (qtd_encomendas > 0), independente dos assuntos dos manuais.
     - Encomendas manuais: QUALQUER área, se 'assunto_nome' CONTÉM um dos termos configurados (normalizado).
     - Dedup por ticket usando o primeiro instante confiável (resolved -> created -> updated).
-    - Barras lado a lado + donut (não particionado) + export/diagnóstico.
+    - Barras lado a lado + donut (totais independentes).
     """
     import pandas as pd
     import plotly.express as px
@@ -682,6 +682,8 @@ def render_rotinas_manuais(dfp: pd.DataFrame, ano_global: str, mes_global: str):
         "Volumetria - IE / Qliksense",
         "Volumetria - Painel sem registro",
         # Erros de processamento
+        "Erro no processamento - Inscrição Estadual",
+        "Erro no processamento - CTE",
     ]
     assuntos_contains = [_canon(a) for a in MANUAL_ASSUNTOS if str(a).strip()]
     # ---------------------------
@@ -795,49 +797,16 @@ def render_rotinas_manuais(dfp: pd.DataFrame, ano_global: str, mes_global: str):
     fig.update_xaxes(categoryorder="array", categoryarray=monthly["mes_str"].tolist())
     show_plot(fig, "rotinas_manuais_assunto_vs_tds_ops_fixo", "TDS", ano_global, mes_global)
 
-    # 10) Donut (não particionado: mostra os dois totais como estão)
+    # 10) Donut (totais independentes)
     manual_sum = float(s_manual.sum())
     tds_sum    = float(s_tds.sum())
     df_donut = pd.DataFrame({"tipo": ["Encomendas manuais", "Encomendas TDS"], "qtd": [manual_sum, tds_sum]})
     fig_donut = px.pie(df_donut, values="qtd", names="tipo", hole=0.6,
-                       title="Totais (independentes) — pode haver sobreposição")
+                       title="Totais independentes — pode haver sobreposição")
     fig_donut.update_traces(textposition="inside", textinfo="percent+label")
     show_plot(fig_donut, "rotinas_manuais_assunto_donut_tds_ops_fixo", "TDS", ano_global, mes_global)
 
     st.caption("**Observação:** TDS é fixo (apenas Ops). Os gráficos não são partições; pode haver sobreposição entre Manuais e TDS.")
-
-    # 11) Export/diagnóstico
-    with st.expander("📤 Exportar / diagnóstico", expanded=False):
-        # top assuntos que ficaram fora do conjunto manual (para ajustar lista, se necessário)
-        not_matched = (
-            df[~df["assunto_canon"].apply(lambda c: any(sub in c for sub in assuntos_contains))]
-            .groupby("assunto_nome").size().sort_values(ascending=False).head(30).reset_index(name="qtd")
-        )
-        st.markdown("**Top assuntos fora dos 'manuais' (para revisão):**")
-        st.dataframe(not_matched, use_container_width=True, hide_index=True)
-
-        def _prep_export(dd: pd.DataFrame, origem: str) -> pd.DataFrame:
-            if dd.empty:
-                return pd.DataFrame(columns=["key","resolved","mes_dt","area_nome","assunto_nome","summary","qtd_encomendas","origem"])
-            tmp = dd.copy()
-            tmp["origem"] = origem
-            return tmp[["key","resolved","mes_dt","area_nome","assunto_nome","summary","qtd_encomendas","origem"]]
-
-        exp_manual = _prep_export(df_manual if not df_manual.empty else df[df["assunto_canon"].apply(lambda c: any(sub in c for sub in assuntos_contains))],
-                                  "Manual (assunto)")
-        exp_tds    = _prep_export(df_ops if not df_ops.empty else df[df["area_nome"].isin(OPS_AREAS)],
-                                  "TDS (Ops fixo)")
-        df_export = pd.concat([exp_manual, exp_tds], ignore_index=True).sort_values("resolved")
-
-        c1, c2 = st.columns(2)
-        c1.metric("Total Manuais", int(manual_sum))
-        c2.metric("Total TDS (fixo)", int(tds_sum))
-
-        csv = df_export.to_csv(index=False).encode("utf-8-sig")
-        st.download_button("Baixar CSV", data=csv,
-                           file_name="rotinas_manuais_assunto_vs_tds_ops_fixo.csv",
-                           mime="text/csv")
-        st.dataframe(df_export.head(5000), use_container_width=True, hide_index=True)
 
 # ================= Filtros Globais ========================
 
