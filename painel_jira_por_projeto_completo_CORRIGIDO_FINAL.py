@@ -704,6 +704,7 @@ def render_rotinas_manuais(dfp: pd.DataFrame, ano_global: str, mes_global: str):
         "Erro no processamento - Inscrição Estadual",
         "Erro no processamento - CTE",
         "Erro no processamento - Cotação",
+        "Erro no processamento - Outros",
     ]
 
     # Áreas extras que DEVEM entrar em "Encomendas manuais" (além das detectadas como Tech Support)
