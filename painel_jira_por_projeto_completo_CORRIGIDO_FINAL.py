@@ -703,10 +703,11 @@ def render_rotinas_manuais(dfp: pd.DataFrame, ano_global: str, mes_global: str):
         # seus dois novos:
         "Erro no processamento - Inscrição Estadual",
         "Erro no processamento - CTE",
+        "Erro no processamento - Cotação",
     ]
 
     # Áreas extras que DEVEM entrar em "Encomendas manuais" (além das detectadas como Tech Support)
-    MANUAL_TS_AREAS_EXTRA = ["Suporte - Infra"]
+    MANUAL_TS_AREAS_EXTRA = ["Suporte - Infra", "Outra / Não encontrada"]
 
     # normalizações para matching
     assuntos_contains = [_canon(a) for a in MANUAL_TS_ASSUNTOS if str(a).strip()]
