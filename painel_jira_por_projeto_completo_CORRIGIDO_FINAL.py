@@ -641,10 +641,10 @@ def render_rotinas_manuais(dfp: pd.DataFrame, ano_global: str, mes_global: str):
     """
     Rotinas Manuais (TDS fixo)
     - Encomendas TDS (FIXO): SOMENTE áreas Ops (qtd_encomendas > 0).
-    - Encomendas manuais: QUALQUER área, se 'assunto_nome' contiver algum termo mapeado
-      (ver SUBJECT_GROUPS). O rótulo final é consolidado conforme o mapeamento abaixo.
+    - Encomendas manuais: QUALQUER área, se 'assunto_nome' contiver algum termo configurado (contains + normalizado).
+      Os termos viram rótulos consolidados conforme o mapeamento (SUBJECT_GROUPS + regras via UI opcional).
     - Dedup por ticket (resolved -> created -> updated).
-    - Barras (Manuais x TDS) + Donut (totais independentes) + Manual | Assunto (horizontal).
+    - Gráficos: Barras (Manuais x TDS), Donut (totais independentes) e Manual | Assunto (horizontal).
     """
     import pandas as pd
     import plotly.express as px
@@ -658,9 +658,9 @@ def render_rotinas_manuais(dfp: pd.DataFrame, ano_global: str, mes_global: str):
 
     def _canon(s: str) -> str:
         s = str(s or "")
-        s = s.replace("–", "-").replace("—", "-")
+        s = s.replace("–", "-").replace("—", "-")  # normaliza hífens
         s = _unidecode(s).lower()
-        return " ".join(s.split())
+        return " ".join(s.split())  # esvazia espaços
 
     def _parse_dt_col(s):
         x = pd.to_datetime(s, errors="coerce", utc=False, infer_datetime_format=True)
@@ -668,26 +668,51 @@ def render_rotinas_manuais(dfp: pd.DataFrame, ano_global: str, mes_global: str):
             x = pd.to_datetime(s, errors="coerce", utc=False, dayfirst=True)
         return x
 
-    # ---------- CONFIG ----------
+    # ---------- CONFIG FIXA ----------
     OPS_AREAS = [
         "Ops - Conferência", "Ops - Cubagem", "Ops - Logística",
         "Ops - Coletas", "Ops - Expedição", "Ops - Divergências",
     ]
 
-    # Mapeamento: termo de assunto -> RÓTULO final que você pediu
+    # Mapeamento padrão: termo (assunto) -> RÓTULO final
     SUBJECT_GROUPS = [
         ("Volumetria - IE / Qliksense",               "Inscrição Estadual"),
-        ("Erro no processamento - Inscrição Estadual", "Inscrição Estadual"),
-        ("Erro no processamento - CTE",                "CTE"),
         ("Volumetria - Tabela Erro",                   "CTE"),
         ("Volumetria - Tabela Divergência",            "Divergência"),
         ("Volumetria - Cotação/Grafana",               "Cotação"),
         ("Volumetria - Painel sem registro",           "Outros"),
     ]
-    GROUP_NEEDLES = [(_canon(src), label) for src, label in SUBJECT_GROUPS]
 
-    # -----------------------------------------
-    st.markdown("### 🛠️ Rotinas Manuais — **TDS fixo (Ops)** vs **Manuais por Assunto** (qualquer área)")
+    # ---------- UI OPCIONAL (editar regras em runtime) ----------
+    with st.expander("Configurar 'Assuntos relacionados' (opcional)", expanded=False):
+        st.caption(
+            "Formato: **um por linha**. Use `termo => rótulo`. "
+            "Sem rótulo, o próprio termo é usado como rótulo."
+        )
+        txt_rules = st.text_area(
+            "Regras extras / override",
+            value="",
+            height=140,
+            placeholder="Erro no processamento - GEA => Inscrição Estadual\nVolumetria - Exemplo => CTE"
+        )
+        only_user_rules = st.checkbox("Substituir completamente as regras padrão", value=False)
+
+    user_groups = []
+    for ln in txt_rules.splitlines():
+        ln = ln.strip()
+        if not ln:
+            continue
+        if "=>" in ln:
+            src, label = [p.strip() for p in ln.split("=>", 1)]
+        else:
+            src, label = ln, ln
+        user_groups.append((src, label))
+
+    SUBJECT_GROUPS_RUNTIME = user_groups if only_user_rules else (SUBJECT_GROUPS + user_groups)
+    GROUP_NEEDLES = [(_canon(src), label) for src, label in SUBJECT_GROUPS_RUNTIME]
+    # ------------------------------------------------------------
+
+    st.markdown("### 🛠️ Rotinas Manuais")
 
     if dfp.empty:
         st.info("Sem tickets para o período.")
@@ -706,7 +731,7 @@ def render_rotinas_manuais(dfp: pd.DataFrame, ano_global: str, mes_global: str):
         st.info("Sem tickets com 'Quantidade de encomendas' > 0.")
         return
 
-    # 3) Datas e dedup por primeiro instante confiável
+    # 3) Datas e dedup (primeiro instante confiável)
     df["resolved"] = _parse_dt_col(df.get("resolved"))
     df["created"]  = _parse_dt_col(df.get("created"))
     df["updated"]  = _parse_dt_col(df.get("updated"))
@@ -736,7 +761,7 @@ def render_rotinas_manuais(dfp: pd.DataFrame, ano_global: str, mes_global: str):
     df["mes_dt"] = df["resolved"].dt.to_period("M").dt.to_timestamp()
     df["assunto_canon"] = df["assunto_nome"].apply(_canon)
 
-    # 5) TDS FIXO = SOMENTE OPS (independente dos manuais)
+    # 5) TDS FIXO = SOMENTE OPS
     df_ops = df[df["area_nome"].isin(OPS_AREAS)].copy()
 
     # 6) MANUAIS = POR ASSUNTO (QUALQUER ÁREA), sem afetar TDS
@@ -805,11 +830,9 @@ def render_rotinas_manuais(dfp: pd.DataFrame, ano_global: str, mes_global: str):
     fig_donut.update_traces(textposition="inside", textinfo="percent+label")
     show_plot(fig_donut, "rotinas_manuais_assunto_donut_tds_ops_fixo", "TDS", ano_global, mes_global)
 
-    st.caption("**Observação:** TDS é fixo (apenas Ops). Os gráficos não são partições; pode haver sobreposição entre Manuais e TDS.")
-
-    # 11) Manual | Assunto (horizontal) — usando rótulos finais
+    # 11) Manual | Assunto (horizontal) — usando rótulos finais (SUBJECT_GROUPS + UI)
     if not df_manual.empty:
-        # bucket pelo primeiro termo que bater; senão 'Outros'
+        # bucket: aplica o primeiro needle que bater; senão 'Outros'
         def _bucket_row(canon_text: str) -> str:
             for needle, label in GROUP_NEEDLES:
                 if needle in canon_text:
