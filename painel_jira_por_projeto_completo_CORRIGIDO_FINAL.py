@@ -688,7 +688,7 @@ def render_rotinas_manuais(dfp: pd.DataFrame, ano_global: str, mes_global: str):
     assuntos_contains = [_canon(a) for a in MANUAL_ASSUNTOS if str(a).strip()]
     # ---------------------------
 
-    st.markdown("### 🛠️ Rotinas Manuais — **TDS fixo (Ops)** vs **Manuais por Assunto** (qualquer área)")
+    st.markdown("### 🛠️ Rotinas Manuais")
 
     if dfp.empty:
         st.info("Sem tickets para o período.")
@@ -790,7 +790,7 @@ def render_rotinas_manuais(dfp: pd.DataFrame, ano_global: str, mes_global: str):
         y=["Encomendas manuais", "Encomendas TDS"],
         barmode="group",
         text_auto=True,
-        title="Encomendas manuais (Assunto) **vs** Encomendas TDS (Ops fixo)",
+        title="Encomendas manuais **vs** Encomendas TDS",
         height=420,
     )
     fig.update_traces(textangle=0, cliponaxis=False)
@@ -802,7 +802,7 @@ def render_rotinas_manuais(dfp: pd.DataFrame, ano_global: str, mes_global: str):
     tds_sum    = float(s_tds.sum())
     df_donut = pd.DataFrame({"tipo": ["Encomendas manuais", "Encomendas TDS"], "qtd": [manual_sum, tds_sum]})
     fig_donut = px.pie(df_donut, values="qtd", names="tipo", hole=0.6,
-                       title="Totais independentes — pode haver sobreposição")
+                       title="Manual | TDS")
     fig_donut.update_traces(textposition="inside", textinfo="percent+label")
     show_plot(fig_donut, "rotinas_manuais_assunto_donut_tds_ops_fixo", "TDS", ano_global, mes_global)
 
