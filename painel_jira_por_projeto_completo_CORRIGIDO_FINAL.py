@@ -641,9 +641,7 @@ def render_rotinas_manuais(dfp: pd.DataFrame, ano_global: str, mes_global: str):
     """
     Rotinas Manuais (TDS fixo)
     - Encomendas TDS (FIXO): SOMENTE áreas Ops (qtd_encomendas > 0).
-    - Encomendas manuais: QUALQUER área, se 'assunto_nome' contiver algum termo configurado (contains + normalizado).
-      Os termos viram rótulos consolidados conforme o mapeamento (SUBJECT_GROUPS + regras via UI opcional).
-    - Dedup por ticket (resolved -> created -> updated).
+    - Encomendas manuais: QUALQUER área, se 'assunto_nome' contiver algum termo mapeado (contains + normalizado).
     - Gráficos: Barras (Manuais x TDS), Donut (totais independentes) e Manual | Assunto (horizontal).
     """
     import pandas as pd
@@ -658,9 +656,9 @@ def render_rotinas_manuais(dfp: pd.DataFrame, ano_global: str, mes_global: str):
 
     def _canon(s: str) -> str:
         s = str(s or "")
-        s = s.replace("–", "-").replace("—", "-")  # normaliza hífens
+        s = s.replace("–", "-").replace("—", "-")
         s = _unidecode(s).lower()
-        return " ".join(s.split())  # esvazia espaços
+        return " ".join(s.split())
 
     def _parse_dt_col(s):
         x = pd.to_datetime(s, errors="coerce", utc=False, infer_datetime_format=True)
@@ -674,43 +672,17 @@ def render_rotinas_manuais(dfp: pd.DataFrame, ano_global: str, mes_global: str):
         "Ops - Coletas", "Ops - Expedição", "Ops - Divergências",
     ]
 
-    # Mapeamento padrão: termo (assunto) -> RÓTULO final
+    # Mapeamento: termo -> RÓTULO final (fixo no código)
     SUBJECT_GROUPS = [
         ("Volumetria - IE / Qliksense",               "Inscrição Estadual"),
+        ("Erro no processamento - Inscrição Estadual", "Inscrição Estadual"),
+        ("Erro no processamento - CTE",                "CTE"),
         ("Volumetria - Tabela Erro",                   "CTE"),
         ("Volumetria - Tabela Divergência",            "Divergência"),
         ("Volumetria - Cotação/Grafana",               "Cotação"),
         ("Volumetria - Painel sem registro",           "Outros"),
     ]
-
-    # ---------- UI OPCIONAL (editar regras em runtime) ----------
-    with st.expander("Configurar 'Assuntos relacionados' (opcional)", expanded=False):
-        st.caption(
-            "Formato: **um por linha**. Use `termo => rótulo`. "
-            "Sem rótulo, o próprio termo é usado como rótulo."
-        )
-        txt_rules = st.text_area(
-            "Regras extras / override",
-            value="",
-            height=140,
-            placeholder="Erro no processamento - GEA => Inscrição Estadual\nVolumetria - Exemplo => CTE"
-        )
-        only_user_rules = st.checkbox("Substituir completamente as regras padrão", value=False)
-
-    user_groups = []
-    for ln in txt_rules.splitlines():
-        ln = ln.strip()
-        if not ln:
-            continue
-        if "=>" in ln:
-            src, label = [p.strip() for p in ln.split("=>", 1)]
-        else:
-            src, label = ln, ln
-        user_groups.append((src, label))
-
-    SUBJECT_GROUPS_RUNTIME = user_groups if only_user_rules else (SUBJECT_GROUPS + user_groups)
-    GROUP_NEEDLES = [(_canon(src), label) for src, label in SUBJECT_GROUPS_RUNTIME]
-    # ------------------------------------------------------------
+    GROUP_NEEDLES = [(_canon(src), label) for src, label in SUBJECT_GROUPS]
 
     st.markdown("### 🛠️ Rotinas Manuais")
 
@@ -720,7 +692,7 @@ def render_rotinas_manuais(dfp: pd.DataFrame, ano_global: str, mes_global: str):
 
     # 1) Base e assunto consolidado
     df = dfp.copy()
-    df = ensure_assunto_nome(df, "TDS")  # garante 'assunto_nome'
+    df = ensure_assunto_nome(df, "TDS")
     df["assunto_nome"] = df["assunto_nome"].astype(str)
     df["area_nome"] = df["area"].apply(lambda x: safe_get_value(x, "value"))
 
@@ -731,7 +703,7 @@ def render_rotinas_manuais(dfp: pd.DataFrame, ano_global: str, mes_global: str):
         st.info("Sem tickets com 'Quantidade de encomendas' > 0.")
         return
 
-    # 3) Datas e dedup (primeiro instante confiável)
+    # 3) Datas e dedup
     df["resolved"] = _parse_dt_col(df.get("resolved"))
     df["created"]  = _parse_dt_col(df.get("created"))
     df["updated"]  = _parse_dt_col(df.get("updated"))
@@ -814,7 +786,7 @@ def render_rotinas_manuais(dfp: pd.DataFrame, ano_global: str, mes_global: str):
         y=["Encomendas manuais", "Encomendas TDS"],
         barmode="group",
         text_auto=True,
-        title="Encomendas manuais (Assunto) **vs** Encomendas TDS (Ops fixo)",
+        title="Encomendas manuais **vs** Encomendas TDS",
         height=420,
     )
     fig.update_traces(textangle=0, cliponaxis=False)
@@ -830,9 +802,8 @@ def render_rotinas_manuais(dfp: pd.DataFrame, ano_global: str, mes_global: str):
     fig_donut.update_traces(textposition="inside", textinfo="percent+label")
     show_plot(fig_donut, "rotinas_manuais_assunto_donut_tds_ops_fixo", "TDS", ano_global, mes_global)
 
-    # 11) Manual | Assunto (horizontal) — usando rótulos finais (SUBJECT_GROUPS + UI)
+    # 11) Manual | Assunto (horizontal) — rótulos finais do mapeamento
     if not df_manual.empty:
-        # bucket: aplica o primeiro needle que bater; senão 'Outros'
         def _bucket_row(canon_text: str) -> str:
             for needle, label in GROUP_NEEDLES:
                 if needle in canon_text:
@@ -853,8 +824,7 @@ def render_rotinas_manuais(dfp: pd.DataFrame, ano_global: str, mes_global: str):
         else:
             serie_plot = serie
 
-        # nomes estáveis de colunas
-        df_ass = serie_plot.rename_axis("assunto").reset_index(name="qtd")
+        df_ass = serie_plot.rename_axis("assunto").reset_index(name="qtd")  # nomes estáveis
 
         fig_ass = px.bar(
             df_ass,
@@ -869,18 +839,6 @@ def render_rotinas_manuais(dfp: pd.DataFrame, ano_global: str, mes_global: str):
         fig_ass.update_traces(textposition="inside", texttemplate="%{text:,.0f}")
         fig_ass.update_layout(margin=dict(l=10, r=10, t=50, b=10))
         show_plot(fig_ass, "rotinas_manuais_breakdown_assunto", "TDS", ano_global, mes_global)
-
-# ================= Filtros Globais ========================
-
-st.markdown("### 🔍 Filtros Globais")
-ano_atual = date.today().year
-opcoes_ano = ["Todos"] + [str(y) for y in range(2024, ano_atual + 1)]
-opcoes_mes = ["Todos"] + [f"{m:02d}" for m in range(1, 13)]
-colA, colB = st.columns(2)
-with colA:
-    ano_global = st.selectbox("Ano (global)", opcoes_ano, index=0, key="ano_global")
-with colB:
-    mes_global = st.selectbox("Mês (global)", opcoes_mes, index=0, key="mes_global")
 
 # ================= Coleta de dados ========================
 
