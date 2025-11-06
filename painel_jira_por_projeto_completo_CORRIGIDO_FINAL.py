@@ -678,8 +678,6 @@ def render_rotinas_manuais(dfp: pd.DataFrame, ano_global: str, mes_global: str):
         # Erros de processamento
         "Erro no processamento - Inscrição Estadual",
         "Erro no processamento - CTE",
-        "Erro no processamento - Outros",
-        "Erro no processamento - Cotação/CEP no custo",
         
         # (adicione quantos quiser)
     ]
