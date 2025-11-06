@@ -641,7 +641,8 @@ def render_rotinas_manuais(dfp: pd.DataFrame, ano_global: str, mes_global: str):
     """
     Rotinas Manuais (TDS fixo)
     - Encomendas TDS (FIXO): SOMENTE áreas Ops (qtd_encomendas > 0).
-    - Encomendas manuais: QUALQUER área, se 'assunto_nome' CONTÉM um dos termos configurados (normalizado).
+    - Encomendas manuais: QUALQUER área, se 'assunto_nome' contiver algum termo mapeado
+      (ver SUBJECT_GROUPS). O rótulo final é consolidado conforme o mapeamento abaixo.
     - Dedup por ticket (resolved -> created -> updated).
     - Barras (Manuais x TDS) + Donut (totais independentes) + Manual | Assunto (horizontal).
     """
@@ -673,22 +674,20 @@ def render_rotinas_manuais(dfp: pd.DataFrame, ano_global: str, mes_global: str):
         "Ops - Coletas", "Ops - Expedição", "Ops - Divergências",
     ]
 
-    # Assuntos que definem "Encomendas manuais" (CONTAINS, normalizado)
-    MANUAL_ASSUNTOS = [
-        # Volumetrias
-        "Volumetria - Tabela Divergência",
-        "Volumetria - Tabela Erro",
-        "Volumetria - Cotação/Grafana",
-        "Volumetria - IE / Qliksense",
-        "Volumetria - Painel sem registro",
-        # Erros de processamento
-        "Erro no processamento - Inscrição Estadual",
-        "Erro no processamento - CTE",
+    # Mapeamento: termo de assunto -> RÓTULO final que você pediu
+    SUBJECT_GROUPS = [
+        ("Volumetria - IE / Qliksense",               "Inscrição Estadual"),
+        ("Erro no processamento - Inscrição Estadual", "Inscrição Estadual"),
+        ("Erro no processamento - CTE",                "CTE"),
+        ("Volumetria - Tabela Erro",                   "CTE"),
+        ("Volumetria - Tabela Divergência",            "Divergência"),
+        ("Volumetria - Cotação/Grafana",               "Cotação"),
+        ("Volumetria - Painel sem registro",           "Outros"),
     ]
-    assuntos_contains = [_canon(a) for a in MANUAL_ASSUNTOS if str(a).strip()]
-    # ---------------------------
+    GROUP_NEEDLES = [(_canon(src), label) for src, label in SUBJECT_GROUPS]
 
-    st.markdown("### 🛠️ Rotinas Manuais")
+    # -----------------------------------------
+    st.markdown("### 🛠️ Rotinas Manuais — **TDS fixo (Ops)** vs **Manuais por Assunto** (qualquer área)")
 
     if dfp.empty:
         st.info("Sem tickets para o período.")
@@ -741,10 +740,10 @@ def render_rotinas_manuais(dfp: pd.DataFrame, ano_global: str, mes_global: str):
     df_ops = df[df["area_nome"].isin(OPS_AREAS)].copy()
 
     # 6) MANUAIS = POR ASSUNTO (QUALQUER ÁREA), sem afetar TDS
-    def _contains_any(canon_text: str) -> bool:
-        return any(sub in canon_text for sub in assuntos_contains)
+    def _is_manual(canon_text: str) -> bool:
+        return any(needle in canon_text for needle, _label in GROUP_NEEDLES)
 
-    df_manual = df[df["assunto_canon"].apply(_contains_any)].copy()
+    df_manual = df[df["assunto_canon"].apply(_is_manual)].copy()
 
     # 7) Filtro global (ano/mês)
     if not df_ops.empty:
@@ -790,7 +789,7 @@ def render_rotinas_manuais(dfp: pd.DataFrame, ano_global: str, mes_global: str):
         y=["Encomendas manuais", "Encomendas TDS"],
         barmode="group",
         text_auto=True,
-        title="Encomendas manuais **vs** Encomendas TDS",
+        title="Encomendas manuais (Assunto) **vs** Encomendas TDS (Ops fixo)",
         height=420,
     )
     fig.update_traces(textangle=0, cliponaxis=False)
@@ -806,11 +805,13 @@ def render_rotinas_manuais(dfp: pd.DataFrame, ano_global: str, mes_global: str):
     fig_donut.update_traces(textposition="inside", textinfo="percent+label")
     show_plot(fig_donut, "rotinas_manuais_assunto_donut_tds_ops_fixo", "TDS", ano_global, mes_global)
 
-    # 11) 📊 Manual | Assunto (horizontal) — Top 5 + 'Outros'
+    st.caption("**Observação:** TDS é fixo (apenas Ops). Os gráficos não são partições; pode haver sobreposição entre Manuais e TDS.")
+
+    # 11) Manual | Assunto (horizontal) — usando rótulos finais
     if not df_manual.empty:
-        # bucketização: mapeia cada ticket ao primeiro termo que bater; senão 'Outros'
+        # bucket pelo primeiro termo que bater; senão 'Outros'
         def _bucket_row(canon_text: str) -> str:
-            for label, needle in zip(MANUAL_ASSUNTOS, assuntos_contains):
+            for needle, label in GROUP_NEEDLES:
                 if needle in canon_text:
                     return label
             return "Outros"
@@ -824,15 +825,13 @@ def render_rotinas_manuais(dfp: pd.DataFrame, ano_global: str, mes_global: str):
 
         TOP = 5
         if len(serie) > TOP:
-            top = serie.iloc[:TOP-1]
-            outros = serie.iloc[TOP-1:].sum()
-            serie_plot = pd.concat([top, pd.Series({"Outros": outros})])
+            serie_plot = pd.concat([serie.iloc[:TOP-1],
+                                    pd.Series({"Outros": serie.iloc[TOP-1:].sum()})])
         else:
             serie_plot = serie
 
-        df_ass = serie_plot.reset_index().rename(columns={
-            "bucket_assunto": "assunto", "qtd_encomendas": "qtd"
-        })
+        # nomes estáveis de colunas
+        df_ass = serie_plot.rename_axis("assunto").reset_index(name="qtd")
 
         fig_ass = px.bar(
             df_ass,
@@ -844,8 +843,7 @@ def render_rotinas_manuais(dfp: pd.DataFrame, ano_global: str, mes_global: str):
             height=380,
         )
         fig_ass.update_yaxes(categoryorder="total ascending")
-        fig_ass.update_traces(textposition="inside",
-                              texttemplate="%{text:,.0f}")  # formatação com milhar
+        fig_ass.update_traces(textposition="inside", texttemplate="%{text:,.0f}")
         fig_ass.update_layout(margin=dict(l=10, r=10, t=50, b=10))
         show_plot(fig_ass, "rotinas_manuais_breakdown_assunto", "TDS", ano_global, mes_global)
 
