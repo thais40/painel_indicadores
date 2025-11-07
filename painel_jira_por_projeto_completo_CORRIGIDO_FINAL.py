@@ -792,5 +792,108 @@ for projeto, tab in zip(PROJETOS, tabs):
                 with st.expander("🧭 Onboarding", expanded=False):
                     render_onboarding(dfp, ano_global, mes_global)
 
+# === injected helper + corrected render_criados_resolvidos ===
+def _infer_project_from_any(dfp):
+    """
+    Tenta inferir o projeto a partir do DataFrame (colunas comuns) ou da sessão do Streamlit.
+    Fallback seguro: 'TDS'
+    """
+    for col in ("projeto", "project", "project_key", "project.name"):
+        if col in dfp.columns:
+            s = dfp[col].dropna().astype(str)
+            if not s.empty:
+                return s.iloc[0]
+
+    # tenta da sessão do Streamlit (se existir)
+    try:
+        import streamlit as st
+        for k in ("projeto_atual", "projeto", "projeto_sel"):
+            if k in st.session_state and st.session_state[k]:
+                return str(st.session_state[k])
+    except Exception:
+        pass
+
+    return "TDS"
+
+
+def render_criados_resolvidos(dfp, projeto: str | None = None,
+                              ano_global: str | None = None, mes_global: str | None = None):
+    """
+    Tickets Criados vs Resolvidos — TODAS as áreas (para o projeto atual).
+    - Criados: primeiro 'created' por key (mês de criação)
+    - Resolvidos: último 'resolved' por key (mês de resolução final)
+    - Eixo mensal contínuo (não pula meses).
+    """
+    import pandas as pd, plotly.express as px, streamlit as st
+
+    # projeto pode vir None; inferimos de forma robusta
+    if projeto is None:
+        projeto = _infer_project_from_any(dfp)
+
+    df = dfp.copy()
+
+    # datas robustas
+    created  = pd.to_datetime(df.get("created"),  errors="coerce")
+    resolved = pd.to_datetime(df.get("resolved"), errors="coerce")
+
+    # --- criados por mês (primeira criação por key) ---
+    cdf = (
+        df[created.notna()]
+        .assign(created=created[created.notna()])
+        .sort_values(["key","created"])
+        .drop_duplicates("key", keep="first")
+        .copy()
+    )
+    if not cdf.empty:
+        cdf["mes_dt"] = cdf["created"].dt.to_period("M").dt.to_timestamp()
+
+    # --- resolvidos por mês (última resolução por key) ---
+    rdf = (
+        df[resolved.notna()]
+        .assign(resolved=resolved[resolved.notna()])
+        .sort_values(["key","resolved"])
+        .drop_duplicates("key", keep="last")
+        .copy()
+    )
+    if not rdf.empty:
+        rdf["mes_dt"] = rdf["resolved"].dt.to_period("M").dt.to_timestamp()
+
+    if cdf.empty and rdf.empty:
+        st.info("Sem dados de criação/resolução para montar a série.")
+        return
+
+    # eixo mensal contínuo
+    mins = [x["mes_dt"].min() for x in (cdf, rdf) if not x.empty]
+    maxs = [x["mes_dt"].max() for x in (cdf, rdf) if not x.empty]
+    idx = pd.date_range(min(mins), max(maxs), freq="MS")
+
+    s_criados    = (cdf.groupby("mes_dt")["key"].nunique() if not cdf.empty else pd.Series(dtype=int)).reindex(idx, fill_value=0).rename("Criados")
+    s_resolvidos = (rdf.groupby("mes_dt")["key"].nunique() if not rdf.empty else pd.Series(dtype=int)).reindex(idx, fill_value=0).rename("Resolvidos")
+
+    monthly = pd.concat([s_criados, s_resolvidos], axis=1).reset_index().rename(columns={"index":"mes_dt"})
+
+    # filtros globais (se existirem)
+    monthly = aplicar_filtro_global(monthly, "mes_dt", ano_global or "Todos", mes_global or "Todos")
+    if monthly.empty:
+        st.info("Sem dados para os filtros selecionados.")
+        return
+
+    monthly["mes_str"] = monthly["mes_dt"].dt.strftime("%b/%Y")
+
+    fig = px.bar(
+        monthly,
+        x="mes_str",
+        y=["Criados", "Resolvidos"],
+        barmode="group",
+        text_auto=True,
+        title=f"Tickets Criados vs Resolvidos — {projeto} (todas as áreas)",
+        height=420,
+    )
+    fig.update_traces(textangle=0, cliponaxis=False)
+    fig.update_xaxes(categoryorder="array", categoryarray=monthly["mes_str"].tolist())
+
+    show_plot(fig, f"{projeto.lower().replace(' ', '_')}_criados_resolvidos_all",
+              projeto, ano_global or "Todos", mes_global or "Todos")
+
 st.markdown("---")
 st.caption("💙 Desenvolvido por Thaís Franco.")
