@@ -777,7 +777,7 @@ for projeto, tab in zip(PROJETOS, tabs):
                 st.info("Rotinas Manuais disponível somente para Tech Support.")
         else:
             # Geral
-            render_criados_resolvidos(dfp, projeto, ano_global, mes_global)
+            render_criados_resolvidos(dfp, ano_global=ano_global, mes_global=mes_global)
             render_sla_table(_df_monthly_all, projeto, ano_global, mes_global)
             render_assunto(dfp, projeto, ano_global, mes_global)
             if projeto != "INTEL":
