@@ -34,7 +34,7 @@ st.set_page_config(page_title="Painel de Indicadores", page_icon="📊", layout=
 JIRA_URL = "https://tiendanube.atlassian.net"
 EMAIL = st.secrets.get("EMAIL", "")
 TOKEN = st.secrets.get("TOKEN", "")
-if not EMAIL or TOKEN:
+if not EMAIL or not TOKEN:
     st.error("⚠️ Configure EMAIL e TOKEN em st.secrets para acessar o Jira.")
     st.stop()
 
@@ -86,7 +86,7 @@ def _render_head():
     st.markdown(
         """
         <style>
-        html, body, [class*="css"] { font-family: Inter, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial !important; }
+        html, body, [class*=\"css\"] { font-family: Inter, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial !important; }
         .update-row{ display:flex; align-items:center; gap:12px; margin:8px 0 18px 0; }
         .update-caption{ color:#6B7280; font-size:.85rem; }
         </style>
@@ -114,14 +114,6 @@ st.markdown(
     unsafe_allow_html=True,
 )
 st.markdown("</div>", unsafe_allow_html=True)
-
-# === Filtros globais padrão (evita NameError quando não há selects de ano/mês) ===
-if "ano_global" not in st.session_state:
-    st.session_state["ano_global"] = "Todos"
-if "mes_global" not in st.session_state:
-    st.session_state["mes_global"] = "Todos"
-ano_global = st.session_state["ano_global"]
-mes_global = st.session_state["mes_global"]
 
 # ================= Helpers ================================
 
@@ -508,7 +500,7 @@ def render_app_ne(dfp: pd.DataFrame, ano_global: str, mes_global: str):
     alvo = ASSUNTO_ALVO_APPNE.strip().casefold()
     mask_assunto = s_ass.str.casefold().eq(alvo)
     if not mask_assunto.any():
-        mask_assunto = s_ass.str.contains(r"app\s*ne", case=False, regex=True)
+        mask_assunto = s_ass.str.contains(r"app\\s*ne", case=False, regex=True)
 
     df_app = dfp[mask_assunto].copy()
     if df_app.empty:
@@ -644,7 +636,249 @@ def render_onboarding(dfp: pd.DataFrame, ano_global: str, mes_global: str):
 
 
 # ---- Rotinas Manuais (TDS) — 100% por Jira
-# (mantém sua implementação atual de render_rotinas_manuais)
+
+def render_rotinas_manuais(dfp: pd.DataFrame, ano_global: str, mes_global: str):
+    """
+    Rotinas Manuais (TDS)
+    - Encomendas TDS = SOMENTE áreas Ops (qtd_encomendas > 0).
+    - Encomendas manuais = SOMENTE Tech Support + áreas extras (ex.: 'Suporte - Infra'),
+      filtrado por 'assunto_nome' (lista fixa MANUAL_TS_ASSUNTOS).
+    - Dedup por ticket usando o primeiro instante confiável (resolved -> created -> updated).
+    - Eixo mensal contínuo + donut + export.
+    """
+    import pandas as pd
+    import plotly.express as px
+    import streamlit as st
+
+    # ---------------- Helpers ----------------
+    try:
+        from unidecode import unidecode as _unidecode
+    except Exception:
+        _unidecode = lambda s: s
+
+    def _canon(s: str) -> str:
+        return " ".join(_unidecode(str(s or "")).lower().split())
+
+    def _parse_dt_col(s):
+        x = pd.to_datetime(s, errors="coerce", utc=False, infer_datetime_format=True)
+        if x.notna().sum() == 0:
+            x = pd.to_datetime(s, errors="coerce", utc=False, dayfirst=True)
+        return x
+
+    def discover_tech_support_areas(df):
+        """Detecta nomes de área que representem Tech Support / Suporte."""
+        if "area_nome" not in df.columns:
+            return []
+        areas = sorted({str(a) for a in df["area_nome"].dropna().unique()})
+        tech = []
+        for a in areas:
+            c = _canon(a)
+            if ("tech" in c and ("support" in c or "suporte" in c)) or \
+               ("suporte" in c and ("tecnico" in c or "ti" in c)) or \
+               c.startswith("tech support") or c.startswith("it suporte"):
+                tech.append(a)
+        if not tech:
+            tech = [a for a in areas if "tech support" in _canon(a) or "suporte tecnico" in _canon(a)]
+        return sorted(set(tech))
+    # ------------------------------------------
+
+    # ---------- CONFIG (edite aqui) -----------
+    OPS_AREAS = [
+        "Ops - Conferência", "Ops - Cubagem", "Ops - Logística",
+        "Ops - Coletas", "Ops - Expedição", "Ops - Divergências",
+    ]
+
+    # Assuntos (do Jira) que serão somados em "Encomendas manuais" (somente tickets de Tech Support + extras)
+    MANUAL_TS_ASSUNTOS = [
+        "Volumetria - Tabela Divergência",
+        "Volumetria - Tabela Erro",
+        "Volumetria - Cotação/Grafana",
+        "Volumetria - IE / Qliksense",
+        "Volumetria - Painel sem registro",
+        "Erro no processamento - Inscrição Estadual",
+        "Erro no processamento - CTE",
+    ]
+
+    # Áreas extras que DEVEM entrar em "Encomendas manuais" (além das detectadas como Tech Support)
+    MANUAL_TS_AREAS_EXTRA = ["Suporte - Infra", "Outra / Não Encontrada"]
+
+    assuntos_canon = {_canon(a) for a in MANUAL_TS_ASSUNTOS}
+    extras_canon   = {_canon(a) for a in MANUAL_TS_AREAS_EXTRA}
+    # ------------------------------------------
+
+    st.markdown("### 🛠️ Rotinas Manuais — TDS (Ops) vs Manuais por Assunto (Tech Support + extras)")
+
+    if dfp.empty:
+        st.info("Sem tickets para o período.")
+        return
+
+    # 1) Base, assunto consolidado e área
+    df = dfp.copy()
+    df = ensure_assunto_nome(df, "TDS")  # sua helper preenche 'assunto_nome'
+    df["area_nome"] = df["area"].apply(lambda x: safe_get_value(x, "value"))
+
+    tech_areas = discover_tech_support_areas(df)
+    # inclui as áreas extras (ex.: "Suporte - Infra"), checando por nome canônico
+    tech_areas = sorted(
+        set(tech_areas) |
+        {a for a in df["area_nome"].dropna().unique() if _canon(a) in extras_canon}
+    )
+
+    # 2) Quantidade de encomendas > 0
+    df["qtd_encomendas"] = df[CAMPO_QTD_ENCOMENDAS].apply(parse_qtd_encomendas)
+    df = df[df["qtd_encomendas"] > 0].copy()
+    if df.empty:
+        st.info("Sem tickets com 'Quantidade de encomendas' > 0.")
+        return
+
+    # 3) Datas e dedup por primeiro instante confiável
+    df["resolved"] = _parse_dt_col(df.get("resolved"))
+    df["created"]  = _parse_dt_col(df.get("created"))
+    df["updated"]  = _parse_dt_col(df.get("updated"))
+
+    df["_best_dt"] = df["resolved"]
+    m = df["_best_dt"].isna() & df["created"].notna()
+    df.loc[m, "_best_dt"] = df.loc[m, "created"]
+    m = df["_best_dt"].isna() & df["updated"].notna()
+    df.loc[m, "_best_dt"] = df.loc[m, "updated"]
+    df = df[df["_best_dt"].notna()].copy()
+
+    df = (
+        df.sort_values(["key", "_best_dt"])
+          .groupby("key", as_index=False)
+          .agg({
+              "_best_dt": "min",
+              "qtd_encomendas": "max",
+              "assunto_nome": "first",
+              "summary": "first",
+              "area_nome": "first",
+          })
+          .rename(columns={"_best_dt": "resolved"})
+          .copy()
+    )
+
+    # 4) Derivados
+    df["mes_dt"] = df["resolved"].dt.to_period("M").dt.to_timestamp()
+    df["assunto_nome"] = df["assunto_nome"].astype(str)
+    df["assunto_canon"] = df["assunto_nome"].apply(_canon)
+
+    # 5) Partições para os gráficos
+    base_ops = df[df["area_nome"].isin(OPS_AREAS)].copy()   # TDS
+    base_ts  = df[df["area_nome"].isin(tech_areas)].copy()  # Manuais (por assunto)
+    if base_ops.empty and base_ts.empty:
+        st.info("Sem tickets nas áreas Ops/Tech Support para os filtros atuais.")
+        return
+
+    # Copias para export
+    full_ops = base_ops.copy()
+    full_ts  = base_ts.copy()
+
+    # 6) Filtro global
+    if not base_ops.empty:
+        base_ops = aplicar_filtro_global(base_ops, "mes_dt", ano_global, mes_global)
+    if not base_ts.empty:
+        base_ts  = aplicar_filtro_global(base_ts,  "mes_dt", ano_global, mes_global)
+
+    if base_ops.empty and base_ts.empty:
+        st.info("Sem dados para exibir com os filtros atuais.")
+        return
+
+    # 7) Séries mensais
+    # TDS (só Ops)
+    monthly_tds = (
+        base_ops.groupby("mes_dt")["qtd_encomendas"].sum().rename("Encomendas TDS")
+        if not base_ops.empty else pd.Series(dtype=float, name="Encomendas TDS")
+    )
+
+    # MANUAIS (TS + extras) por assunto
+    if not base_ts.empty and assuntos_canon:
+        ts_mask_manual = base_ts["assunto_canon"].isin(assuntos_canon)  # igualdade de assunto
+        monthly_manual = (
+            base_ts[ts_mask_manual].groupby("mes_dt")["qtd_encomendas"].sum().rename("Encomendas manuais")
+        )
+    else:
+        monthly_manual = pd.Series(dtype=float, name="Encomendas manuais")
+
+    # Índice mensal contínuo cobrindo Ops ∪ TS
+    min_m = pd.concat([
+        base_ops["mes_dt"] if not base_ops.empty else pd.Series(dtype="datetime64[ns]"),
+        base_ts["mes_dt"]  if not base_ts.empty  else pd.Series(dtype="datetime64[ns]")
+    ]).min()
+    max_m = pd.concat([
+        base_ops["mes_dt"] if not base_ops.empty else pd.Series(dtype="datetime64[ns]"),
+        base_ts["mes_dt"]  if not base_ts.empty  else pd.Series(dtype="datetime64[ns]")
+    ]).max()
+    idx = pd.date_range(min_m, max_m, freq="MS")
+
+    s_tds    = monthly_tds.reindex(idx, fill_value=0.0)
+    s_manual = monthly_manual.reindex(idx, fill_value=0.0)
+
+    monthly = pd.concat([
+        s_manual.rename("Encomendas manuais"),
+        s_tds.rename("Encomendas TDS")
+    ], axis=1).reset_index().rename(columns={"index": "mes_dt"})
+    monthly["mes_str"] = monthly["mes_dt"].dt.strftime("%b/%Y")
+
+    # 8) Barras
+    fig = px.bar(
+        monthly,
+        x="mes_str",
+        y=["Encomendas manuais", "Encomendas TDS"],
+        barmode="group",
+        text_auto=True,
+        title="Encomendas manuais (TS + extras | por Assunto) vs Encomendas TDS (somente Ops)",
+        height=420,
+    )
+    fig.update_traces(textangle=0, cliponaxis=False)
+    fig.update_xaxes(categoryorder="array", categoryarray=monthly["mes_str"].tolist())
+    show_plot(fig, "rotinas_manual_ts_assunto_vs_tds_ops_extras", "TDS", ano_global, mes_global)
+
+    # 9) Donut
+    total_sum  = float(s_tds.sum())
+    manual_sum = float(s_manual.sum())
+    restante   = max(total_sum - manual_sum, 0.0)
+    df_donut = pd.DataFrame({"tipo": ["Encomendas manuais", "Encomendas TDS"], "qtd": [manual_sum, restante]})
+    fig_donut = px.pie(df_donut, values="qtd", names="tipo", hole=0.6,
+                       title="Participação — Manuais (TS + extras | por Assunto) vs TDS (Ops)")
+    fig_donut.update_traces(textposition="inside", textinfo="percent+label")
+    show_plot(fig_donut, "rotinas_manual_ts_assunto_donut_vs_tds_ops_extras", "TDS", ano_global, mes_global)
+
+    # 10) Export/diagnóstico
+    with st.expander("📤 Exportar / diagnóstico", expanded=False):
+        def _prep_export(dd: pd.DataFrame, origem: str, somente_assuntos: bool = False) -> pd.DataFrame:
+            if dd.empty:
+                return pd.DataFrame(columns=["key","resolved","mes_dt","area_nome","assunto_nome","summary","qtd_encomendas","origem"])
+            tmp = dd.copy()
+            tmp["assunto_canon"] = tmp["assunto_nome"].apply(_canon)
+            if somente_assuntos and assuntos_canon:
+                tmp = tmp[tmp["assunto_canon"].isin(assuntos_canon)].copy()
+            tmp["origem"] = origem
+            return tmp[["key","resolved","mes_dt","area_nome","assunto_nome","summary","qtd_encomendas","origem"]]
+
+        exp_ops = _prep_export(full_ops, "Ops (TDS total)")
+        exp_ts  = _prep_export(full_ts,  "TS + extras (manuais | assunto)", somente_assuntos=True)
+        df_export = pd.concat([exp_ops, exp_ts], ignore_index=True).sort_values("resolved")
+
+        c1, c2, c3 = st.columns(3)
+        c1.metric("Tickets únicos (Ops + TS+extras)", int(df_export["key"].nunique()))
+        c2.metric("Soma TDS (Ops)", int(s_tds.sum()))
+        c3.metric("Soma Manuais (TS+extras | assunto)", int(s_manual.sum()))
+
+        csv = df_export.to_csv(index=False).encode("utf-8-sig")
+        st.download_button("Baixar CSV", data=csv, file_name="rotinas_ops_tds_vs_manual_ts_extras_por_assunto.csv", mime="text/csv")
+        st.dataframe(df_export.head(5000), use_container_width=True, hide_index=True)
+
+# ================= Filtros Globais ========================
+
+st.markdown("### 🔍 Filtros Globais")
+ano_atual = date.today().year
+opcoes_ano = ["Todos"] + [str(y) for y in range(2024, ano_atual + 1)]
+opcoes_mes = ["Todos"] + [f"{m:02d}" for m in range(1, 13)]
+colA, colB = st.columns(2)
+with colA:
+    ano_global = st.selectbox("Ano (global)", opcoes_ano, index=0, key="ano_global")
+with colB:
+    mes_global = st.selectbox("Mês (global)", opcoes_mes, index=0, key="mes_global")
 
 # ================= Coleta de dados ========================
 
