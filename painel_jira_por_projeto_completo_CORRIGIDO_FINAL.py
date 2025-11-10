@@ -495,6 +495,7 @@ def render_app_ne(dfp: pd.DataFrame, ano_global: str, mes_global: str):
     if dfp.empty:
         st.info("Sem dados para APP NE.")
         return
+
     dfp = ensure_assunto_nome(dfp.copy(), "TDS")
     s_ass = dfp["assunto_nome"].astype(str).str.strip()
     alvo = ASSUNTO_ALVO_APPNE.strip().casefold()
@@ -508,54 +509,44 @@ def render_app_ne(dfp: pd.DataFrame, ano_global: str, mes_global: str):
         return
 
     df_app["origem_nome"] = df_app["origem"].apply(lambda x: safe_get_value(x, "value"))
-    df_app["origem_cat"] = df_app["origem_nome"].apply(normaliza_origem)
+    df_app["origem_cat"]  = df_app["origem_nome"].apply(normaliza_origem)
+
     df_app["mes_dt"] = df_app["mes_created"].dt.to_period("M").dt.to_timestamp()
     df_app = aplicar_filtro_global(df_app, "mes_dt", ano_global, mes_global)
     if df_app.empty:
         st.info("Sem dados para exibir com os filtros selecionados.")
         return
 
-    serie = (
-        df_app.groupby(["mes_dt", "origem_cat"])
-        .size()
-        .reset_index(name="Qtd")
-        .sort_values("mes_dt")
-    )
+    total_app = int(len(df_app))
+    contagem  = df_app["origem_cat"].value_counts()
+
+    m1,m2,m3 = st.columns(3)
+    m1.metric("Total (APP NE/EN)", total_app)
+    m2.metric("APP NE", int(contagem.get("APP NE", 0)))
+    m3.metric("APP EN", int(contagem.get("APP EN", 0)))
+
+    serie = (df_app.groupby(["mes_dt","origem_cat"]).size()
+             .reset_index(name="Qtd").sort_values("mes_dt"))
     serie["mes_str"] = serie["mes_dt"].dt.strftime("%b/%Y")
     cats = serie["mes_str"].dropna().unique().tolist()
     serie["mes_str"] = pd.Categorical(serie["mes_str"], categories=cats, ordered=True)
 
-    # ⬇️ AQUI está a mudança: NÃO usamos 'color_discrete_map'
     fig_app = px.bar(
-        serie,
-        x="mes_str",
-        y="Qtd",
-        color="origem_cat",
-        barmode="group",
+        serie, x="mes_str", y="Qtd", color="origem_cat", barmode="group",
         title="APP NE — Volumes por mês e Origem do problema",
-        text="Qtd",
-        height=460,
+        color_discrete_map={"APP NE":"#2ca02c","APP EN":"#1f77b4","Outros/Não informado":"#9ca3af"},
+        text="Qtd", height=460,
         category_orders={"origem_cat": ["APP NE", "APP EN", "Outros/Não informado"]},
     )
-    fig_app.update_traces(
-        texttemplate="%{text}",
-        textposition="outside",
-        textfont_size=16,
-        cliponaxis=False,
-    )
+    fig_app.update_traces(texttemplate="%{text}", textposition="outside", textfont_size=16, cliponaxis=False)
     max_qtd = int(serie["Qtd"].max()) if not serie.empty else 0
     if max_qtd > 0:
         fig_app.update_yaxes(range=[0, max_qtd * 1.25])
-    fig_app.update_layout(
-        yaxis_title="Qtd",
-        xaxis_title="Mês",
-        uniformtext_minsize=14,
-        uniformtext_mode="show",
-        bargap=0.15,
-        margin=dict(t=70, r=20, b=60, l=50),
-    )
+    fig_app.update_layout(yaxis_title="Qtd", xaxis_title="Mês",
+                          uniformtext_minsize=14, uniformtext_mode="show",
+                          bargap=0.15, margin=dict(t=70, r=20, b=60, l=50))
     show_plot(fig_app, "app_ne", "TDS", ano_global, mes_global)
-
+  
 
 # ---- Onboarding (INT)
 
