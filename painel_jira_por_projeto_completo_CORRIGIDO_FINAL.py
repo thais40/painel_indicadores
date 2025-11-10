@@ -500,7 +500,7 @@ def render_app_ne(dfp: pd.DataFrame, ano_global: str, mes_global: str):
     alvo = ASSUNTO_ALVO_APPNE.strip().casefold()
     mask_assunto = s_ass.str.casefold().eq(alvo)
     if not mask_assunto.any():
-        mask_assunto = s_ass.str.contains(r"app\\s*ne", case=False, regex=True)
+        mask_assunto = s_ass.str.contains(r"app\s*ne", case=False, regex=True)
 
     df_app = dfp[mask_assunto].copy()
     if df_app.empty:
@@ -515,11 +515,17 @@ def render_app_ne(dfp: pd.DataFrame, ano_global: str, mes_global: str):
         st.info("Sem dados para exibir com os filtros selecionados.")
         return
 
-    serie = df_app.groupby(["mes_dt", "origem_cat"]).size().reset_index(name="Qtd").sort_values("mes_dt")
+    serie = (
+        df_app.groupby(["mes_dt", "origem_cat"])
+        .size()
+        .reset_index(name="Qtd")
+        .sort_values("mes_dt")
+    )
     serie["mes_str"] = serie["mes_dt"].dt.strftime("%b/%Y")
     cats = serie["mes_str"].dropna().unique().tolist()
     serie["mes_str"] = pd.Categorical(serie["mes_str"], categories=cats, ordered=True)
 
+    # ⬇️ AQUI está a mudança: NÃO usamos 'color_discrete_map'
     fig_app = px.bar(
         serie,
         x="mes_str",
@@ -531,7 +537,12 @@ def render_app_ne(dfp: pd.DataFrame, ano_global: str, mes_global: str):
         height=460,
         category_orders={"origem_cat": ["APP NE", "APP EN", "Outros/Não informado"]},
     )
-    fig_app.update_traces(texttemplate="%{text}", textposition="outside", textfont_size=16, cliponaxis=False)
+    fig_app.update_traces(
+        texttemplate="%{text}",
+        textposition="outside",
+        textfont_size=16,
+        cliponaxis=False,
+    )
     max_qtd = int(serie["Qtd"].max()) if not serie.empty else 0
     if max_qtd > 0:
         fig_app.update_yaxes(range=[0, max_qtd * 1.25])
