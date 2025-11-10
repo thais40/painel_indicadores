@@ -586,8 +586,6 @@ def render_rotinas_manuais(dfp: pd.DataFrame, ano_global: str, mes_global: str):
 
     SUBJECT_GROUPS = [
         ("Volumetria - IE / Qliksense",               "Inscrição Estadual"),
-        ("Erro no processamento - Inscrição Estadual", "Inscrição Estadual"),
-        ("Erro no processamento - CTE",                "CTE"),
         ("Volumetria - Tabela Erro",                   "CTE"),
         ("Volumetria - Tabela Divergência",            "Divergência"),
         ("Volumetria - Cotação/Grafana",               "Cotação"),
