@@ -700,6 +700,20 @@ def render_rotinas_manuais(dfp: pd.DataFrame, ano_global: str, mes_global: str):
         "Erro no processamento - CTE",
     ]
 
+    # Mapeamento para o gráfico "Manual | Assunto"
+    # (case-insensitive, sem acento)
+    SUBJECT_GROUPS = {
+        "volumetria - ie / qliksense": "Inscrição Estadual",
+        "erro no processamento - inscricao estadual": "Inscrição Estadual",
+
+        "erro no processamento - cte": "CTE",
+        "volumetria - tabela erro": "CTE",
+
+        "volumetria - tabela divergencia": "Divergência",
+        "volumetria - cotacao/grafana": "Cotação",
+        "volumetria - painel sem registro": "Outros",
+    }
+
     # Áreas extras que DEVEM entrar em "Encomendas manuais" (além das detectadas como Tech Support)
     MANUAL_TS_AREAS_EXTRA = ["Suporte - Infra", "Outra / Não Encontrada"]
 
@@ -791,9 +805,9 @@ def render_rotinas_manuais(dfp: pd.DataFrame, ano_global: str, mes_global: str):
         if not base_ops.empty else pd.Series(dtype=float, name="Encomendas TDS")
     )
 
-    # MANUAIS (TS + extras) por assunto
+    # MANUAIS (TS + extras) por assunto (apenas os assuntos da lista)
     if not base_ts.empty and assuntos_canon:
-        ts_mask_manual = base_ts["assunto_canon"].isin(assuntos_canon)  # igualdade de assunto
+        ts_mask_manual = base_ts["assunto_canon"].isin(assuntos_canon)
         monthly_manual = (
             base_ts[ts_mask_manual].groupby("mes_dt")["qtd_encomendas"].sum().rename("Encomendas manuais")
         )
@@ -820,7 +834,7 @@ def render_rotinas_manuais(dfp: pd.DataFrame, ano_global: str, mes_global: str):
     ], axis=1).reset_index().rename(columns={"index": "mes_dt"})
     monthly["mes_str"] = monthly["mes_dt"].dt.strftime("%b/%Y")
 
-    # 8) Barras
+    # 8) Barras (Manuais x TDS)
     fig = px.bar(
         monthly,
         x="mes_str",
@@ -834,6 +848,35 @@ def render_rotinas_manuais(dfp: pd.DataFrame, ano_global: str, mes_global: str):
     fig.update_xaxes(categoryorder="array", categoryarray=monthly["mes_str"].tolist())
     show_plot(fig, "rotinas_manual_ts_assunto_vs_tds_ops_extras", "TDS", ano_global, mes_global)
 
+    # 8.1) NOVO: Gráfico "Manual | Assunto" (apenas base_ts com assuntos da lista)
+    if not base_ts.empty and assuntos_canon:
+        df_ass = base_ts[base_ts["assunto_canon"].isin(assuntos_canon)].copy()
+
+        # aplica o mapeamento para grupos
+        def _map_grp(s):
+            c = _canon(s)
+            return SUBJECT_GROUPS.get(c, SUBJECT_GROUPS.get(c.replace("ç","c").replace("ã","a").replace("ê","e"), "Outros"))
+        df_ass["assunto_grp"] = df_ass["assunto_nome"].apply(_map_grp)
+
+        grp = (
+            df_ass.groupby("assunto_grp")["qtd_encomendas"]
+                 .sum()
+                 .reset_index()
+                 .sort_values("qtd_encomendas", ascending=True)   # para horizontal crescente
+        )
+        if not grp.empty:
+            fig_ass = px.bar(
+                grp,
+                x="qtd_encomendas",
+                y="assunto_grp",
+                orientation="h",
+                text_auto=True,
+                height=380,
+                title="Manual | Assunto",
+            )
+            fig_ass.update_layout(yaxis_title="", xaxis_title="Qtd")
+            show_plot(fig_ass, "rotinas_manual_assunto_barras", "TDS", ano_global, mes_global)
+
     # 9) Donut
     total_sum  = float(s_tds.sum())
     manual_sum = float(s_manual.sum())
@@ -844,7 +887,7 @@ def render_rotinas_manuais(dfp: pd.DataFrame, ano_global: str, mes_global: str):
     fig_donut.update_traces(textposition="inside", textinfo="percent+label")
     show_plot(fig_donut, "rotinas_manual_ts_assunto_donut_vs_tds_ops_extras", "TDS", ano_global, mes_global)
 
-    # 10) Export/diagnóstico
+    # 10) Export/diagnóstico (mantido)
     with st.expander("📤 Exportar / diagnóstico", expanded=False):
         def _prep_export(dd: pd.DataFrame, origem: str, somente_assuntos: bool = False) -> pd.DataFrame:
             if dd.empty:
