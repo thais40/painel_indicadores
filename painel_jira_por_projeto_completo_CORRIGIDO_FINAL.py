@@ -696,8 +696,6 @@ def render_rotinas_manuais(dfp: pd.DataFrame, ano_global: str, mes_global: str):
         "Volumetria - Cotação/Grafana",
         "Volumetria - IE / Qliksense",
         "Volumetria - Painel sem registro",
-        "Erro no processamento - Inscrição Estadual",
-        "Erro no processamento - CTE",
     ]
 
     # Mapeamento para o gráfico "Manual | Assunto"
