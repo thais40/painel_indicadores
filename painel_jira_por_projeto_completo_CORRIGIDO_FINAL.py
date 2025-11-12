@@ -445,152 +445,191 @@ def render_sla_table(df_monthly_all: pd.DataFrame, projeto: str, ano_global: str
     show_plot(fig, "sla", projeto, ano_global, mes_global)
 
 
-def render_sla_fora_detalhes(dfp, projeto, ano_global, mes_global):
+# ================== SLA – Sub-seção “Chamados fora do SLA” ==================
+def render_sla_fora_detalhes(
+    dfp,
+    projeto: str,
+    ano_global: str,
+    mes_global: str,
+    sla_hours: int | None = None,  # se None, tenta descobrir; senão usa este valor (ex.: 48)
+):
     """
-    Lista de chamados FORA do SLA (respeita filtros globais).
-    - Tenta detectar 'fora do SLA' de forma robusta:
-      * colunas booleanas: fora_sla / sla_breached / breached
-      * colunas booleanas: dentro_sla (inverte)
-      * colunas textuais: sla_result / sla_status contendo 'fora', 'breach', 'violad'
-      * colunas numéricas: compara tempo_resolucao_* com meta_sla_* (em min/h)
-    - Filtra por projeto (quando existir) e por ano/mês via aplicar_filtro_global (se existir)
-    - Mostra DataFrame + botão de download
+    Mostra uma sub-seção com os tickets fora do SLA, reagindo aos filtros globais.
+    Estratégia:
+      1) Se existir coluna booleana indicando fora/dentro do SLA (fora_sla, fora_sla_flag, outside_sla,
+         dentro_sla), utiliza.
+      2) Caso contrário, calcula 'tempo_resolucao_horas' = resolved - created e compara com sla_hours
+         (padrão 48h, pode ser sobrescrito por projeto).
+
+    Colunas exibidas (aproveita o que existir no dataset):
+      key, created, resolved, summary, area_nome/area, assunto_nome/assunto, tempo_resolucao_horas
     """
 
     import pandas as pd
     import streamlit as st
+    import numpy as np
 
     if dfp is None or len(dfp) == 0:
         return
 
     df = dfp.copy()
 
-    # ---------------- utilidades pequenas ----------------
+    # --------- helpers locais (seguros) ----------
     def _to_dt(s):
         return pd.to_datetime(s, errors="coerce", utc=False)
 
-    def _to_num(s):
-        return pd.to_numeric(s, errors="coerce")
+    def _first_existing_col(df, candidates):
+        for c in candidates:
+            if c in df.columns:
+                return c
+        return None
 
-    # ---------------- filtro por projeto (se existir) ----------------
-    proj_col = None
-    for c in ["project", "projeto", "project_key", "projeto_key", "project.name"]:
-        if c in df.columns:
-            proj_col = c
+    def _lower(s):
+        return (str(s) if s is not None else "").strip().lower()
+
+    # área e assunto com nomes amigáveis, se existirem
+    if "area_nome" not in df.columns:
+        if "area" in df.columns:
+            # tenta extrair "value" se a área for dict/obj
+            def _get_area(x):
+                try:
+                    if isinstance(x, dict) and "value" in x:
+                        return x["value"]
+                except Exception:
+                    pass
+                return x
+            df["area_nome"] = df["area"].apply(_get_area)
+        else:
+            df["area_nome"] = np.nan
+
+    if "assunto_nome" not in df.columns:
+        # se sua base já tiver uma função ensure_assunto_nome, você pode chamá-la aqui:
+        # try: df = ensure_assunto_nome(df, projeto)
+        # except: pass
+        # fallback:
+        df["assunto_nome"] = df[_first_existing_col(df, ["assunto", "summary", "subject"])].astype(str) if _first_existing_col(df, ["assunto", "summary", "subject"]) else np.nan
+
+    # datas
+    df["created"] = _to_dt(df.get("created"))
+    df["resolved"] = _to_dt(df.get("resolved"))
+
+    # flag fora do SLA (usa colunas prontas se existirem)
+    fora_col = None
+    for cand in ["fora_sla", "fora_sla_flag", "outside_sla"]:
+        if cand in df.columns:
+            fora_col = cand
             break
-    if proj_col and projeto:
-        df = df[df[proj_col].astype(str).str.contains(str(projeto), case=False, na=False)]
+    dentro_col = "dentro_sla" if "dentro_sla" in df.columns else None
 
-    # ---------------- coluna de data de referência ----------------
-    date_col = "resolved" if "resolved" in df.columns else ("created" if "created" in df.columns else None)
-    if date_col is None:
-        # Se não existir, nem tentamos renderizar.
-        return
-    df[date_col] = _to_dt(df[date_col])
-    df = df[df[date_col].notna()].copy()
+    if fora_col:
+        df["_fora_sla"] = df[fora_col].astype(bool)
+    elif dentro_col:
+        df["_fora_sla"] = (~df[dentro_col].astype(bool))
+    else:
+        # calcular pela diferença de datas com limite de SLA
+        # tenta descobrir um limite pelas colunas da base, senão usa o parâmetro, senão 48h
+        limite_horas = None
+        for cand in ["sla_horas", "meta_sla_horas", "target_sla_hours", "sla_hours"]:
+            if cand in df.columns:
+                try:
+                    # usa moda/mediana dos valores positivos, se existirem
+                    s = pd.to_numeric(df[cand], errors="coerce")
+                    s = s[s > 0]
+                    if len(s) > 0:
+                        limite_horas = int(s.median())
+                        break
+                except Exception:
+                    pass
+        if limite_horas is None:
+            limite_horas = sla_hours if sla_hours is not None else 48
 
-    # ---------------- detecção do "fora do SLA" ----------------
-    fora_mask = pd.Series(False, index=df.index)
-
-    # 1) booleanas diretas
-    for c in df.columns:
-        cl = c.lower()
-        if cl in {"fora_sla", "sla_breached", "breached"}:
-            try:
-                fora_mask |= df[c].astype(bool).fillna(False)
-            except Exception:
-                pass
-        if cl in {"dentro_sla"}:
-            try:
-                fora_mask |= (~df[c].astype(bool)).fillna(False)
-            except Exception:
-                pass
-
-    # 2) textuais
-    for c in df.columns:
-        cl = c.lower()
-        if cl in {"sla_result", "sla_status", "sla", "resultado_sla"}:
-            s = df[c].astype(str).str.lower()
-            fora_mask |= (
-                s.str.contains("fora", na=False)
-                | s.str.contains("breach", na=False)
-                | s.str.contains("violad", na=False)  # violado/violada
-                | s.str.contains("expir", na=False)   # expirado
-            )
-
-    # 3) por comparação de tempos (se existir)
-    # tenta alguns pares comuns
-    cand_res = [c for c in df.columns if "tempo" in c.lower() or "resol" in c.lower()]
-    cand_goal = [c for c in df.columns if "meta" in c.lower() or "goal" in c.lower()]
-    # alguns nomes mais comuns
-    prefer_res = [c for c in df.columns if c.lower() in
-                  {"tempo_resolucao_min", "tempo_resolucao_horas", "tempo_resolucao"}]
-    prefer_goal = [c for c in df.columns if c.lower() in
-                   {"sla_meta_min", "sla_meta_horas", "sla_meta"}]
-    res_col = prefer_res[0] if prefer_res else (cand_res[0] if cand_res else None)
-    goal_col = prefer_goal[0] if prefer_goal else (cand_goal[0] if cand_goal else None)
-
-    if res_col and goal_col:
-        try:
-            r = _to_num(df[res_col])
-            g = _to_num(df[goal_col])
-            fora_mask |= (r > g)
-        except Exception:
-            pass
-
-    # Se nada marcou, encerra
-    base = df[fora_mask].copy()
-    if base.empty:
-        st.subheader("Chamados fora do SLA")
-        st.info("Não foram encontrados chamados fora do SLA para os filtros atuais.")
-        return
-
-    # ---------------- derivado mensal + filtro global ----------------
-    base["mes_dt"] = base[date_col].dt.to_period("M").dt.to_timestamp()
-
-    # usa seu helper se existir
-    try:
-        base = aplicar_filtro_global(base, "mes_dt", ano_global, mes_global)
-    except Exception:
-        # fallback bem simples se não tiver helper
-        if ano_global not in (None, "", "Todos"):
-            base = base[base["mes_dt"].dt.year.astype(str) == str(ano_global)]
-        if mes_global not in (None, "", "Todos"):
-            try:
-                mes_num = int(mes_global)
-                base = base[base["mes_dt"].dt.month == mes_num]
-            except Exception:
-                pass
-
-    if base.empty:
-        st.subheader("Chamados fora do SLA")
-        st.info("Não foram encontrados chamados fora do SLA para os filtros atuais.")
-        return
-
-    # ---------------- colunas amigáveis para exibição ----------------
-    # tenta selecionar as melhores que existirem
-    prefer_cols = [
-        "key", "summary", "assignee", "responsavel", "reporter", "area", "area_nome",
-        date_col, "tempo_resolucao_min", "tempo_resolucao_horas",
-        "sla_meta_min", "sla_meta_horas", "sla_result", "sla_status"
-    ]
-    cols = [c for c in prefer_cols if c in base.columns]
-    if date_col not in cols:
-        cols = [date_col] + cols
-    base = base.sort_values(date_col, ascending=False)
-
-    # ---------------- render ----------------
-    st.subheader("Chamados fora do SLA")
-    with st.expander("Visualizar / Exportar chamados fora do SLA", expanded=False):
-        st.dataframe(base[cols], use_container_width=True, hide_index=True)
-        csv = base[cols].to_csv(index=False).encode("utf-8-sig")
-        st.download_button(
-            "Baixar CSV (fora do SLA)",
-            data=csv,
-            file_name="chamados_fora_sla.csv",
-            mime="text/csv",
+        df["tempo_resolucao_horas"] = (
+            (df["resolved"] - df["created"]).dt.total_seconds() / 3600.0
         )
 
+        df["_fora_sla"] = False
+        m_calc = df["tempo_resolucao_horas"].notna()
+        df.loc[m_calc, "_fora_sla"] = df.loc[m_calc, "tempo_resolucao_horas"] > float(limite_horas)
+
+    # Considera resolvidos; se não houver resolved, usa created para mês
+    base = df.copy()
+    base["mes_dt"] = np.where(
+        base["resolved"].notna(), base["resolved"], base["created"]
+    )
+    base["mes_dt"] = pd.to_datetime(base["mes_dt"], errors="coerce")
+
+    # Aplica seu filtro global, se existir no arquivo
+    try:
+        base = aplicar_filtro_global(base, "mes_dt", ano_global, mes_global)  # type: ignore
+    except Exception:
+        # fallback simples pelo ano/mês textual
+        if (ano_global and ano_global != "Todos") or (mes_global and mes_global != "Todos"):
+            y = None if not ano_global or ano_global == "Todos" else int(ano_global)
+            m = None
+            if mes_global and mes_global != "Todos":
+                # aceita formatos "2025-08" ou "Aug/2025"
+                mg = str(mes_global)
+                if mg.isdigit():
+                    m = int(mg)
+                else:
+                    # tenta extrair número no começo
+                    import re
+                    mm = re.findall(r"\d{1,2}", mg)
+                    if mm:
+                        m = int(mm[0])
+            if y:
+                base = base[base["mes_dt"].dt.year == y]
+            if m:
+                base = base[base["mes_dt"].dt.month == m]
+
+    base_fora = base[base["_fora_sla"]].copy()
+    if base_fora.empty:
+        st.info("Nenhum chamado fora do SLA para os filtros atuais.")
+        return
+
+    # colunas para mostrar – só usa as que existem
+    cols_disp = []
+    for grp in [
+        ["key", "created", "resolved", "summary", "area_nome", "assunto_nome", "tempo_resolucao_horas"],
+        ["key", "created", "resolved", "summary", "area_nome", "assunto_nome"],
+        ["key", "created", "resolved", "summary", "assunto_nome"],
+        ["key", "created", "resolved", "summary"],
+    ]:
+        ok = [c for c in grp if c in base_fora.columns]
+        if ok:
+            cols_disp = ok
+            break
+
+    # ordena do mais fora (maior tempo) pro menor, quando tiver coluna de horas
+    if "tempo_resolucao_horas" in base_fora.columns:
+        base_fora = base_fora.sort_values("tempo_resolucao_horas", ascending=False)
+        # arredonda horas para ficar bonito
+        base_fora["tempo_resolucao_horas"] = (
+            base_fora["tempo_resolucao_horas"].astype(float).round(1)
+        )
+
+    st.subheader("🔴 Chamados fora do SLA")
+    c1, c2 = st.columns(2)
+    c1.metric("Total fora do SLA (período filtrado)", int(base_fora["key"].nunique() if "key" in base_fora.columns else len(base_fora)))
+    if "tempo_resolucao_horas" in base_fora.columns:
+        c2.metric("Mediana (horas) – fora SLA", float(base_fora["tempo_resolucao_horas"].median()))
+
+    # Tabela
+    st.dataframe(
+        base_fora[cols_disp],
+        use_container_width=True,
+        hide_index=True,
+    )
+
+    # Download
+    csv = base_fora[cols_disp].to_csv(index=False).encode("utf-8-sig")
+    st.download_button(
+        "⬇️ Baixar CSV (fora SLA)",
+        data=csv,
+        file_name=f"{projeto.lower().replace(' ','_')}_fora_sla.csv",
+        mime="text/csv",
+    )
+# ================== /SLA – Sub-seção “Chamados fora do SLA” ==================
 
 def render_assunto(dfp: pd.DataFrame, projeto: str, ano_global: str, mes_global: str):
     st.markdown("### 🧾 Assunto Relacionado")
