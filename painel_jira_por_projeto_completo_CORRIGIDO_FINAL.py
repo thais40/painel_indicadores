@@ -445,6 +445,153 @@ def render_sla_table(df_monthly_all: pd.DataFrame, projeto: str, ano_global: str
     show_plot(fig, "sla", projeto, ano_global, mes_global)
 
 
+def render_sla_fora_detalhes(dfp, projeto, ano_global, mes_global):
+    """
+    Lista de chamados FORA do SLA (respeita filtros globais).
+    - Tenta detectar 'fora do SLA' de forma robusta:
+      * colunas booleanas: fora_sla / sla_breached / breached
+      * colunas booleanas: dentro_sla (inverte)
+      * colunas textuais: sla_result / sla_status contendo 'fora', 'breach', 'violad'
+      * colunas numéricas: compara tempo_resolucao_* com meta_sla_* (em min/h)
+    - Filtra por projeto (quando existir) e por ano/mês via aplicar_filtro_global (se existir)
+    - Mostra DataFrame + botão de download
+    """
+
+    import pandas as pd
+    import streamlit as st
+
+    if dfp is None or len(dfp) == 0:
+        return
+
+    df = dfp.copy()
+
+    # ---------------- utilidades pequenas ----------------
+    def _to_dt(s):
+        return pd.to_datetime(s, errors="coerce", utc=False)
+
+    def _to_num(s):
+        return pd.to_numeric(s, errors="coerce")
+
+    # ---------------- filtro por projeto (se existir) ----------------
+    proj_col = None
+    for c in ["project", "projeto", "project_key", "projeto_key", "project.name"]:
+        if c in df.columns:
+            proj_col = c
+            break
+    if proj_col and projeto:
+        df = df[df[proj_col].astype(str).str.contains(str(projeto), case=False, na=False)]
+
+    # ---------------- coluna de data de referência ----------------
+    date_col = "resolved" if "resolved" in df.columns else ("created" if "created" in df.columns else None)
+    if date_col is None:
+        # Se não existir, nem tentamos renderizar.
+        return
+    df[date_col] = _to_dt(df[date_col])
+    df = df[df[date_col].notna()].copy()
+
+    # ---------------- detecção do "fora do SLA" ----------------
+    fora_mask = pd.Series(False, index=df.index)
+
+    # 1) booleanas diretas
+    for c in df.columns:
+        cl = c.lower()
+        if cl in {"fora_sla", "sla_breached", "breached"}:
+            try:
+                fora_mask |= df[c].astype(bool).fillna(False)
+            except Exception:
+                pass
+        if cl in {"dentro_sla"}:
+            try:
+                fora_mask |= (~df[c].astype(bool)).fillna(False)
+            except Exception:
+                pass
+
+    # 2) textuais
+    for c in df.columns:
+        cl = c.lower()
+        if cl in {"sla_result", "sla_status", "sla", "resultado_sla"}:
+            s = df[c].astype(str).str.lower()
+            fora_mask |= (
+                s.str.contains("fora", na=False)
+                | s.str.contains("breach", na=False)
+                | s.str.contains("violad", na=False)  # violado/violada
+                | s.str.contains("expir", na=False)   # expirado
+            )
+
+    # 3) por comparação de tempos (se existir)
+    # tenta alguns pares comuns
+    cand_res = [c for c in df.columns if "tempo" in c.lower() or "resol" in c.lower()]
+    cand_goal = [c for c in df.columns if "meta" in c.lower() or "goal" in c.lower()]
+    # alguns nomes mais comuns
+    prefer_res = [c for c in df.columns if c.lower() in
+                  {"tempo_resolucao_min", "tempo_resolucao_horas", "tempo_resolucao"}]
+    prefer_goal = [c for c in df.columns if c.lower() in
+                   {"sla_meta_min", "sla_meta_horas", "sla_meta"}]
+    res_col = prefer_res[0] if prefer_res else (cand_res[0] if cand_res else None)
+    goal_col = prefer_goal[0] if prefer_goal else (cand_goal[0] if cand_goal else None)
+
+    if res_col and goal_col:
+        try:
+            r = _to_num(df[res_col])
+            g = _to_num(df[goal_col])
+            fora_mask |= (r > g)
+        except Exception:
+            pass
+
+    # Se nada marcou, encerra
+    base = df[fora_mask].copy()
+    if base.empty:
+        st.subheader("Chamados fora do SLA")
+        st.info("Não foram encontrados chamados fora do SLA para os filtros atuais.")
+        return
+
+    # ---------------- derivado mensal + filtro global ----------------
+    base["mes_dt"] = base[date_col].dt.to_period("M").dt.to_timestamp()
+
+    # usa seu helper se existir
+    try:
+        base = aplicar_filtro_global(base, "mes_dt", ano_global, mes_global)
+    except Exception:
+        # fallback bem simples se não tiver helper
+        if ano_global not in (None, "", "Todos"):
+            base = base[base["mes_dt"].dt.year.astype(str) == str(ano_global)]
+        if mes_global not in (None, "", "Todos"):
+            try:
+                mes_num = int(mes_global)
+                base = base[base["mes_dt"].dt.month == mes_num]
+            except Exception:
+                pass
+
+    if base.empty:
+        st.subheader("Chamados fora do SLA")
+        st.info("Não foram encontrados chamados fora do SLA para os filtros atuais.")
+        return
+
+    # ---------------- colunas amigáveis para exibição ----------------
+    # tenta selecionar as melhores que existirem
+    prefer_cols = [
+        "key", "summary", "assignee", "responsavel", "reporter", "area", "area_nome",
+        date_col, "tempo_resolucao_min", "tempo_resolucao_horas",
+        "sla_meta_min", "sla_meta_horas", "sla_result", "sla_status"
+    ]
+    cols = [c for c in prefer_cols if c in base.columns]
+    if date_col not in cols:
+        cols = [date_col] + cols
+    base = base.sort_values(date_col, ascending=False)
+
+    # ---------------- render ----------------
+    st.subheader("Chamados fora do SLA")
+    with st.expander("Visualizar / Exportar chamados fora do SLA", expanded=False):
+        st.dataframe(base[cols], use_container_width=True, hide_index=True)
+        csv = base[cols].to_csv(index=False).encode("utf-8-sig")
+        st.download_button(
+            "Baixar CSV (fora do SLA)",
+            data=csv,
+            file_name="chamados_fora_sla.csv",
+            mime="text/csv",
+        )
+
+
 def render_assunto(dfp: pd.DataFrame, projeto: str, ano_global: str, mes_global: str):
     st.markdown("### 🧾 Assunto Relacionado")
     df_ass = aplicar_filtro_global(dfp.copy(), "mes_created", ano_global, mes_global)
