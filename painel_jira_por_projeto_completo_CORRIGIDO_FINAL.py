@@ -720,67 +720,151 @@ def render_onboarding(dfp: pd.DataFrame, ano_global: str, mes_global: str):
 
     dfp = ensure_assunto_nome(dfp.copy(), "INT")
     df_onb = aplicar_filtro_global(dfp.copy(), "mes_created", ano_global, mes_global)
+    # ======================
+
 
     total_clientes_novos = int((df_onb["assunto_nome"] == ASSUNTO_CLIENTE_NOVO).sum())
     df_erros = df_onb[df_onb["assunto_nome"].isin(ASSUNTOS_ERROS)].copy()
     pend_mask = df_onb["status"].isin(STATUS_PENDENCIAS)
+
     tickets_pendencias = int(pend_mask.sum())
     possiveis_clientes = int(pend_mask.sum())
 
-    c1, c2, c3, c4 = st.columns(4)
+    c1,c2,c3,c4 = st.columns(4)
     c1.metric("Tickets clientes novos", total_clientes_novos)
     c2.metric("Erros onboarding", int(len(df_erros)))
     c3.metric("Tickets com pendências", tickets_pendencias)
     c4.metric("Possíveis clientes", possiveis_clientes)
 
-    df_cli_novo = df_onb[
-        df_onb["assunto_nome"].astype(str).str.contains("cliente novo", case=False, na=False)
-    ].copy()
+    # ======================
+    # NOVOS GRÁFICOS — Onboarding (ordem: Cliente novo, Tipo de Integração)
+    # ======================
+    # 1) Tickets – Cliente novo (mensal com variação % e labels alinhados no topo)
+    df_cli_novo = df_onb[df_onb["assunto_nome"].astype(str).str.contains("cliente novo", case=False, na=False)].copy()
     if not df_cli_novo.empty:
-        serie = df_cli_novo.groupby(pd.Grouper(key="created", freq="MS")).size().rename("qtd").reset_index()
+        serie = (
+            df_cli_novo
+            .groupby(pd.Grouper(key="created", freq="MS"))
+            .size()
+            .rename("qtd")
+            .reset_index()
+        )
         if not serie.empty:
             idx = pd.date_range(serie["created"].min(), serie["created"].max(), freq="MS")
             serie = (
-                serie.set_index("created").reindex(idx).fillna(0.0).rename_axis("created").reset_index()
+                serie.set_index("created")
+                     .reindex(idx)
+                     .fillna(0.0)
+                     .rename_axis("created")
+                     .reset_index()
             )
             serie["qtd"] = serie["qtd"].astype(int)
+            serie["pct"] = serie["qtd"].pct_change() * 100.0
+            # substitui infinitos por NaN para evitar Overflow no anotador
+            serie["pct"].replace([float("inf"), float("-inf")], float("nan"), inplace=True)
+            def _ann(v):
+                import math
+                try:
+                    # None/NaN/Inf → sem label
+                    if v is None:
+                        return ""
+                    if isinstance(v, float) and (math.isnan(v) or math.isinf(v)):
+                        return ""
+                    # converte para inteiro com proteção
+                    v2 = int(round(v))
+                    if v2 > 0:
+                        return f"▲ {v2}%"
+                    if v2 < 0:
+                        return f"▼ {abs(v2)}%"
+                    return "0%"
+                except Exception:
+                    return ""
+            serie["annot"] = serie["pct"].map(_ann)
             serie["mes_str"] = serie["created"].dt.strftime("%Y %b")
-            fig_cli = px.bar(
-                serie, x="mes_str", y="qtd", text="qtd", title="Tickets – Cliente novo", height=420
-            )
-            fig_cli.update_traces(textposition="outside", cliponaxis=False)
-            fig_cli.update_layout(margin=dict(l=10, r=10, t=60, b=10))
-            show_plot(fig_cli, "onb_cli_novo", "INT", ano_global, mes_global)
 
+            fig_cli = px.bar(serie, x="mes_str", y="qtd", text="qtd", title="Tickets – Cliente novo", height=420)
+            fig_cli.update_traces(textposition="outside", cliponaxis=False)
+            # alinhar % no topo do gráfico (fixo, acima do plot)
+            fig_cli.update_layout(margin=dict(l=10, r=10, t=60, b=10))
+            for _, r in serie.iterrows():
+                txt = r.get("annot") or ""
+                if not txt:
+                    continue
+                color = "blue" if (r.get("pct") or 0) >= 0 else "red"
+                fig_cli.add_annotation(
+                    x=r["mes_str"],
+                    y=1.02,
+                    xref="x",
+                    yref="paper",
+                    text=txt,
+                    showarrow=False,
+                    font=dict(size=12, color=color),
+                    yanchor="bottom"
+                )
+
+    # 2) Tipo de Integração (horizontal) — números visíveis na direita
     def _tipo_from_assunto(s: str) -> str:
         s = (s or "").strip().lower()
-        if "cliente novo" in s:
-            return "Cliente novo"
-        if "alteração" in s and "plataforma" in s:
-            return "Alteração de plataforma"
-        if "conta filho" in s:
-            return "Conta filho"
+        if "cliente novo" in s: return "Cliente novo"
+        if "alteração" in s and "plataforma" in s: return "Alteração de plataforma"
+        if "conta filho" in s: return "Conta filho"
         return "Outros"
 
     tipo_counts = (
-        df_onb.assign(tipo=df_onb["assunto_nome"].map(_tipo_from_assunto)).groupby("tipo").size().rename("Qtd").reset_index()
+        df_onb.assign(tipo=df_onb["assunto_nome"].map(_tipo_from_assunto))
+              .groupby("tipo").size().rename("Qtd").reset_index()
     )
-    priority = ["Cliente novo", "Outros", "Alteração de plataforma", "Conta filho"]
-    tipo_counts["ord"] = tipo_counts["tipo"].apply(
-        lambda x: priority.index(x) if x in priority else len(priority) + 1
-    )
-    tipo_counts = tipo_counts.sort_values(["ord", "Qtd"], ascending=[True, False])
-    fig_tipo = px.bar(
-        tipo_counts, x="Qtd", y="tipo", orientation="h", text="Qtd", title="Tipo de Integração", height=420
-    )
+    priority = ["Cliente novo","Outros","Alteração de plataforma","Conta filho"]
+    tipo_counts["ord"] = tipo_counts["tipo"].apply(lambda x: priority.index(x) if x in priority else len(priority)+1)
+    tipo_counts = tipo_counts.sort_values(["ord","Qtd"], ascending=[True, False])
+
+    fig_tipo = px.bar(tipo_counts, x="Qtd", y="tipo", orientation="h", text="Qtd", title="Tipo de Integração", height=420)
     fig_tipo.update_traces(textposition="outside", cliponaxis=False)
+    # margem direita e padding no eixo X para não cortar o número
     fig_tipo.update_layout(margin=dict(l=10, r=90, t=45, b=10))
     try:
         _max_q = float(tipo_counts["Qtd"].max())
         fig_tipo.update_xaxes(range=[0, _max_q * 1.12])
     except Exception:
         pass
+
+    # Layout vertical conforme solicitado
+    if "fig_cli" in locals():
+        show_plot(fig_cli, "onb_cli_novo", "INT", ano_global, mes_global)
+    else:
+        st.info("Sem dados para 'Cliente novo' com os filtros atuais.")
     show_plot(fig_tipo, "onb_tipo_int", "INT", ano_global, mes_global)
+    # ======================
+
+    # gráfico horizontal por erros
+    if not df_erros.empty:
+        cont_erros = (df_erros["assunto_nome"].value_counts()
+                      .reindex(ASSUNTOS_ERROS, fill_value=0).reset_index())
+        cont_erros.columns = ["Categoria","Qtd"]
+
+        fig_onb = px.bar(cont_erros, x="Qtd", y="Categoria", orientation="h",
+                         text="Qtd", title="Erros Onboarding", height=420)
+        fig_onb.update_traces(texttemplate="%{text:.0f}", textposition="outside",
+                              textfont_size=16, cliponaxis=False)
+        max_q = int(cont_erros["Qtd"].max()) if not cont_erros.empty else 0
+        if max_q > 0:
+            fig_onb.update_xaxes(range=[0, max_q*1.25])
+        fig_onb.update_layout(margin=dict(t=50, r=20, b=30, l=10), bargap=0.25)
+        show_plot(fig_onb, "onboarding", "INT", ano_global, mes_global)
+
+    # simulação de dinheiro perdido
+    st.markdown("---")
+    st.subheader("💸 Dinheiro perdido (simulação)")
+    c_left,c_right = st.columns([1,1])
+    with c_left:
+        st.number_input("Clientes novos (simulação)", value=possiveis_clientes, disabled=True, key="sim_clientes_onb")
+    with c_right:
+        receita_cliente = st.slider("Cenário Receita por Cliente (R$)",
+                                    min_value=0, max_value=100000, step=500, value=20000,
+                                    key="sim_receita_onb")
+    dinheiro_perdido = float(possiveis_clientes) * float(receita_cliente)
+    st.markdown(f"### **R$ {dinheiro_perdido:,.2f}**",
+                help="Cálculo: Clientes novos (simulação) × Cenário Receita por Cliente")
 
 
 # ---- Rotinas Manuais (TDS) — 100% por Jira
