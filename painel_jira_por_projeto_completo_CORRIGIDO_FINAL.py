@@ -86,7 +86,7 @@ def _render_head():
     st.markdown(
         """
         <style>
-        html, body, [class*=\"css\"] { font-family: Inter, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial !important; }
+        html, body, [class*="css"] { font-family: Inter, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial !important; }
         .update-row{ display:flex; align-items:center; gap:12px; margin:8px 0 18px 0; }
         .update-caption{ color:#6B7280; font-size:.85rem; }
         </style>
@@ -446,6 +446,7 @@ def render_sla_table(df_monthly_all: pd.DataFrame, projeto: str, ano_global: str
 
 
 # ================== SLA – Sub-seção “Chamados fora do SLA” ==================
+
 def render_sla_fora_detalhes(
     dfp,
     projeto: str,
@@ -568,15 +569,10 @@ def render_sla_fora_detalhes(
             m = None
             if mes_global and mes_global != "Todos":
                 # aceita formatos "2025-08" ou "Aug/2025"
-                mg = str(mes_global)
-                if mg.isdigit():
-                    m = int(mg)
-                else:
-                    # tenta extrair número no começo
-                    import re
-                    mm = re.findall(r"\d{1,2}", mg)
-                    if mm:
-                        m = int(mm[0])
+                import re
+                mm = re.findall(r"\d{1,2}", str(mes_global))
+                if mm:
+                    m = int(mm[0])
             if y:
                 base = base[base["mes_dt"].dt.year == y]
             if m:
@@ -630,6 +626,7 @@ def render_sla_fora_detalhes(
         mime="text/csv",
     )
 # ================== /SLA – Sub-seção “Chamados fora do SLA” ==================
+
 
 def render_assunto(dfp: pd.DataFrame, projeto: str, ano_global: str, mes_global: str):
     st.markdown("### 🧾 Assunto Relacionado")
@@ -898,10 +895,10 @@ def render_onboarding(dfp: pd.DataFrame, ano_global: str, mes_global: str):
     with c_left:
         st.number_input("Clientes novos (simulação)", value=possiveis_clientes, disabled=True, key="sim_clientes_onb")
     with c_right:
-        receita_cliente = st.slider("Cenário Receita por Cliente (R$)",
-                                    min_value=0, max_value=100000, step=500, value=20000,
-                                    key="sim_receita_onb")
-    dinheiro_perdido = float(possiveis_clientes) * float(receita_cliente)
+        st.slider("Cenário Receita por Cliente (R$)",
+                  min_value=0, max_value=100000, step=500, value=20000,
+                  key="sim_receita_onb")
+    dinheiro_perdido = float(possiveis_clientes) * float(st.session_state.get("sim_receita_onb", 20000))
     st.markdown(f"### **R$ {dinheiro_perdido:,.2f}**",
                 help="Cálculo: Clientes novos (simulação) × Cenário Receita por Cliente")
 
@@ -1287,6 +1284,8 @@ for projeto, tab in zip(PROJETOS, tabs):
             render_criados_resolvidos(dfp, projeto, ano_global, mes_global)
         elif visao == "SLA":
             render_sla_table(_df_monthly_all, projeto, ano_global, mes_global)
+            # ✅ NOVO: Sub-seção dinâmica com tickets fora do SLA
+            render_sla_fora_detalhes(dfp, projeto, ano_global, mes_global)
         elif visao == "Assunto Relacionado":
             render_assunto(dfp, projeto, ano_global, mes_global)
         elif visao == "Área Solicitante":
@@ -1313,6 +1312,8 @@ for projeto, tab in zip(PROJETOS, tabs):
             # Geral
             render_criados_resolvidos(dfp, projeto, ano_global, mes_global)
             render_sla_table(_df_monthly_all, projeto, ano_global, mes_global)
+            # ✅ NOVO também na visão Geral:
+            render_sla_fora_detalhes(dfp, projeto, ano_global, mes_global)
             render_assunto(dfp, projeto, ano_global, mes_global)
             if projeto != "INTEL":
                 render_area(dfp, ano_global, mes_global)
