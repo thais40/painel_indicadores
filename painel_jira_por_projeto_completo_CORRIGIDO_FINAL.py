@@ -567,12 +567,10 @@ def render_sla_fora_detalhes(
             y = None if not ano_global or ano_global == "Todos" else int(ano_global)
             m = None
             if mes_global and mes_global != "Todos":
-                # aceita formatos "2025-08" ou "Aug/2025"
                 mg = str(mes_global)
                 if mg.isdigit():
                     m = int(mg)
                 else:
-                    # tenta extrair número no começo
                     import re
                     mm = re.findall(r"\d{1,2}", mg)
                     if mm:
@@ -603,7 +601,6 @@ def render_sla_fora_detalhes(
     # ordena do mais fora (maior tempo) pro menor, quando tiver coluna de horas
     if "tempo_resolucao_horas" in base_fora.columns:
         base_fora = base_fora.sort_values("tempo_resolucao_horas", ascending=False)
-        # arredonda horas para ficar bonito
         base_fora["tempo_resolucao_horas"] = (
             base_fora["tempo_resolucao_horas"].astype(float).round(1)
         )
@@ -614,14 +611,12 @@ def render_sla_fora_detalhes(
     if "tempo_resolucao_horas" in base_fora.columns:
         c2.metric("Mediana (horas) – fora SLA", float(base_fora["tempo_resolucao_horas"].median()))
 
-    # Tabela
     st.dataframe(
         base_fora[cols_disp],
         use_container_width=True,
         hide_index=True,
     )
 
-    # Download
     csv = base_fora[cols_disp].to_csv(index=False).encode("utf-8-sig")
     st.download_button(
         "⬇️ Baixar CSV (fora SLA)",
@@ -638,7 +633,7 @@ def render_sla_module(df_monthly_all: pd.DataFrame, df_issues: pd.DataFrame,
     st.markdown("### ⏱️ SLA")
     tab_resumo, tab_fora = st.tabs(["Resumo", "Fora do SLA"])
 
-    # --- Aba 1: Resumo (gráfico % dentro/fora) ---
+    # --- Aba 1: Resumo ---
     with tab_resumo:
         dfm = df_monthly_all[df_monthly_all["projeto"] == projeto].copy()
         if dfm.empty:
@@ -672,7 +667,7 @@ def render_sla_module(df_monthly_all: pd.DataFrame, df_issues: pd.DataFrame,
             fig.update_xaxes(categoryorder="array", categoryarray=show["mes_str"].tolist())
             show_plot(fig, "sla", projeto, ano_global, mes_global)
 
-    # --- Aba 2: Fora do SLA (detalhado) ---
+    # --- Aba 2: Fora do SLA ---
     with tab_fora:
         render_sla_fora_detalhes(df_issues, projeto, ano_global, mes_global)
 # ================== /NOVO módulo ==================
@@ -805,8 +800,6 @@ def render_onboarding(dfp: pd.DataFrame, ano_global: str, mes_global: str):
 
     dfp = ensure_assunto_nome(dfp.copy(), "INT")
     df_onb = aplicar_filtro_global(dfp.copy(), "mes_created", ano_global, mes_global)
-    # ======================
-
 
     total_clientes_novos = int((df_onb["assunto_nome"] == ASSUNTO_CLIENTE_NOVO).sum())
     df_erros = df_onb[df_onb["assunto_nome"].isin(ASSUNTOS_ERROS)].copy()
@@ -821,10 +814,7 @@ def render_onboarding(dfp: pd.DataFrame, ano_global: str, mes_global: str):
     c3.metric("Tickets com pendências", tickets_pendencias)
     c4.metric("Possíveis clientes", possiveis_clientes)
 
-    # ======================
-    # NOVOS GRÁFICOS — Onboarding (ordem: Cliente novo, Tipo de Integração)
-    # ======================
-    # 1) Tickets – Cliente novo (mensal com variação % e labels alinhados no topo)
+    # 1) Tickets – Cliente novo (mensal com variação %)
     df_cli_novo = df_onb[df_onb["assunto_nome"].astype(str).str.contains("cliente novo", case=False, na=False)].copy()
     if not df_cli_novo.empty:
         serie = (
@@ -837,30 +827,21 @@ def render_onboarding(dfp: pd.DataFrame, ano_global: str, mes_global: str):
         if not serie.empty:
             idx = pd.date_range(serie["created"].min(), serie["created"].max(), freq="MS")
             serie = (
-                serie.set_index("created")
-                     .reindex(idx)
-                     .fillna(0.0)
-                     .rename_axis("created")
-                     .reset_index()
+                serie.set_index("created").reindex(idx).fillna(0.0).rename_axis("created").reset_index()
             )
             serie["qtd"] = serie["qtd"].astype(int)
             serie["pct"] = serie["qtd"].pct_change() * 100.0
-            # substitui infinitos por NaN para evitar Overflow no anotador
-            serie["pct"].replace([float("inf"), float("-inf")], float("nan"), inplace=True)
+
             def _ann(v):
                 import math
                 try:
-                    # None/NaN/Inf → sem label
                     if v is None:
                         return ""
                     if isinstance(v, float) and (math.isnan(v) or math.isinf(v)):
                         return ""
-                    # converte para inteiro com proteção
                     v2 = int(round(v))
-                    if v2 > 0:
-                        return f"▲ {v2}%"
-                    if v2 < 0:
-                        return f"▼ {abs(v2)}%"
+                    if v2 > 0:  return f"▲ {v2}%"
+                    if v2 < 0:  return f"▼ {abs(v2)}%"
                     return "0%"
                 except Exception:
                     return ""
@@ -869,25 +850,17 @@ def render_onboarding(dfp: pd.DataFrame, ano_global: str, mes_global: str):
 
             fig_cli = px.bar(serie, x="mes_str", y="qtd", text="qtd", title="Tickets – Cliente novo", height=420)
             fig_cli.update_traces(textposition="outside", cliponaxis=False)
-            # alinhar % no topo do gráfico (fixo, acima do plot)
             fig_cli.update_layout(margin=dict(l=10, r=10, t=60, b=10))
             for _, r in serie.iterrows():
                 txt = r.get("annot") or ""
                 if not txt:
                     continue
                 color = "blue" if (r.get("pct") or 0) >= 0 else "red"
-                fig_cli.add_annotation(
-                    x=r["mes_str"],
-                    y=1.02,
-                    xref="x",
-                    yref="paper",
-                    text=txt,
-                    showarrow=False,
-                    font=dict(size=12, color=color),
-                    yanchor="bottom"
-                )
+                fig_cli.add_annotation(x=r["mes_str"], y=1.02, xref="x", yref="paper",
+                                       text=txt, showarrow=False, font=dict(size=12, color=color),
+                                       yanchor="bottom")
 
-    # 2) Tipo de Integração (horizontal) — números visíveis na direita
+    # 2) Tipo de Integração
     def _tipo_from_assunto(s: str) -> str:
         s = (s or "").strip().lower()
         if "cliente novo" in s: return "Cliente novo"
@@ -905,7 +878,6 @@ def render_onboarding(dfp: pd.DataFrame, ano_global: str, mes_global: str):
 
     fig_tipo = px.bar(tipo_counts, x="Qtd", y="tipo", orientation="h", text="Qtd", title="Tipo de Integração", height=420)
     fig_tipo.update_traces(textposition="outside", cliponaxis=False)
-    # margem direita e padding no eixo X para não cortar o número
     fig_tipo.update_layout(margin=dict(l=10, r=90, t=45, b=10))
     try:
         _max_q = float(tipo_counts["Qtd"].max())
@@ -913,43 +885,42 @@ def render_onboarding(dfp: pd.DataFrame, ano_global: str, mes_global: str):
     except Exception:
         pass
 
-    # Layout vertical conforme solicitado
     if "fig_cli" in locals():
         show_plot(fig_cli, "onb_cli_novo", "INT", ano_global, mes_global)
     else:
         st.info("Sem dados para 'Cliente novo' com os filtros atuais.")
     show_plot(fig_tipo, "onb_tipo_int", "INT", ano_global, mes_global)
-    # ======================
 
-    # gráfico horizontal por erros
+    # erros Onboarding
+    ASSUNTOS_ERROS = [
+        "Erro durante Onboarding - Frete",
+        "Erro durante Onboarding - Pedido",
+        "Erro durante Onboarding - Rastreio",
+        "Erro durante Onboarding - Teste",
+    ]
+    df_erros = df_onb[df_onb["assunto_nome"].isin(ASSUNTOS_ERROS)].copy()
     if not df_erros.empty:
-        cont_erros = (df_erros["assunto_nome"].value_counts()
-                      .reindex(ASSUNTOS_ERROS, fill_value=0).reset_index())
+        cont_erros = df_erros["assunto_nome"].value_counts().reindex(ASSUNTOS_ERROS, fill_value=0).reset_index()
         cont_erros.columns = ["Categoria","Qtd"]
-
         fig_onb = px.bar(cont_erros, x="Qtd", y="Categoria", orientation="h",
                          text="Qtd", title="Erros Onboarding", height=420)
-        fig_onb.update_traces(texttemplate="%{text:.0f}", textposition="outside",
-                              textfont_size=16, cliponaxis=False)
+        fig_onb.update_traces(texttemplate="%{text:.0f}", textposition="outside", textfont_size=16, cliponaxis=False)
         max_q = int(cont_erros["Qtd"].max()) if not cont_erros.empty else 0
         if max_q > 0:
             fig_onb.update_xaxes(range=[0, max_q*1.25])
         fig_onb.update_layout(margin=dict(t=50, r=20, b=30, l=10), bargap=0.25)
         show_plot(fig_onb, "onboarding", "INT", ano_global, mes_global)
 
-    # simulação de dinheiro perdido
+    # simulação
     st.markdown("---")
     st.subheader("💸 Dinheiro perdido (simulação)")
     c_left,c_right = st.columns([1,1])
     with c_left:
         st.number_input("Clientes novos (simulação)", value=possiveis_clientes, disabled=True, key="sim_clientes_onb")
     with c_right:
-        receita_cliente = st.slider("Cenário Receita por Cliente (R$)",
-                                    min_value=0, max_value=100000, step=500, value=20000,
-                                    key="sim_receita_onb")
+        receita_cliente = st.slider("Cenário Receita por Cliente (R$)", min_value=0, max_value=100000, step=500, value=20000, key="sim_receita_onb")
     dinheiro_perdido = float(possiveis_clientes) * float(receita_cliente)
-    st.markdown(f"### **R$ {dinheiro_perdido:,.2f}**",
-                help="Cálculo: Clientes novos (simulação) × Cenário Receita por Cliente")
+    st.markdown(f"### **R$ {dinheiro_perdido:,.2f}**", help="Cálculo: Clientes novos (simulação) × Cenário Receita por Cliente")
 
 
 # ---- Rotinas Manuais (TDS) — 100% por Jira
@@ -991,7 +962,7 @@ def render_rotinas_manuais(dfp: pd.DataFrame, ano_global: str, mes_global: str):
         for a in areas:
             c = _canon(a)
             if ("tech" in c and ("support" in c or "suporte" in c)) or \
-               ("suporte" in c and ("tecnico" in c ou "ti" in c)) or \
+               ("suporte" in c and ("tecnico" in c or "ti" in c)) or \
                c.startswith("tech support") or c.startswith("it suporte"):
                 tech.append(a)
         if not tech:
@@ -1019,22 +990,13 @@ def render_rotinas_manuais(dfp: pd.DataFrame, ano_global: str, mes_global: str):
 
     # Agrupamento de assuntos para o gráfico "Manual | Assunto"
     SUBJECT_GROUPS = {
-        # IE / Inscrição Estadual
         "volumetria - ie / qliksense": "Inscrição Estadual",
         "erro no processamento - inscricao estadual": "Inscrição Estadual",
-
-        # CTE
         "erro no processamento - cte": "CTE",
         "volumetria - tabela erro": "CTE",
-
-        # Divergência
         "volumetria - tabela divergencia": "Divergência",
-
-        # Cotação
         "volumetria - cotação/grafana": "Cotação",
-        "volumetria - cotacao/grafana": "Cotação",  # segurança para variações
-
-        # Outros
+        "volumetria - cotacao/grafana": "Cotação",
         "volumetria - painel sem registro": "Outros",
     }
     # -----------------------------------------------------------------
@@ -1047,7 +1009,7 @@ def render_rotinas_manuais(dfp: pd.DataFrame, ano_global: str, mes_global: str):
 
     # 1) Base, assunto consolidado e área
     df = dfp.copy()
-    df = ensure_assunto_nome(df, "TDS")  # sua helper preenche 'assunto_nome'
+    df = ensure_assunto_nome(df, "TDS")
     df["area_nome"] = df["area"].apply(lambda x: safe_get_value(x, "value"))
 
     # 2) Quantidade de encomendas > 0
@@ -1098,12 +1060,12 @@ def render_rotinas_manuais(dfp: pd.DataFrame, ano_global: str, mes_global: str):
 
     # 6) Partições base
     base_ops = df[df["area_nome"].isin(OPS_AREAS)].copy()   # TDS
-    base_ts  = df[df["area_nome"].isin(tech_areas)].copy()  # Manuais (por assunto)
+    base_ts  = df[df["area_nome"].isin(tech_areas)].copy()  # Manuais
     if base_ops.empty and base_ts.empty:
         st.info("Sem tickets nas áreas Ops/Tech Support para os filtros atuais.")
         return
 
-    # Copias p/ export
+    # Copias para export
     full_ops = base_ops.copy()
     full_ts  = base_ts.copy()
 
@@ -1126,13 +1088,11 @@ def render_rotinas_manuais(dfp: pd.DataFrame, ano_global: str, mes_global: str):
         if not base_ops.empty else pd.Series(dtype=float, name="Encomendas TDS")
     )
 
-    # Manuais (TS + extras) filtrados pelos assuntos de interesse
+    # Manuais (TS + extras) filtrados pelos assuntos
     if not base_ts.empty and assuntos_canon:
         ts_mask_manual = base_ts["assunto_canon"].isin(assuntos_canon)
         ts_manuais = base_ts[ts_mask_manual].copy()
-        monthly_manual = (
-            ts_manuais.groupby("mes_dt")["qtd_encomendas"].sum().rename("Encomendas manuais")
-        )
+        monthly_manual = ts_manuais.groupby("mes_dt")["qtd_encomendas"].sum().rename("Encomendas manuais")
     else:
         ts_manuais = base_ts.iloc[0:0].copy()
         monthly_manual = pd.Series(dtype=float, name="Encomendas manuais")
@@ -1171,45 +1131,32 @@ def render_rotinas_manuais(dfp: pd.DataFrame, ano_global: str, mes_global: str):
     fig.update_xaxes(categoryorder="array", categoryarray=monthly["mes_str"].tolist())
     show_plot(fig, "rotinas_manual_ts_assunto_vs_tds_ops_extras", "TDS", ano_global, mes_global)
 
-    # 10) Donut (partição do total: Manuais vs TDS — como no BI)
+    # 10) Donut
     total_tds    = float(s_tds.sum())
     total_manual = float(s_manual.sum())
 
-    df_donut = pd.DataFrame(
-        {"tipo": ["Encomendas manuais", "Encomendas TDS"],
-         "qtd":  [total_manual, total_tds]}
-    )
-    fig_donut = px.pie(
-        df_donut, values="qtd", names="tipo", hole=0.6,
-        title="Participação — Manuais vs TDS"
-    )
+    df_donut = pd.DataFrame({"tipo": ["Encomendas manuais", "Encomendas TDS"], "qtd":  [total_manual, total_tds]})
+    fig_donut = px.pie(df_donut, values="qtd", names="tipo", hole=0.6, title="Participação — Manuais vs TDS")
     fig_donut.update_traces(textposition="inside", textinfo="percent+label")
     show_plot(fig_donut, "rotinas_manual_ts_assunto_donut_vs_tds_ops_extras", "TDS", ano_global, mes_global)
 
-    # 11) Manual | Assunto (barras horizontais)
+    # 11) Manual | Assunto
     if not ts_manuais.empty:
-        # aplica mapeamento de assuntos para grupos
         def _map_subject(canon_name: str) -> str:
             return SUBJECT_GROUPS.get(canon_name, SUBJECT_GROUPS.get("volumetria - painel sem registro", "Outros"))
-
         ts_manuais["assunto_grupo"] = ts_manuais["assunto_canon"].apply(_map_subject)
         df_ass = (
             ts_manuais.groupby("assunto_grupo")["qtd_encomendas"]
-            .sum()
-            .reset_index()
-            .sort_values("qtd_encomendas", ascending=True)
+            .sum().reset_index().sort_values("qtd_encomendas", ascending=True)
         )
-
-        fig_ass = px.bar(
-            df_ass, x="qtd_encomendas", y="assunto_grupo",
-            orientation="h", text="qtd_encomendas",
-            title="Manual: Assuntos relacionados", height=380
-        )
+        fig_ass = px.bar(df_ass, x="qtd_encomendas", y="assunto_grupo",
+                         orientation="h", text="qtd_encomendas",
+                         title="Manual: Assuntos relacionados", height=380)
         fig_ass.update_traces(textposition="outside")
         fig_ass.update_layout(yaxis_title="", xaxis_title="Qtd")
         show_plot(fig_ass, "rotinas_manual_por_assunto", "TDS", ano_global, mes_global)
 
-    # 12) Export/diagnóstico
+    # 12) Export
     with st.expander("📤 Exportar / diagnóstico", expanded=False):
         def _prep_export(dd: pd.DataFrame, origem: str, somente_assuntos: bool = False) -> pd.DataFrame:
             if dd.empty:
@@ -1332,7 +1279,6 @@ for projeto, tab in zip(PROJETOS, tabs):
         if visao == "Criados vs Resolvidos":
             render_criados_resolvidos(dfp, projeto, ano_global, mes_global)
         elif visao == "SLA":
-            # <<< USO DO NOVO SUBMENU >>>
             render_sla_module(_df_monthly_all, dfp, projeto, ano_global, mes_global)
         elif visao == "Assunto Relacionado":
             render_assunto(dfp, projeto, ano_global, mes_global)
@@ -1359,7 +1305,6 @@ for projeto, tab in zip(PROJETOS, tabs):
         else:
             # Geral
             render_criados_resolvidos(dfp, projeto, ano_global, mes_global)
-            # <<< SUBSTITUÍDO PARA USAR O SUBMENU >>>
             render_sla_module(_df_monthly_all, dfp, projeto, ano_global, mes_global)
             render_assunto(dfp, projeto, ano_global, mes_global)
             if projeto != "INTEL":
