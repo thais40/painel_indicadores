@@ -446,7 +446,6 @@ def render_sla_table(df_monthly_all: pd.DataFrame, projeto: str, ano_global: str
 
 
 # ================== SLA – Sub-seção “Chamados fora do SLA” ==================
-
 def render_sla_fora_detalhes(
     dfp,
     projeto: str,
@@ -569,10 +568,15 @@ def render_sla_fora_detalhes(
             m = None
             if mes_global and mes_global != "Todos":
                 # aceita formatos "2025-08" ou "Aug/2025"
-                import re
-                mm = re.findall(r"\d{1,2}", str(mes_global))
-                if mm:
-                    m = int(mm[0])
+                mg = str(mes_global)
+                if mg.isdigit():
+                    m = int(mg)
+                else:
+                    # tenta extrair número no começo
+                    import re
+                    mm = re.findall(r"\d{1,2}", mg)
+                    if mm:
+                        m = int(mm[0])
             if y:
                 base = base[base["mes_dt"].dt.year == y]
             if m:
@@ -627,6 +631,51 @@ def render_sla_fora_detalhes(
     )
 # ================== /SLA – Sub-seção “Chamados fora do SLA” ==================
 
+# ================== NOVO: SLA como SUBMENU (Resumo | Fora do SLA) ==================
+def render_sla_module(df_monthly_all: pd.DataFrame, df_issues: pd.DataFrame,
+                      projeto: str, ano_global: str, mes_global: str):
+    """SLA com submenu em abas: Resumo | Fora do SLA."""
+    st.markdown("### ⏱️ SLA")
+    tab_resumo, tab_fora = st.tabs(["Resumo", "Fora do SLA"])
+
+    # --- Aba 1: Resumo (gráfico % dentro/fora) ---
+    with tab_resumo:
+        dfm = df_monthly_all[df_monthly_all["projeto"] == projeto].copy()
+        if dfm.empty:
+            st.info("Sem dados de SLA.")
+        else:
+            if ano_global != "Todos":
+                dfm = dfm[dfm["ano"] == int(ano_global)]
+            if mes_global != "Todos":
+                dfm = dfm[dfm["mes"] == int(mes_global)]
+            if ano_global != "Todos" and mes_global != "Todos":
+                alvo = pd.Period(f"{int(ano_global)}-{int(mes_global):02d}", freq="M")
+                dfm = dfm[dfm["period"] == alvo]
+
+            okr = dfm["pct_dentro"].mean() if not dfm.empty else 0.0
+            meta = META_SLA.get(projeto, 98.0)
+            titulo = f"OKR: {okr:.2f}% — Meta: {meta:.2f}%".replace(".", ",")
+
+            show = dfm[["mes_str", "period_ts", "pct_dentro", "pct_fora"]].sort_values("period_ts")
+            show = show.rename(columns={"pct_dentro": "% Dentro SLA", "pct_fora": "% Fora SLA"})
+            fig = px.bar(
+                show,
+                x="mes_str",
+                y=["% Dentro SLA", "% Fora SLA"],
+                barmode="group",
+                title=titulo,
+                color_discrete_map={"% Dentro SLA": "green", "% Fora SLA": "red"},
+                height=440,
+            )
+            fig.update_traces(texttemplate="%{y:.2f}%", textposition="outside", cliponaxis=False)
+            fig.update_yaxes(ticksuffix="%")
+            fig.update_xaxes(categoryorder="array", categoryarray=show["mes_str"].tolist())
+            show_plot(fig, "sla", projeto, ano_global, mes_global)
+
+    # --- Aba 2: Fora do SLA (detalhado) ---
+    with tab_fora:
+        render_sla_fora_detalhes(df_issues, projeto, ano_global, mes_global)
+# ================== /NOVO módulo ==================
 
 def render_assunto(dfp: pd.DataFrame, projeto: str, ano_global: str, mes_global: str):
     st.markdown("### 🧾 Assunto Relacionado")
@@ -895,10 +944,10 @@ def render_onboarding(dfp: pd.DataFrame, ano_global: str, mes_global: str):
     with c_left:
         st.number_input("Clientes novos (simulação)", value=possiveis_clientes, disabled=True, key="sim_clientes_onb")
     with c_right:
-        st.slider("Cenário Receita por Cliente (R$)",
-                  min_value=0, max_value=100000, step=500, value=20000,
-                  key="sim_receita_onb")
-    dinheiro_perdido = float(possiveis_clientes) * float(st.session_state.get("sim_receita_onb", 20000))
+        receita_cliente = st.slider("Cenário Receita por Cliente (R$)",
+                                    min_value=0, max_value=100000, step=500, value=20000,
+                                    key="sim_receita_onb")
+    dinheiro_perdido = float(possiveis_clientes) * float(receita_cliente)
     st.markdown(f"### **R$ {dinheiro_perdido:,.2f}**",
                 help="Cálculo: Clientes novos (simulação) × Cenário Receita por Cliente")
 
@@ -942,7 +991,7 @@ def render_rotinas_manuais(dfp: pd.DataFrame, ano_global: str, mes_global: str):
         for a in areas:
             c = _canon(a)
             if ("tech" in c and ("support" in c or "suporte" in c)) or \
-               ("suporte" in c and ("tecnico" in c or "ti" in c)) or \
+               ("suporte" in c and ("tecnico" in c ou "ti" in c)) or \
                c.startswith("tech support") or c.startswith("it suporte"):
                 tech.append(a)
         if not tech:
@@ -1283,9 +1332,8 @@ for projeto, tab in zip(PROJETOS, tabs):
         if visao == "Criados vs Resolvidos":
             render_criados_resolvidos(dfp, projeto, ano_global, mes_global)
         elif visao == "SLA":
-            render_sla_table(_df_monthly_all, projeto, ano_global, mes_global)
-            # ✅ NOVO: Sub-seção dinâmica com tickets fora do SLA
-            render_sla_fora_detalhes(dfp, projeto, ano_global, mes_global)
+            # <<< USO DO NOVO SUBMENU >>>
+            render_sla_module(_df_monthly_all, dfp, projeto, ano_global, mes_global)
         elif visao == "Assunto Relacionado":
             render_assunto(dfp, projeto, ano_global, mes_global)
         elif visao == "Área Solicitante":
@@ -1311,9 +1359,8 @@ for projeto, tab in zip(PROJETOS, tabs):
         else:
             # Geral
             render_criados_resolvidos(dfp, projeto, ano_global, mes_global)
-            render_sla_table(_df_monthly_all, projeto, ano_global, mes_global)
-            # ✅ NOVO também na visão Geral:
-            render_sla_fora_detalhes(dfp, projeto, ano_global, mes_global)
+            # <<< SUBSTITUÍDO PARA USAR O SUBMENU >>>
+            render_sla_module(_df_monthly_all, dfp, projeto, ano_global, mes_global)
             render_assunto(dfp, projeto, ano_global, mes_global)
             if projeto != "INTEL":
                 render_area(dfp, ano_global, mes_global)
