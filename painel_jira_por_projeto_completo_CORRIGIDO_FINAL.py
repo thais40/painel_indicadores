@@ -2,13 +2,12 @@
 """
 Painel de Indicadores — Jira (Nuvemshop)
 Arquivo COMPLETO sem dependência de planilhas do BI.
-Classificação de Rotinas Manuais (TDS) 100% por campos do Jira:
-  - Área Solicitante (customfield_13719) ∈ {Ops - Conferência, Ops - Cubagem, Ops - Logística, Ops - Coletas, Ops - Expedição, Ops - Divergências}
-  - Quantidade de encomendas (customfield_13666) > 0
-  - Data base: mês de resolved
-  - Manual x Encomendas TDS por "Assunto Relacionado" (customfield_13747; fallback 13712).
 
-Mantém cache de dados (st.cache_data) e botão de Atualizar — não refaz fetch a cada filtro.
+Inclui:
+- Submenu na visão "SLA": (1) Resumo (gráfico) e (2) Chamados fora do SLA (tabela + CSV),
+  que reage aos filtros globais. A detecção de "dentro/fora do SLA" usa, quando possível,
+  o mesmo critério do gráfico (sla_raw -> dentro_sla_from_raw).
+
 Necessário EMAIL e TOKEN em st.secrets.
 """
 
@@ -195,7 +194,6 @@ def aplicar_filtro_global(df_in: pd.DataFrame, col_dt: str, ano: str, mes: str) 
 
 
 # 👉 Garante 'assunto_nome' antes do uso
-
 def ensure_assunto_nome(df_proj: pd.DataFrame, projeto: str) -> pd.DataFrame:
     if df_proj is None or df_proj.empty:
         return df_proj
@@ -334,21 +332,11 @@ def build_monthly_tables(df_all: pd.DataFrame) -> pd.DataFrame:
 def render_criados_resolvidos(dfp: pd.DataFrame, projeto: str, ano_global: str, mes_global: str):
     """
     Tickets Criados vs Resolvidos — TODAS as áreas (para o projeto atual).
-    - Criados: primeiro 'created' por key (mês de criação)
-    - Resolvidos: último 'resolved' por key (mês de resolução final)
-    - Eixo mensal contínuo (não pula meses).
     """
-    import pandas as pd
-    import plotly.express as px
-    import streamlit as st
-
     df = dfp.copy()
-
-    # datas robustas
     created  = pd.to_datetime(df.get("created"),  errors="coerce")
     resolved = pd.to_datetime(df.get("resolved"), errors="coerce")
 
-    # --- criados por mês (primeira criação por key) ---
     cdf = (
         df[created.notna()]
         .assign(created=created[created.notna()])
@@ -359,7 +347,6 @@ def render_criados_resolvidos(dfp: pd.DataFrame, projeto: str, ano_global: str, 
     if not cdf.empty:
         cdf["mes_dt"] = cdf["created"].dt.to_period("M").dt.to_timestamp()
 
-    # --- resolvidos por mês (última resolução por key) ---
     rdf = (
         df[resolved.notna()]
         .assign(resolved=resolved[resolved.notna()])
@@ -374,7 +361,6 @@ def render_criados_resolvidos(dfp: pd.DataFrame, projeto: str, ano_global: str, 
         st.info("Sem dados de criação/resolução para montar a série.")
         return
 
-    # eixo mensal contínuo
     mins = [x["mes_dt"].min() for x in (cdf, rdf) if not x.empty]
     maxs = [x["mes_dt"].max() for x in (cdf, rdf) if not x.empty]
     idx = pd.date_range(min(mins), max(maxs), freq="MS")
@@ -386,8 +372,6 @@ def render_criados_resolvidos(dfp: pd.DataFrame, projeto: str, ano_global: str, 
     s_resolvidos = s_resolvidos.reindex(idx, fill_value=0).rename("Resolvidos")
 
     monthly = pd.concat([s_criados, s_resolvidos], axis=1).reset_index().rename(columns={"index": "mes_dt"})
-
-    # aplica seus filtros globais (ano/mês)
     monthly = aplicar_filtro_global(monthly, "mes_dt", ano_global, mes_global)
     if monthly.empty:
         st.info("Sem dados para os filtros selecionados.")
@@ -406,12 +390,10 @@ def render_criados_resolvidos(dfp: pd.DataFrame, projeto: str, ano_global: str, 
     )
     fig.update_traces(textangle=0, cliponaxis=False)
     fig.update_xaxes(categoryorder="array", categoryarray=monthly["mes_str"].tolist())
-
-    # usa o mesmo helper de sempre para exibir/salvar
     show_plot(fig, f"{projeto.lower().replace(' ', '_')}_criados_resolvidos_all", projeto, ano_global, mes_global)
 
+
 def render_sla_table(df_monthly_all: pd.DataFrame, projeto: str, ano_global: str, mes_global: str):
-    st.markdown("### ⏱️ SLA")
     dfm = df_monthly_all[df_monthly_all["projeto"] == projeto].copy()
     if dfm.empty:
         st.info("Sem dados de SLA.")
@@ -447,26 +429,17 @@ def render_sla_table(df_monthly_all: pd.DataFrame, projeto: str, ano_global: str
 
 # ================== SLA – Sub-seção “Chamados fora do SLA” ==================
 def render_sla_fora_detalhes(
-    dfp,
+    dfp: pd.DataFrame,
     projeto: str,
     ano_global: str,
     mes_global: str,
-    sla_hours: int | None = None,  # se None, tenta descobrir; senão usa este valor (ex.: 48)
+    sla_hours: int | None = None,
 ):
     """
-    Mostra uma sub-seção com os tickets fora do SLA, reagindo aos filtros globais.
-    Estratégia:
-      1) Se existir coluna booleana indicando fora/dentro do SLA (fora_sla, fora_sla_flag, outside_sla,
-         dentro_sla), utiliza.
-      2) Caso contrário, calcula 'tempo_resolucao_horas' = resolved - created e compara com sla_hours
-         (padrão 48h, pode ser sobrescrito por projeto).
-
-    Colunas exibidas (aproveita o que existir no dataset):
-      key, created, resolved, summary, area_nome/area, assunto_nome/assunto, tempo_resolucao_horas
+    Sub-seção com tickets FORA do SLA.
+    Critério principal: usa sla_raw -> dentro_sla_from_raw (mesmo do gráfico).
+    Apenas tickets com 'resolved' (para bater com o gráfico mensal).
     """
-
-    import pandas as pd
-    import streamlit as st
     import numpy as np
 
     if dfp is None or len(dfp) == 0:
@@ -474,23 +447,16 @@ def render_sla_fora_detalhes(
 
     df = dfp.copy()
 
-    # --------- helpers locais (seguros) ----------
-    def _to_dt(s):
-        return pd.to_datetime(s, errors="coerce", utc=False)
+    # datas normalizadas
+    df["created"] = pd.to_datetime(df.get("created"), errors="coerce")
+    df["resolved"] = pd.to_datetime(df.get("resolved"), errors="coerce")
 
-    def _first_existing_col(df, candidates):
-        for c in candidates:
-            if c in df.columns:
-                return c
-        return None
+    # apenas resolvidos (mesmo universo do gráfico)
+    df = df[df["resolved"].notna()].copy()
 
-    def _lower(s):
-        return (str(s) if s is not None else "").strip().lower()
-
-    # área e assunto com nomes amigáveis, se existirem
+    # nomes amigáveis
     if "area_nome" not in df.columns:
         if "area" in df.columns:
-            # tenta extrair "value" se a área for dict/obj
             def _get_area(x):
                 try:
                     if isinstance(x, dict) and "value" in x:
@@ -500,122 +466,52 @@ def render_sla_fora_detalhes(
                 return x
             df["area_nome"] = df["area"].apply(_get_area)
         else:
-            df["area_nome"] = np.nan
+            df["area_nome"] = None
 
     if "assunto_nome" not in df.columns:
-        # se sua base já tiver uma função ensure_assunto_nome, você pode chamá-la aqui:
-        # try: df = ensure_assunto_nome(df, projeto)
-        # except: pass
-        # fallback:
-        df["assunto_nome"] = df[_first_existing_col(df, ["assunto", "summary", "subject"])].astype(str) if _first_existing_col(df, ["assunto", "summary", "subject"]) else np.nan
+        try:
+            df = ensure_assunto_nome(df, projeto)
+        except Exception:
+            base_col = "assunto" if "assunto" in df.columns else ("summary" if "summary" in df.columns else None)
+            if base_col:
+                df["assunto_nome"] = df[base_col].astype(str)
+            else:
+                df["assunto_nome"] = None
 
-    # datas
-    df["created"] = _to_dt(df.get("created"))
-    df["resolved"] = _to_dt(df.get("resolved"))
-
-    # flag fora do SLA (usa colunas prontas se existirem)
-    fora_col = None
-    for cand in ["fora_sla", "fora_sla_flag", "outside_sla"]:
-        if cand in df.columns:
-            fora_col = cand
-            break
-    dentro_col = "dentro_sla" if "dentro_sla" in df.columns else None
-
-    if fora_col:
-        df["_fora_sla"] = df[fora_col].astype(bool)
-    elif dentro_col:
-        df["_fora_sla"] = (~df[dentro_col].astype(bool))
+    # 1) Preferência: sla_raw
+    if "sla_raw" in df.columns and not df["sla_raw"].isna().all():
+        dentro = df["sla_raw"].apply(dentro_sla_from_raw).fillna(False).astype(bool)
+        df["_fora_sla"] = ~dentro
+        df["tempo_resolucao_horas"] = (df["resolved"] - df["created"]).dt.total_seconds() / 3600.0
     else:
-        # calcular pela diferença de datas com limite de SLA
-        # tenta descobrir um limite pelas colunas da base, senão usa o parâmetro, senão 48h
-        limite_horas = None
-        for cand in ["sla_horas", "meta_sla_horas", "target_sla_hours", "sla_hours"]:
-            if cand in df.columns:
-                try:
-                    # usa moda/mediana dos valores positivos, se existirem
-                    s = pd.to_numeric(df[cand], errors="coerce")
-                    s = s[s > 0]
-                    if len(s) > 0:
-                        limite_horas = int(s.median())
-                        break
-                except Exception:
-                    pass
-        if limite_horas is None:
-            limite_horas = sla_hours if sla_hours is not None else 48
+        # 2) Fallback por horas de resolução
+        limite_horas = sla_hours if sla_hours is not None else 48
+        df["tempo_resolucao_horas"] = (df["resolved"] - df["created"]).dt.total_seconds() / 3600.0
+        df["_fora_sla"] = df["tempo_resolucao_horas"] > float(limite_horas)
 
-        df["tempo_resolucao_horas"] = (
-            (df["resolved"] - df["created"]).dt.total_seconds() / 3600.0
-        )
+    # mês base para filtro (resolved)
+    df["mes_dt"] = df["resolved"]
+    df = aplicar_filtro_global(df, "mes_dt", ano_global, mes_global)
 
-        df["_fora_sla"] = False
-        m_calc = df["tempo_resolucao_horas"].notna()
-        df.loc[m_calc, "_fora_sla"] = df.loc[m_calc, "tempo_resolucao_horas"] > float(limite_horas)
-
-    # Considera resolvidos; se não houver resolved, usa created para mês
-    base = df.copy()
-    base["mes_dt"] = np.where(
-        base["resolved"].notna(), base["resolved"], base["created"]
-    )
-    base["mes_dt"] = pd.to_datetime(base["mes_dt"], errors="coerce")
-
-    # Aplica seu filtro global, se existir no arquivo
-    try:
-        base = aplicar_filtro_global(base, "mes_dt", ano_global, mes_global)  # type: ignore
-    except Exception:
-        # fallback simples pelo ano/mês textual
-        if (ano_global and ano_global != "Todos") or (mes_global and mes_global != "Todos"):
-            y = None if not ano_global or ano_global == "Todos" else int(ano_global)
-            m = None
-            if mes_global and mes_global != "Todos":
-                mg = str(mes_global)
-                if mg.isdigit():
-                    m = int(mg)
-                else:
-                    import re
-                    mm = re.findall(r"\d{1,2}", mg)
-                    if mm:
-                        m = int(mm[0])
-            if y:
-                base = base[base["mes_dt"].dt.year == y]
-            if m:
-                base = base[base["mes_dt"].dt.month == m]
-
-    base_fora = base[base["_fora_sla"]].copy()
+    base_fora = df[df["_fora_sla"]].copy()
     if base_fora.empty:
         st.info("Nenhum chamado fora do SLA para os filtros atuais.")
         return
 
-    # colunas para mostrar – só usa as que existem
-    cols_disp = []
-    for grp in [
-        ["key", "created", "resolved", "summary", "area_nome", "assunto_nome", "tempo_resolucao_horas"],
-        ["key", "created", "resolved", "summary", "area_nome", "assunto_nome"],
-        ["key", "created", "resolved", "summary", "assunto_nome"],
-        ["key", "created", "resolved", "summary"],
-    ]:
-        ok = [c for c in grp if c in base_fora.columns]
-        if ok:
-            cols_disp = ok
-            break
+    cols_disp = [c for c in ["key", "created", "resolved", "summary", "area_nome", "assunto_nome", "tempo_resolucao_horas"] if c in base_fora.columns]
 
-    # ordena do mais fora (maior tempo) pro menor, quando tiver coluna de horas
+    # ordena por maior 'estouro'
     if "tempo_resolucao_horas" in base_fora.columns:
         base_fora = base_fora.sort_values("tempo_resolucao_horas", ascending=False)
-        base_fora["tempo_resolucao_horas"] = (
-            base_fora["tempo_resolucao_horas"].astype(float).round(1)
-        )
+        base_fora["tempo_resolucao_horas"] = base_fora["tempo_resolucao_horas"].astype(float).round(1)
 
     st.subheader("🔴 Chamados fora do SLA")
     c1, c2 = st.columns(2)
     c1.metric("Total fora do SLA (período filtrado)", int(base_fora["key"].nunique() if "key" in base_fora.columns else len(base_fora)))
-    if "tempo_resolucao_horas" in base_fora.columns:
+    if "tempo_resolucao_horas" in base_fora.columns and not base_fora["tempo_resolucao_horas"].isna().all():
         c2.metric("Mediana (horas) – fora SLA", float(base_fora["tempo_resolucao_horas"].median()))
 
-    st.dataframe(
-        base_fora[cols_disp],
-        use_container_width=True,
-        hide_index=True,
-    )
+    st.dataframe(base_fora[cols_disp], use_container_width=True, hide_index=True)
 
     csv = base_fora[cols_disp].to_csv(index=False).encode("utf-8-sig")
     st.download_button(
@@ -626,96 +522,21 @@ def render_sla_fora_detalhes(
     )
 # ================== /SLA – Sub-seção “Chamados fora do SLA” ==================
 
-# ================== NOVO: SLA como SUBMENU (Resumo | Fora do SLA) ==================
-def render_sla_module(df_monthly_all: pd.DataFrame, df_issues: pd.DataFrame,
-                      projeto: str, ano_global: str, mes_global: str):
-    """SLA com submenu em abas: Resumo | Fora do SLA."""
+
+def render_sla_menu(df_monthly_all: pd.DataFrame, dfp: pd.DataFrame, projeto: str, ano_global: str, mes_global: str):
     st.markdown("### ⏱️ SLA")
-    tab_resumo, tab_fora = st.tabs(["Resumo", "Fora do SLA"])
-
-    # --- Aba 1: Resumo ---
-    with tab_resumo:
-        dfm = df_monthly_all[df_monthly_all["projeto"] == projeto].copy()
-        if dfm.empty:
-            st.info("Sem dados de SLA.")
-        else:
-            if ano_global != "Todos":
-                dfm = dfm[dfm["ano"] == int(ano_global)]
-            if mes_global != "Todos":
-                dfm = dfm[dfm["mes"] == int(mes_global)]
-            if ano_global != "Todos" and mes_global != "Todos":
-                alvo = pd.Period(f"{int(ano_global)}-{int(mes_global):02d}", freq="M")
-                dfm = dfm[dfm["period"] == alvo]
-
-            okr = dfm["pct_dentro"].mean() if not dfm.empty else 0.0
-            meta = META_SLA.get(projeto, 98.0)
-            titulo = f"OKR: {okr:.2f}% — Meta: {meta:.2f}%".replace(".", ",")
-
-            show = dfm[["mes_str", "period_ts", "pct_dentro", "pct_fora"]].sort_values("period_ts")
-            show = show.rename(columns={"pct_dentro": "% Dentro SLA", "pct_fora": "% Fora SLA"})
-            fig = px.bar(
-                show,
-                x="mes_str",
-                y=["% Dentro SLA", "% Fora SLA"],
-                barmode="group",
-                title=titulo,
-                color_discrete_map={"% Dentro SLA": "green", "% Fora SLA": "red"},
-                height=440,
-            )
-            fig.update_traces(texttemplate="%{y:.2f}%", textposition="outside", cliponaxis=False)
-            fig.update_yaxes(ticksuffix="%")
-            fig.update_xaxes(categoryorder="array", categoryarray=show["mes_str"].tolist())
-            show_plot(fig, "sla", projeto, ano_global, mes_global)
-
-    # --- Aba 2: Fora do SLA ---
-    with tab_fora:
-        render_sla_fora_detalhes(df_issues, projeto, ano_global, mes_global)
-# ================== /NOVO módulo ==================
-
-def render_assunto(dfp: pd.DataFrame, projeto: str, ano_global: str, mes_global: str):
-    st.markdown("### 🧾 Assunto Relacionado")
-    df_ass = aplicar_filtro_global(dfp.copy(), "mes_created", ano_global, mes_global)
-    if df_ass.empty:
-        st.info("Sem dados para Assunto Relacionado nos filtros atuais.")
-        return
-    if CAMPOS_ASSUNTO[projeto] == "issuetype":
-        df_ass["assunto_nome"] = df_ass["issuetype"].apply(lambda x: safe_get_value(x, "name"))
+    escolha = st.radio("Visualizar:", ["Resumo", "Chamados fora do SLA"], horizontal=True, key=f"sla_menu_{projeto}")
+    if escolha == "Resumo":
+        render_sla_table(df_monthly_all, projeto, ano_global, mes_global)
     else:
-        df_ass["assunto_nome"] = df_ass["assunto"].apply(lambda x: safe_get_value(x, "value"))
-    assunto_count = df_ass["assunto_nome"].value_counts().reset_index()
-    assunto_count.columns = ["Assunto", "Qtd"]
-    st.dataframe(assunto_count, use_container_width=True, hide_index=True)
-
-
-def render_area(dfp: pd.DataFrame, ano_global: str, mes_global: str):
-    st.markdown("### 📦 Área Solicitante")
-    df_area = aplicar_filtro_global(dfp.copy(), "mes_created", ano_global, mes_global)
-    if df_area.empty:
-        st.info("Sem dados para Área Solicitante nos filtros atuais.")
-        return
-    df_area["area_nome"] = df_area["area"].apply(lambda x: safe_get_value(x, "value"))
-    area_count = df_area["area_nome"].value_counts().reset_index()
-    area_count.columns = ["Área", "Qtd"]
-    st.dataframe(area_count, use_container_width=True, hide_index=True)
-
-
-def render_encaminhamentos(dfp: pd.DataFrame, ano_global: str, mes_global: str):
-    st.markdown("### 🔄 Encaminhamentos")
-    df_enc = aplicar_filtro_global(dfp.copy(), "mes_created", ano_global, mes_global)
-    if df_enc.empty:
-        st.info("Sem dados para Encaminhamentos nos filtros atuais.")
-        return
-    col1, col2 = st.columns(2)
-    with col1:
-        count_prod = df_enc["status"].astype(str).str.contains("Produto", case=False, na=False).sum()
-        st.metric("Encaminhados Produto", int(count_prod))
-    with col2:
-        df_enc["n3_valor"] = df_enc["n3"].apply(lambda x: safe_get_value(x, "value", None))
-        st.metric("Encaminhados N3", int((df_enc["n3_valor"] == "Sim").sum()))
+        render_sla_fora_detalhes(dfp, projeto, ano_global, mes_global)
 
 
 # ================= Módulos específicos ====================
 # ---- APP NE (TDS)
+
+def normaliza_origem_wrapper(x):
+    return safe_get_value(x, "value")
 
 def render_app_ne(dfp: pd.DataFrame, ano_global: str, mes_global: str):
     st.markdown("### 📱 APP NE")
@@ -735,7 +556,7 @@ def render_app_ne(dfp: pd.DataFrame, ano_global: str, mes_global: str):
         st.info(f"Não há chamados para '{ASSUNTO_ALVO_APPNE}'.")
         return
 
-    df_app["origem_nome"] = df_app["origem"].apply(lambda x: safe_get_value(x, "value"))
+    df_app["origem_nome"] = df_app["origem"].apply(normaliza_origem_wrapper)
     df_app["origem_cat"]  = df_app["origem_nome"].apply(normaliza_origem)
 
     df_app["mes_dt"] = df_app["mes_created"].dt.to_period("M").dt.to_timestamp()
@@ -773,7 +594,7 @@ def render_app_ne(dfp: pd.DataFrame, ano_global: str, mes_global: str):
                           uniformtext_minsize=14, uniformtext_mode="show",
                           bargap=0.15, margin=dict(t=70, r=20, b=60, l=50))
     show_plot(fig_app, "app_ne", "TDS", ano_global, mes_global)
-  
+
 
 # ---- Onboarding (INT)
 
@@ -818,20 +639,14 @@ def render_onboarding(dfp: pd.DataFrame, ano_global: str, mes_global: str):
     df_cli_novo = df_onb[df_onb["assunto_nome"].astype(str).str.contains("cliente novo", case=False, na=False)].copy()
     if not df_cli_novo.empty:
         serie = (
-            df_cli_novo
-            .groupby(pd.Grouper(key="created", freq="MS"))
-            .size()
-            .rename("qtd")
-            .reset_index()
+            df_cli_novo.groupby(pd.Grouper(key="created", freq="MS")).size().rename("qtd").reset_index()
         )
         if not serie.empty:
             idx = pd.date_range(serie["created"].min(), serie["created"].max(), freq="MS")
-            serie = (
-                serie.set_index("created").reindex(idx).fillna(0.0).rename_axis("created").reset_index()
-            )
+            serie = (serie.set_index("created").reindex(idx).fillna(0.0).rename_axis("created").reset_index())
             serie["qtd"] = serie["qtd"].astype(int)
             serie["pct"] = serie["qtd"].pct_change() * 100.0
-
+            serie["pct"].replace([float("inf"), float("-inf")], float("nan"), inplace=True)
             def _ann(v):
                 import math
                 try:
@@ -840,8 +655,8 @@ def render_onboarding(dfp: pd.DataFrame, ano_global: str, mes_global: str):
                     if isinstance(v, float) and (math.isnan(v) or math.isinf(v)):
                         return ""
                     v2 = int(round(v))
-                    if v2 > 0:  return f"▲ {v2}%"
-                    if v2 < 0:  return f"▼ {abs(v2)}%"
+                    if v2 > 0: return f"▲ {v2}%"
+                    if v2 < 0: return f"▼ {abs(v2)}%"
                     return "0%"
                 except Exception:
                     return ""
@@ -856,11 +671,10 @@ def render_onboarding(dfp: pd.DataFrame, ano_global: str, mes_global: str):
                 if not txt:
                     continue
                 color = "blue" if (r.get("pct") or 0) >= 0 else "red"
-                fig_cli.add_annotation(x=r["mes_str"], y=1.02, xref="x", yref="paper",
-                                       text=txt, showarrow=False, font=dict(size=12, color=color),
-                                       yanchor="bottom")
+                fig_cli.add_annotation(x=r["mes_str"], y=1.02, xref="x", yref="paper", text=txt,
+                                       showarrow=False, font=dict(size=12, color=color), yanchor="bottom")
 
-    # 2) Tipo de Integração
+    # 2) Tipo de Integração (horizontal)
     def _tipo_from_assunto(s: str) -> str:
         s = (s or "").strip().lower()
         if "cliente novo" in s: return "Cliente novo"
@@ -891,54 +705,41 @@ def render_onboarding(dfp: pd.DataFrame, ano_global: str, mes_global: str):
         st.info("Sem dados para 'Cliente novo' com os filtros atuais.")
     show_plot(fig_tipo, "onb_tipo_int", "INT", ano_global, mes_global)
 
-    # erros Onboarding
-    ASSUNTOS_ERROS = [
-        "Erro durante Onboarding - Frete",
-        "Erro durante Onboarding - Pedido",
-        "Erro durante Onboarding - Rastreio",
-        "Erro durante Onboarding - Teste",
-    ]
-    df_erros = df_onb[df_onb["assunto_nome"].isin(ASSUNTOS_ERROS)].copy()
     if not df_erros.empty:
-        cont_erros = df_erros["assunto_nome"].value_counts().reindex(ASSUNTOS_ERROS, fill_value=0).reset_index()
+        cont_erros = (df_erros["assunto_nome"].value_counts()
+                      .reindex(ASSUNTOS_ERROS, fill_value=0).reset_index())
         cont_erros.columns = ["Categoria","Qtd"]
+
         fig_onb = px.bar(cont_erros, x="Qtd", y="Categoria", orientation="h",
                          text="Qtd", title="Erros Onboarding", height=420)
-        fig_onb.update_traces(texttemplate="%{text:.0f}", textposition="outside", textfont_size=16, cliponaxis=False)
+        fig_onb.update_traces(texttemplate="%{text:.0f}", textposition="outside",
+                              textfont_size=16, cliponaxis=False)
         max_q = int(cont_erros["Qtd"].max()) if not cont_erros.empty else 0
         if max_q > 0:
             fig_onb.update_xaxes(range=[0, max_q*1.25])
         fig_onb.update_layout(margin=dict(t=50, r=20, b=30, l=10), bargap=0.25)
         show_plot(fig_onb, "onboarding", "INT", ano_global, mes_global)
 
-    # simulação
     st.markdown("---")
     st.subheader("💸 Dinheiro perdido (simulação)")
     c_left,c_right = st.columns([1,1])
     with c_left:
         st.number_input("Clientes novos (simulação)", value=possiveis_clientes, disabled=True, key="sim_clientes_onb")
     with c_right:
-        receita_cliente = st.slider("Cenário Receita por Cliente (R$)", min_value=0, max_value=100000, step=500, value=20000, key="sim_receita_onb")
+        receita_cliente = st.slider("Cenário Receita por Cliente (R$)",
+                                    min_value=0, max_value=100000, step=500, value=20000,
+                                    key="sim_receita_onb")
     dinheiro_perdido = float(possiveis_clientes) * float(receita_cliente)
-    st.markdown(f"### **R$ {dinheiro_perdido:,.2f}**", help="Cálculo: Clientes novos (simulação) × Cenário Receita por Cliente")
+    st.markdown(f"### **R$ {dinheiro_perdido:,.2f}**",
+                help="Cálculo: Clientes novos (simulação) × Cenário Receita por Cliente")
 
 
 # ---- Rotinas Manuais (TDS) — 100% por Jira
 
 def render_rotinas_manuais(dfp: pd.DataFrame, ano_global: str, mes_global: str):
     """
-    Rotinas Manuais (TDS)
-    - Encomendas TDS = SOMENTE áreas Ops (qtd_encomendas > 0).
-    - Encomendas manuais = SOMENTE Tech Support + áreas extras (ex.: 'Suporte - Infra'),
-      filtrado por 'assunto_nome' (lista fixa MANUAL_TS_ASSUNTOS).
-    - Dedup por ticket usando o primeiro instante confiável (resolved -> created -> updated).
-    - Eixo mensal contínuo + donut (partição do total) + barras por assunto + export.
+    Rotinas Manuais (TDS) — barras mensais + donut + barras por assunto + export
     """
-    import pandas as pd
-    import plotly.express as px
-    import streamlit as st
-
-    # ---------------- Helpers locais ----------------
     try:
         from unidecode import unidecode as _unidecode
     except Exception:
@@ -954,7 +755,6 @@ def render_rotinas_manuais(dfp: pd.DataFrame, ano_global: str, mes_global: str):
         return x
 
     def discover_tech_support_areas(df):
-        """Detecta nomes de área que representem Tech Support / Suporte."""
         if "area_nome" not in df.columns:
             return []
         areas = sorted({str(a) for a in df["area_nome"].dropna().unique()})
@@ -968,15 +768,12 @@ def render_rotinas_manuais(dfp: pd.DataFrame, ano_global: str, mes_global: str):
         if not tech:
             tech = [a for a in areas if "tech support" in _canon(a) or "suporte tecnico" in _canon(a)]
         return sorted(set(tech))
-    # ------------------------------------------------
 
-    # ---------------- CONFIG (edite aqui se precisar) ----------------
     OPS_AREAS = [
         "Ops - Conferência", "Ops - Cubagem", "Ops - Logística",
         "Ops - Coletas", "Ops - Expedição", "Ops - Divergências",
     ]
 
-    # Assuntos do Jira que entram como "Manuais" (apenas para TS + extras)
     MANUAL_TS_ASSUNTOS = [
         "Volumetria - Tabela Divergência",
         "Volumetria - Tabela Erro",
@@ -985,10 +782,8 @@ def render_rotinas_manuais(dfp: pd.DataFrame, ano_global: str, mes_global: str):
         "Volumetria - Painel sem registro",
     ]
 
-    # Áreas extras que entram em "Manuais" além das detectadas como Tech Support
     MANUAL_TS_AREAS_EXTRA = ["Suporte - Infra", "Outra / Não Encontrada"]
 
-    # Agrupamento de assuntos para o gráfico "Manual | Assunto"
     SUBJECT_GROUPS = {
         "volumetria - ie / qliksense": "Inscrição Estadual",
         "erro no processamento - inscricao estadual": "Inscrição Estadual",
@@ -999,27 +794,22 @@ def render_rotinas_manuais(dfp: pd.DataFrame, ano_global: str, mes_global: str):
         "volumetria - cotacao/grafana": "Cotação",
         "volumetria - painel sem registro": "Outros",
     }
-    # -----------------------------------------------------------------
 
     st.markdown("### 🛠️ Rotinas Manuais")
-
     if dfp.empty:
         st.info("Sem tickets para o período.")
         return
 
-    # 1) Base, assunto consolidado e área
     df = dfp.copy()
     df = ensure_assunto_nome(df, "TDS")
     df["area_nome"] = df["area"].apply(lambda x: safe_get_value(x, "value"))
 
-    # 2) Quantidade de encomendas > 0
     df["qtd_encomendas"] = df[CAMPO_QTD_ENCOMENDAS].apply(parse_qtd_encomendas)
     df = df[df["qtd_encomendas"] > 0].copy()
     if df.empty:
         st.info("Sem tickets com 'Quantidade de encomendas' > 0.")
         return
 
-    # 3) Dedup por primeiro instante confiável
     df["resolved"] = _parse_dt_col(df.get("resolved"))
     df["created"]  = _parse_dt_col(df.get("created"))
     df["updated"]  = _parse_dt_col(df.get("updated"))
@@ -1045,31 +835,23 @@ def render_rotinas_manuais(dfp: pd.DataFrame, ano_global: str, mes_global: str):
           .copy()
     )
 
-    # 4) Derivados básicos
     df["mes_dt"] = df["resolved"].dt.to_period("M").dt.to_timestamp()
     df["assunto_nome"] = df["assunto_nome"].astype(str)
     df["assunto_canon"] = df["assunto_nome"].apply(_canon)
 
-    # 5) Descobrir Tech Support + incluir áreas extras
     tech_areas_auto = discover_tech_support_areas(df)
     extras_canon = {_canon(a) for a in MANUAL_TS_AREAS_EXTRA}
-    tech_areas = sorted(
-        set(tech_areas_auto) |
-        {a for a in df["area_nome"].dropna().unique() if _canon(a) in extras_canon}
-    )
+    tech_areas = sorted(set(tech_areas_auto) | {a for a in df["area_nome"].dropna().unique() if _canon(a) in extras_canon})
 
-    # 6) Partições base
-    base_ops = df[df["area_nome"].isin(OPS_AREAS)].copy()   # TDS
-    base_ts  = df[df["area_nome"].isin(tech_areas)].copy()  # Manuais
+    base_ops = df[df["area_nome"].isin(OPS_AREAS)].copy()
+    base_ts  = df[df["area_nome"].isin(tech_areas)].copy()
     if base_ops.empty and base_ts.empty:
         st.info("Sem tickets nas áreas Ops/Tech Support para os filtros atuais.")
         return
 
-    # Copias para export
     full_ops = base_ops.copy()
     full_ts  = base_ts.copy()
 
-    # 7) Filtro global
     if not base_ops.empty:
         base_ops = aplicar_filtro_global(base_ops, "mes_dt", ano_global, mes_global)
     if not base_ts.empty:
@@ -1079,16 +861,11 @@ def render_rotinas_manuais(dfp: pd.DataFrame, ano_global: str, mes_global: str):
         st.info("Sem dados para exibir com os filtros atuais.")
         return
 
-    # 8) Séries mensais
     assuntos_canon = {_canon(a) for a in MANUAL_TS_ASSUNTOS}
 
-    # TDS (só Ops)
-    monthly_tds = (
-        base_ops.groupby("mes_dt")["qtd_encomendas"].sum().rename("Encomendas TDS")
-        if not base_ops.empty else pd.Series(dtype=float, name="Encomendas TDS")
-    )
+    monthly_tds = (base_ops.groupby("mes_dt")["qtd_encomendas"].sum().rename("Encomendas TDS")
+                   if not base_ops.empty else pd.Series(dtype=float, name="Encomendas TDS"))
 
-    # Manuais (TS + extras) filtrados pelos assuntos
     if not base_ts.empty and assuntos_canon:
         ts_mask_manual = base_ts["assunto_canon"].isin(assuntos_canon)
         ts_manuais = base_ts[ts_mask_manual].copy()
@@ -1097,7 +874,6 @@ def render_rotinas_manuais(dfp: pd.DataFrame, ano_global: str, mes_global: str):
         ts_manuais = base_ts.iloc[0:0].copy()
         monthly_manual = pd.Series(dtype=float, name="Encomendas manuais")
 
-    # Índice mensal contínuo cobrindo Ops ∪ TS
     min_m = pd.concat([
         base_ops["mes_dt"] if not base_ops.empty else pd.Series(dtype="datetime64[ns]"),
         base_ts["mes_dt"]  if not base_ts.empty  else pd.Series(dtype="datetime64[ns]")
@@ -1111,27 +887,16 @@ def render_rotinas_manuais(dfp: pd.DataFrame, ano_global: str, mes_global: str):
     s_tds    = monthly_tds.reindex(idx, fill_value=0.0)
     s_manual = monthly_manual.reindex(idx, fill_value=0.0)
 
-    monthly = pd.concat([
-        s_manual.rename("Encomendas manuais"),
-        s_tds.rename("Encomendas TDS")
-    ], axis=1).reset_index().rename(columns={"index": "mes_dt"})
+    monthly = pd.concat([s_manual.rename("Encomendas manuais"), s_tds.rename("Encomendas TDS")],
+                        axis=1).reset_index().rename(columns={"index": "mes_dt"})
     monthly["mes_str"] = monthly["mes_dt"].dt.strftime("%b/%Y")
 
-    # 9) Barras (Mensal)
-    fig = px.bar(
-        monthly,
-        x="mes_str",
-        y=["Encomendas manuais", "Encomendas TDS"],
-        barmode="group",
-        text_auto=True,
-        title="Encomendas manuais vs Encomendas TDS",
-        height=420,
-    )
+    fig = px.bar(monthly, x="mes_str", y=["Encomendas manuais", "Encomendas TDS"], barmode="group",
+                 text_auto=True, title="Encomendas manuais vs Encomendas TDS", height=420)
     fig.update_traces(textangle=0, cliponaxis=False)
     fig.update_xaxes(categoryorder="array", categoryarray=monthly["mes_str"].tolist())
     show_plot(fig, "rotinas_manual_ts_assunto_vs_tds_ops_extras", "TDS", ano_global, mes_global)
 
-    # 10) Donut
     total_tds    = float(s_tds.sum())
     total_manual = float(s_manual.sum())
 
@@ -1140,23 +905,20 @@ def render_rotinas_manuais(dfp: pd.DataFrame, ano_global: str, mes_global: str):
     fig_donut.update_traces(textposition="inside", textinfo="percent+label")
     show_plot(fig_donut, "rotinas_manual_ts_assunto_donut_vs_tds_ops_extras", "TDS", ano_global, mes_global)
 
-    # 11) Manual | Assunto
     if not ts_manuais.empty:
         def _map_subject(canon_name: str) -> str:
             return SUBJECT_GROUPS.get(canon_name, SUBJECT_GROUPS.get("volumetria - painel sem registro", "Outros"))
+
         ts_manuais["assunto_grupo"] = ts_manuais["assunto_canon"].apply(_map_subject)
-        df_ass = (
-            ts_manuais.groupby("assunto_grupo")["qtd_encomendas"]
-            .sum().reset_index().sort_values("qtd_encomendas", ascending=True)
-        )
-        fig_ass = px.bar(df_ass, x="qtd_encomendas", y="assunto_grupo",
-                         orientation="h", text="qtd_encomendas",
+        df_ass = (ts_manuais.groupby("assunto_grupo")["qtd_encomendas"].sum().reset_index()
+                  .sort_values("qtd_encomendas", ascending=True))
+
+        fig_ass = px.bar(df_ass, x="qtd_encomendas", y="assunto_grupo", orientation="h", text="qtd_encomendas",
                          title="Manual: Assuntos relacionados", height=380)
         fig_ass.update_traces(textposition="outside")
         fig_ass.update_layout(yaxis_title="", xaxis_title="Qtd")
         show_plot(fig_ass, "rotinas_manual_por_assunto", "TDS", ano_global, mes_global)
 
-    # 12) Export
     with st.expander("📤 Exportar / diagnóstico", expanded=False):
         def _prep_export(dd: pd.DataFrame, origem: str, somente_assuntos: bool = False) -> pd.DataFrame:
             if dd.empty:
@@ -1180,6 +942,7 @@ def render_rotinas_manuais(dfp: pd.DataFrame, ano_global: str, mes_global: str):
         csv = df_export.to_csv(index=False).encode("utf-8-sig")
         st.download_button("Baixar CSV", data=csv, file_name="rotinas_ops_tds_vs_manual_ts_extras_por_assunto.csv", mime="text/csv")
         st.dataframe(df_export.head(5000), use_container_width=True, hide_index=True)
+
 
 # ================= Filtros Globais ========================
 
@@ -1240,25 +1003,10 @@ for projeto, tab in zip(PROJETOS, tabs):
 
         if projeto == "TDS":
             dfp = df_tds.copy()
-            opcoes = [
-                "Geral",
-                "Criados vs Resolvidos",
-                "SLA",
-                "Assunto Relacionado",
-                "Área Solicitante",
-                "APP NE",
-                "Rotinas Manuais",
-            ]
+            opcoes = ["Geral", "Criados vs Resolvidos", "SLA", "Assunto Relacionado", "Área Solicitante", "APP NE", "Rotinas Manuais"]
         elif projeto == "INT":
             dfp = df_int.copy()
-            opcoes = [
-                "Geral",
-                "Criados vs Resolvidos",
-                "SLA",
-                "Assunto Relacionado",
-                "Área Solicitante",
-                "Onboarding",
-            ]
+            opcoes = ["Geral", "Criados vs Resolvidos", "SLA", "Assunto Relacionado", "Área Solicitante", "Onboarding"]
         elif projeto == "TINE":
             dfp = df_tine.copy()
             opcoes = ["Geral", "Criados vs Resolvidos", "SLA", "Assunto Relacionado", "Área Solicitante"]
@@ -1279,14 +1027,32 @@ for projeto, tab in zip(PROJETOS, tabs):
         if visao == "Criados vs Resolvidos":
             render_criados_resolvidos(dfp, projeto, ano_global, mes_global)
         elif visao == "SLA":
-            render_sla_module(_df_monthly_all, dfp, projeto, ano_global, mes_global)
+            # << Submenu SLA >>
+            render_sla_menu(_df_monthly_all, dfp, projeto, ano_global, mes_global)
         elif visao == "Assunto Relacionado":
-            render_assunto(dfp, projeto, ano_global, mes_global)
-        elif visao == "Área Solicitante":
-            if projeto == "INTEL":
-                st.info("Este projeto não possui Área Solicitante.")
+            # Tabela simples de assuntos (original)
+            st.markdown("### 🧾 Assunto Relacionado")
+            df_ass = aplicar_filtro_global(dfp.copy(), "mes_created", ano_global, mes_global)
+            if df_ass.empty:
+                st.info("Sem dados para Assunto Relacionado nos filtros atuais.")
             else:
-                render_area(dfp, ano_global, mes_global)
+                if CAMPOS_ASSUNTO[projeto] == "issuetype":
+                    df_ass["assunto_nome"] = df_ass["issuetype"].apply(lambda x: safe_get_value(x, "name"))
+                else:
+                    df_ass["assunto_nome"] = df_ass["assunto"].apply(lambda x: safe_get_value(x, "value"))
+                assunto_count = df_ass["assunto_nome"].value_counts().reset_index()
+                assunto_count.columns = ["Assunto", "Qtd"]
+                st.dataframe(assunto_count, use_container_width=True, hide_index=True)
+        elif visao == "Área Solicitante":
+            st.markdown("### 📦 Área Solicitante")
+            df_area = aplicar_filtro_global(dfp.copy(), "mes_created", ano_global, mes_global)
+            if df_area.empty:
+                st.info("Sem dados para Área Solicitante nos filtros atuais.")
+            else:
+                df_area["area_nome"] = df_area["area"].apply(lambda x: safe_get_value(x, "value"))
+                area_count = df_area["area_nome"].value_counts().reset_index()
+                area_count.columns = ["Área", "Qtd"]
+                st.dataframe(area_count, use_container_width=True, hide_index=True)
         elif visao == "Onboarding":
             if projeto == "INT":
                 render_onboarding(dfp, ano_global, mes_global)
@@ -1305,12 +1071,46 @@ for projeto, tab in zip(PROJETOS, tabs):
         else:
             # Geral
             render_criados_resolvidos(dfp, projeto, ano_global, mes_global)
-            render_sla_module(_df_monthly_all, dfp, projeto, ano_global, mes_global)
-            render_assunto(dfp, projeto, ano_global, mes_global)
+            render_sla_menu(_df_monthly_all, dfp, projeto, ano_global, mes_global)
+            st.markdown("### 🧾 Assunto Relacionado")
+            df_ass = aplicar_filtro_global(dfp.copy(), "mes_created", ano_global, mes_global)
+            if df_ass.empty:
+                st.info("Sem dados para Assunto Relacionado nos filtros atuais.")
+            else:
+                if CAMPOS_ASSUNTO[projeto] == "issuetype":
+                    df_ass["assunto_nome"] = df_ass["issuetype"].apply(lambda x: safe_get_value(x, "name"))
+                else:
+                    df_ass["assunto_nome"] = df_ass["assunto"].apply(lambda x: safe_get_value(x, "value"))
+                assunto_count = df_ass["assunto_nome"].value_counts().reset_index()
+                assunto_count.columns = ["Assunto", "Qtd"]
+                st.dataframe(assunto_count, use_container_width=True, hide_index=True)
+
             if projeto != "INTEL":
-                render_area(dfp, ano_global, mes_global)
+                st.markdown("### 📦 Área Solicitante")
+                df_area = aplicar_filtro_global(dfp.copy(), "mes_created", ano_global, mes_global)
+                if df_area.empty:
+                    st.info("Sem dados para Área Solicitante nos filtros atuais.")
+                else:
+                    df_area["area_nome"] = df_area["area"].apply(lambda x: safe_get_value(x, "value"))
+                    area_count = df_area["area_nome"].value_counts().reset_index()
+                    area_count.columns = ["Área", "Qtd"]
+                    st.dataframe(area_count, use_container_width=True, hide_index=True)
+
+            # Encaminhamentos simples
             if projeto in ("TDS", "INT"):
-                render_encaminhamentos(dfp, ano_global, mes_global)
+                st.markdown("### 🔄 Encaminhamentos")
+                df_enc = aplicar_filtro_global(dfp.copy(), "mes_created", ano_global, mes_global)
+                if df_enc.empty:
+                    st.info("Sem dados para Encaminhamentos nos filtros atuais.")
+                else:
+                    col1, col2 = st.columns(2)
+                    with col1:
+                        count_prod = df_enc["status"].astype(str).str.contains("Produto", case=False, na=False).sum()
+                        st.metric("Encaminhados Produto", int(count_prod))
+                    with col2:
+                        df_enc["n3_valor"] = df_enc["n3"].apply(lambda x: safe_get_value(x, "value", None))
+                        st.metric("Encaminhados N3", int((df_enc["n3_valor"] == "Sim").sum()))
+
             if projeto == "TDS":
                 render_app_ne(dfp, ano_global, mes_global)
                 with st.expander("🛠️ Rotinas Manuais", expanded=False):
