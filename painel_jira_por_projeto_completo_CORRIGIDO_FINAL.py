@@ -397,7 +397,7 @@ def render_criados_resolvidos(dfp: pd.DataFrame, projeto: str, ano_global: str, 
         y=["Criados", "Resolvidos"],
         barmode="group",
         text_auto=True,
-        title=f"Tickets Criados vs Resolvidos — {projeto} (todas as áreas)",
+        title=f"Tickets Criados vs Resolvidos",
         height=420,
     )
     fig.update_traces(textangle=0, cliponaxis=False)
