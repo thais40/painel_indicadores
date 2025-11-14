@@ -70,8 +70,10 @@ TITULOS = {"TDS": "Tech Support", "INT": "Integrations", "TINE": "IT Support NE"
 META_SLA = {"TDS": 98.00, "INT": 96.00, "TINE": 96.00, "INTEL": 96.00}
 ASSUNTO_ALVO_APPNE = "Problemas no App NE - App EN"
 
+# 👉 ADIÇÃO: vamos buscar também o assignee
 JIRA_FIELDS_BASE = [
     "key", "summary", "created", "updated", "resolutiondate", "resolved", "status", "issuetype",
+    "assignee",  # <— NOVO
     CAMPO_AREA, CAMPO_N3, CAMPO_ORIGEM, CAMPO_QTD_ENCOMENDAS,
 ]
 FIELDS_SLA_ALL = list(set(SLA_CAMPOS.values()))
@@ -273,6 +275,7 @@ def buscar_issues(projeto: str, jql: str, max_pages: int = 500) -> pd.DataFrame:
                 "area": f.get(CAMPO_AREA),
                 "n3": f.get(CAMPO_N3),
                 "origem": f.get(CAMPO_ORIGEM),
+                "assignee": f.get("assignee"),  # <— NOVO
                 CAMPO_QTD_ENCOMENDAS: f.get(CAMPO_QTD_ENCOMENDAS),
                 "sla_raw": f.get(SLA_CAMPOS[projeto], {}),
             }
@@ -343,7 +346,6 @@ def render_criados_resolvidos(dfp: pd.DataFrame, projeto: str, ano_global: str, 
     import streamlit as st
 
     df = dfp.copy()
-
     created  = pd.to_datetime(df.get("created"),  errors="coerce")
     resolved = pd.to_datetime(df.get("resolved"), errors="coerce")
 
@@ -403,7 +405,6 @@ def render_criados_resolvidos(dfp: pd.DataFrame, projeto: str, ano_global: str, 
     show_plot(fig, f"{projeto.lower().replace(' ', '_')}_criados_resolvidos_all", projeto, ano_global, mes_global)
 
 def render_sla_table(df_monthly_all: pd.DataFrame, projeto: str, ano_global: str, mes_global: str):
-    # (mantida para compatibilidade, porém não é mais chamada)
     st.markdown("### ⏱️ SLA (legado)")
     dfm = df_monthly_all[df_monthly_all["projeto"] == projeto].copy()
     if dfm.empty:
@@ -422,14 +423,14 @@ def render_sla_table(df_monthly_all: pd.DataFrame, projeto: str, ano_global: str
     titulo = f"OKR: {okr:.2f}% — Meta: {meta:.2f}%".replace(".", ",")
 
     show = dfm[["mes_str", "period_ts", "pct_dentro", "pct_fora"]].sort_values("period_ts")
-    show = show.rename(columns={"pct_dentro": "% Dentro SLA", "pct_fora": "% Fora SLA"})
+    show = show.rename(columns={"pct_dentro": "% Dentro SLA", "% Fora SLA": "pct_fora"})
     fig = px.bar(
         show,
         x="mes_str",
-        y=["% Dentro SLA", "% Fora SLA"],
+        y=["% Dentro SLA", "pct_fora"],
         barmode="group",
         title=titulo,
-        color_discrete_map={"% Dentro SLA": "green", "% Fora SLA": "red"},
+        color_discrete_map={"% Dentro SLA": "green", "pct_fora": "red"},
         height=440,
     )
     fig.update_traces(texttemplate="%{y:.2f}%", textposition="outside", cliponaxis=False)
@@ -445,6 +446,8 @@ def render_sla_fora_detalhes(dfp, projeto: str, ano_global: str, mes_global: str
       - Apenas tickets com 'resolved'
       - Fora do SLA = not(dentro_sla_from_raw(sla_raw)) com fillna(False)
       - Filtro por mês/ano aplicado sobre 'resolved'
+      - ADIÇÃO: coluna 'assignee_nome'
+      - REMOÇÃO: não exibimos mais o card da mediana de horas
     """
     import numpy as np
     import pandas as pd
@@ -459,13 +462,13 @@ def render_sla_fora_detalhes(dfp, projeto: str, ano_global: str, mes_global: str
     df["resolved"] = pd.to_datetime(df.get("resolved"), errors="coerce")
 
     base = df[df["resolved"].notna()].copy()
-
     base["_dentro_sla_calc"] = base["sla_raw"].apply(dentro_sla_from_raw)
     base["_fora_sla"] = (~base["_dentro_sla_calc"].fillna(False).astype(bool))  # None => Fora
 
     base["mes_dt"] = base["resolved"].dt.to_period("M").dt.to_timestamp()
     base = aplicar_filtro_global(base, "mes_dt", ano_global, mes_global)
 
+    # area_nome
     if "area_nome" not in base.columns:
         def _get_area(x):
             if isinstance(x, dict):
@@ -476,6 +479,7 @@ def render_sla_fora_detalhes(dfp, projeto: str, ano_global: str, mes_global: str
         else:
             base["area_nome"] = np.nan
 
+    # assunto_nome
     if "assunto_nome" not in base.columns:
         if "assunto" in base.columns:
             base["assunto_nome"] = base["assunto"].apply(
@@ -484,25 +488,30 @@ def render_sla_fora_detalhes(dfp, projeto: str, ano_global: str, mes_global: str
         else:
             base["assunto_nome"] = np.nan
 
+    # 👉 assignee_nome (displayName → emailAddress → name → accountId)
+    def _assignee_name(a):
+        if isinstance(a, dict):
+            return a.get("displayName") or a.get("emailAddress") or a.get("name") or a.get("accountId")
+        return a
+    base["assignee_nome"] = base.get("assignee").apply(_assignee_name) if "assignee" in base.columns else np.nan
+
+    # tempo em horas para ordenar/exibir
+    if {"resolved", "created"}.issubset(base.columns):
+        base["tempo_resolucao_horas"] = (
+            (base["resolved"] - base["created"]).dt.total_seconds() / 3600.0
+        )
+
     base_fora = base[base["_fora_sla"]].copy()
 
     st.subheader("🔴 Chamados fora do SLA")
-
-    c1, c2 = st.columns(2)
+    # Só mantemos o total (removida a mediana)
     total_fora = int(base_fora["key"].nunique() if "key" in base_fora.columns else len(base_fora))
-    c1.metric("Total fora do SLA (período filtrado)", total_fora)
+    st.metric("Total fora do SLA (período filtrado)", total_fora)
 
-    if {"resolved", "created"}.issubset(base_fora.columns):
-        base_fora["tempo_resolucao_horas"] = (
-            (base_fora["resolved"] - base_fora["created"]).dt.total_seconds() / 3600.0
-        )
-        c2.metric("Mediana (horas) – fora SLA", float(base_fora["tempo_resolucao_horas"].median()))
-    else:
-        c2.metric("Mediana (horas) – fora SLA", 0.0)
-
+    # colunas preferidas (inclui assignee_nome)
     prefer = [
         "key", "created", "resolved", "summary",
-        "area_nome", "assunto_nome", "tempo_resolucao_horas"
+        "assignee_nome", "area_nome", "assunto_nome", "tempo_resolucao_horas"
     ]
     cols = [c for c in prefer if c in base_fora.columns]
     if not cols:
@@ -523,10 +532,7 @@ def render_sla_fora_detalhes(dfp, projeto: str, ano_global: str, mes_global: str
 
 
 def render_sla(dfp, df_monthly_all: pd.DataFrame, projeto: str, ano_global: str, mes_global: str):
-    """
-    Gráfico de SLA + submenu (expander) com lista fora do SLA.
-    Usa a mesma base de cálculo do builder mensal.
-    """
+    """Gráfico de SLA + submenu (expander) com lista fora do SLA."""
     import plotly.express as px
     import streamlit as st
 
@@ -565,7 +571,7 @@ def render_sla(dfp, df_monthly_all: pd.DataFrame, projeto: str, ano_global: str,
 
     with st.expander("🔎 Ver chamados fora do SLA (lista detalhada)", expanded=False):
         render_sla_fora_detalhes(dfp, projeto, ano_global, mes_global)
-# ==================/ SLA – gráfico + submenu "Chamados fora do SLA" ==================
+# ==================/ SLA – gráfico + submenu ==================
 
 
 def render_assunto(dfp: pd.DataFrame, projeto: str, ano_global: str, mes_global: str):
@@ -612,7 +618,6 @@ def render_encaminhamentos(dfp: pd.DataFrame, ano_global: str, mes_global: str):
 
 # ================= Módulos específicos ====================
 # ---- APP NE (TDS)
-
 def render_app_ne(dfp: pd.DataFrame, ano_global: str, mes_global: str):
     st.markdown("### 📱 APP NE")
     if dfp.empty:
@@ -672,7 +677,6 @@ def render_app_ne(dfp: pd.DataFrame, ano_global: str, mes_global: str):
   
 
 # ---- Onboarding (INT)
-
 def render_onboarding(dfp: pd.DataFrame, ano_global: str, mes_global: str):
     st.markdown("### 🧭 Onboarding")
     if dfp.empty:
@@ -822,16 +826,7 @@ def render_onboarding(dfp: pd.DataFrame, ano_global: str, mes_global: str):
 
 
 # ---- Rotinas Manuais (TDS) — 100% por Jira
-
 def render_rotinas_manuais(dfp: pd.DataFrame, ano_global: str, mes_global: str):
-    """
-    Rotinas Manuais (TDS)
-    - Encomendas TDS = SOMENTE áreas Ops (qtd_encomendas > 0).
-    - Encomendas manuais = SOMENTE Tech Support + áreas extras (ex.: 'Suporte - Infra'),
-      filtrado por 'assunto_nome' (lista fixa MANUAL_TS_ASSUNTOS).
-    - Dedup por ticket usando o primeiro instante confiável (resolved -> created -> updated).
-    - Eixo mensal contínuo + donut (partição do total) + barras por assunto + export.
-    """
     import pandas as pd
     import plotly.express as px
     import streamlit as st
@@ -851,7 +846,6 @@ def render_rotinas_manuais(dfp: pd.DataFrame, ano_global: str, mes_global: str):
         return x
 
     def discover_tech_support_areas(df):
-        """Detecta nomes de área que representem Tech Support / Suporte."""
         if "area_nome" not in df.columns:
             return []
         areas = sorted({str(a) for a in df["area_nome"].dropna().unique()})
@@ -1168,7 +1162,6 @@ for projeto, tab in zip(PROJETOS, tabs):
         if visao == "Criados vs Resolvidos":
             render_criados_resolvidos(dfp, projeto, ano_global, mes_global)
         elif visao == "SLA":
-            # 👉 novo SLA com submenu
             render_sla(dfp, _df_monthly_all, projeto, ano_global, mes_global)
         elif visao == "Assunto Relacionado":
             render_assunto(dfp, projeto, ano_global, mes_global)
@@ -1195,7 +1188,6 @@ for projeto, tab in zip(PROJETOS, tabs):
         else:
             # Geral
             render_criados_resolvidos(dfp, projeto, ano_global, mes_global)
-            # 👉 usa o novo SLA (com expander)
             render_sla(dfp, _df_monthly_all, projeto, ano_global, mes_global)
             render_assunto(dfp, projeto, ano_global, mes_global)
             if projeto != "INTEL":
