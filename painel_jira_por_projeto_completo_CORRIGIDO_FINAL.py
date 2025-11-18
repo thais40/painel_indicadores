@@ -239,7 +239,7 @@ def _jira_search_jql(jql: str, next_page_token: Optional[str] = None, max_result
     return resp.json()
 
 
-@st.cache_data(show_spinner="🔄 Buscando dados do Jira...", ttl=60 * 30)
+@st.cache_data(show_spinner="🔄 Buscando dados do Jira...", ttl=None)
 def buscar_issues(projeto: str, jql: str, max_pages: int = 500) -> pd.DataFrame:
     todos, last_error = [], None
     next_token, page = None, 0
