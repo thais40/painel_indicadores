@@ -898,6 +898,13 @@ def render_rotinas_manuais(dfp: pd.DataFrame, ano_global: str, mes_global: str):
     df["qtd_encomendas"] = df[CAMPO_QTD_ENCOMENDAS].apply(parse_qtd_encomendas)
     # evita outliers absurdos (ex.: 2.5B) por inconsistência de preenchimento/formato no Jira
     df.loc[df["qtd_encomendas"] > 1_000_000, "qtd_encomendas"] = 0
+    # clamp adicional por distribuição (remove outliers residuais sem precisar adivinhar limite)
+    try:
+        _cap = float(df["qtd_encomendas"].quantile(0.995))
+        if _cap > 0:
+            df.loc[df["qtd_encomendas"] > _cap, "qtd_encomendas"] = 0
+    except Exception:
+        pass
     df = df[df["qtd_encomendas"] > 0].copy()
     if df.empty:
         st.info("Sem tickets com 'Quantidade de encomendas' > 0.")
@@ -907,24 +914,30 @@ def render_rotinas_manuais(dfp: pd.DataFrame, ano_global: str, mes_global: str):
     df["created"]  = _parse_dt_col(df.get("created"))
     df["updated"]  = _parse_dt_col(df.get("updated"))
 
-    # ✅ Rotinas manuais devem ser apuradas por mês de FECHAMENTO (resolved).
-    # Sem fallback para created/updated, para não "jogar" tickets abertos no mês.
-    df = df[df["resolved"].notna()].copy()
-    df["_best_dt"] = df["resolved"]
+    # ✅ Data de referência (mês a mês) como era antes:
+    # - se o ticket tem 'resolved', usamos o ÚLTIMO fechamento (caso reaberto)
+    # - se não tem 'resolved', usamos a data de criação (sem cair em 'updated', que distorce a série)
+    df["_resolved_dt"] = df["resolved"]
+    df["_created_dt"]  = df["created"]
 
     df = (
-        df.sort_values(["key", "_best_dt"])
+        df.sort_values(["key", "_resolved_dt"])
           .groupby("key", as_index=False)
           .agg({
-              "_best_dt": "max",   # último fechamento por ticket (caso reaberto)
+              "_resolved_dt": "max",
+              "_created_dt": "min",
               "qtd_encomendas": "max",
               "assunto_nome": "first",
               "summary": "first",
               "area_nome": "first",
           })
-          .rename(columns={"_best_dt": "resolved"})
           .copy()
     )
+    df["_best_dt"] = df["_resolved_dt"]
+    m = df["_best_dt"].isna() & df["_created_dt"].notna()
+    df.loc[m, "_best_dt"] = df.loc[m, "_created_dt"]
+    df = df[df["_best_dt"].notna()].copy()
+    df = df.rename(columns={"_best_dt": "resolved"}).copy()
 
     df["mes_dt"] = df["resolved"].dt.to_period("M").dt.to_timestamp()
     df["assunto_nome"] = df["assunto_nome"].astype(str)
