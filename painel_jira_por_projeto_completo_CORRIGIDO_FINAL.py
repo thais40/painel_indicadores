@@ -42,6 +42,9 @@ auth = HTTPBasicAuth(EMAIL, TOKEN)
 TZ_BR = ZoneInfo("America/Sao_Paulo")
 DATA_INICIO = "2024-08-01"
 
+# ✅ Timestamp base (usado nos cortes visuais)
+START_TS = pd.to_datetime(DATA_INICIO).to_period("M").to_timestamp()
+
 # ================= Campos / Constantes =====================
 SLA_CAMPOS = {
     "TDS": "customfield_13744",
@@ -88,7 +91,7 @@ def _render_head():
     st.markdown(
         """
         <style>
-        html, body, [class*=\"css\"] { font-family: Inter, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial !important; }
+        html, body, [class*="css"] { font-family: Inter, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial !important; }
         .update-row{ display:flex; align-items:center; gap:12px; margin:8px 0 18px 0; }
         .update-caption{ color:#6B7280; font-size:.85rem; }
         </style>
@@ -197,7 +200,6 @@ def aplicar_filtro_global(df_in: pd.DataFrame, col_dt: str, ano: str, mes: str) 
 
 
 # 👉 Garante 'assunto_nome' antes do uso
-
 def ensure_assunto_nome(df_proj: pd.DataFrame, projeto: str) -> pd.DataFrame:
     if df_proj is None or df_proj.empty:
         return df_proj
@@ -275,7 +277,7 @@ def buscar_issues(projeto: str, jql: str, max_pages: int = 500) -> pd.DataFrame:
                 "area": f.get(CAMPO_AREA),
                 "n3": f.get(CAMPO_N3),
                 "origem": f.get(CAMPO_ORIGEM),
-                "assignee": f.get("assignee"),  # <— NOVO
+                "assignee": f.get("assignee"),
                 CAMPO_QTD_ENCOMENDAS: f.get(CAMPO_QTD_ENCOMENDAS),
                 "sla_raw": f.get(SLA_CAMPOS[projeto], {}),
             }
@@ -303,19 +305,36 @@ def buscar_issues(projeto: str, jql: str, max_pages: int = 500) -> pd.DataFrame:
 # ================= Builders / SLA =========================
 
 def build_monthly_tables(df_all: pd.DataFrame) -> pd.DataFrame:
+    """
+    ✅ Corrigido para:
+      - Criados: contar só created >= DATA_INICIO (pra não voltar eixo pra 2023)
+      - Resolvidos: contar só resolved >= DATA_INICIO (inclui fechados antigos)
+    """
     if df_all.empty:
         return df_all
-    base = df_all.copy()
-    base["per_created"] = base["created"].dt.to_period("M")
-    base["per_resolved"] = base["resolved"].dt.to_period("M")
 
+    base = df_all.copy()
+
+    # Criados: apenas a partir do START_TS
+    base_created = base[base["created"].notna() & (base["created"] >= START_TS)].copy()
+    base_created["per_created"] = base_created["created"].dt.to_period("M")
     created = (
-        base.groupby(["projeto", "per_created"]).size().reset_index(name="Criados").rename(columns={"per_created": "period"})
+        base_created.groupby(["projeto", "per_created"])
+        .size()
+        .reset_index(name="Criados")
+        .rename(columns={"per_created": "period"})
     )
-    res = base[base["resolved"].notna()].copy()
+
+    # Resolvidos: apenas a partir do START_TS (inclui issues criadas antes)
+    res = base[base["resolved"].notna() & (base["resolved"] >= START_TS)].copy()
+    res["per_resolved"] = res["resolved"].dt.to_period("M")
     res["dentro_sla"] = res["sla_raw"].apply(dentro_sla_from_raw).fillna(False)
+
     resolved = (
-        res.groupby(["projeto", "per_resolved"]).agg(Resolvidos=("key", "count"), Dentro=("dentro_sla", "sum")).reset_index().rename(columns={"per_resolved": "period"})
+        res.groupby(["projeto", "per_resolved"])
+        .agg(Resolvidos=("key", "count"), Dentro=("dentro_sla", "sum"))
+        .reset_index()
+        .rename(columns={"per_resolved": "period"})
     )
 
     monthly = pd.merge(created, resolved, how="outer", on=["projeto", "period"]).fillna(0)
@@ -327,8 +346,14 @@ def build_monthly_tables(df_all: pd.DataFrame) -> pd.DataFrame:
     monthly["Dentro"] = monthly["Dentro"].astype(int)
     monthly["Resolvidos"] = monthly["Resolvidos"].astype(int)
     monthly["Fora"] = (monthly["Resolvidos"] - monthly["Dentro"]).clip(lower=0)
-    monthly["pct_dentro"] = monthly.apply(lambda r: (r["Dentro"] / r["Resolvidos"] * 100) if r["Resolvidos"] > 0 else 0.0, axis=1).round(2)
-    monthly["pct_fora"] = monthly.apply(lambda r: (r["Fora"] / r["Resolvidos"] * 100) if r["Resolvidos"] > 0 else 0.0, axis=1).round(2)
+    monthly["pct_dentro"] = monthly.apply(
+        lambda r: (r["Dentro"] / r["Resolvidos"] * 100) if r["Resolvidos"] > 0 else 0.0,
+        axis=1,
+    ).round(2)
+    monthly["pct_fora"] = monthly.apply(
+        lambda r: (r["Fora"] / r["Resolvidos"] * 100) if r["Resolvidos"] > 0 else 0.0,
+        axis=1,
+    ).round(2)
     return monthly.sort_values(["projeto", "period"])
 
 
@@ -337,9 +362,11 @@ def build_monthly_tables(df_all: pd.DataFrame) -> pd.DataFrame:
 def render_criados_resolvidos(dfp: pd.DataFrame, projeto: str, ano_global: str, mes_global: str):
     """
     Tickets Criados vs Resolvidos — TODAS as áreas (para o projeto atual).
-    - Criados: primeiro 'created' por key (mês de criação)
-    - Resolvidos: último 'resolved' por key (mês de resolução final)
-    - Eixo mensal contínuo (não pula meses).
+
+    ✅ Corrigido para não “voltar” o eixo:
+      - Criados: só created >= DATA_INICIO
+      - Resolvidos: só resolved >= DATA_INICIO
+      - eixo inicia em DATA_INICIO
     """
     import pandas as pd
     import plotly.express as px
@@ -369,13 +396,24 @@ def render_criados_resolvidos(dfp: pd.DataFrame, projeto: str, ano_global: str, 
     if not rdf.empty:
         rdf["mes_dt"] = rdf["resolved"].dt.to_period("M").dt.to_timestamp()
 
+    # ✅ cortes (pra não puxar 2023 pra série)
+    start = START_TS
+
+    if not cdf.empty:
+        cdf = cdf[cdf["created"] >= start].copy()
+    if not rdf.empty:
+        rdf = rdf[rdf["resolved"] >= start].copy()
+
     if cdf.empty and rdf.empty:
         st.info("Sem dados de criação/resolução para montar a série.")
         return
 
     mins = [x["mes_dt"].min() for x in (cdf, rdf) if not x.empty]
     maxs = [x["mes_dt"].max() for x in (cdf, rdf) if not x.empty]
-    idx = pd.date_range(min(mins), max(maxs), freq="MS")
+
+    # ✅ eixo não começa antes do DATA_INICIO
+    min_axis = max(min(mins), start)
+    idx = pd.date_range(min_axis, max(maxs), freq="MS")
 
     s_criados    = (cdf.groupby("mes_dt")["key"].nunique() if not cdf.empty else pd.Series(dtype=int))
     s_resolvidos = (rdf.groupby("mes_dt")["key"].nunique() if not rdf.empty else pd.Series(dtype=int))
@@ -403,6 +441,7 @@ def render_criados_resolvidos(dfp: pd.DataFrame, projeto: str, ano_global: str, 
     fig.update_traces(textangle=0, cliponaxis=False)
     fig.update_xaxes(categoryorder="array", categoryarray=monthly["mes_str"].tolist())
     show_plot(fig, f"{projeto.lower().replace(' ', '_')}_criados_resolvidos_all", projeto, ano_global, mes_global)
+
 
 def render_sla_table(df_monthly_all: pd.DataFrame, projeto: str, ano_global: str, mes_global: str):
     st.markdown("### ⏱️ SLA (legado)")
@@ -462,13 +501,13 @@ def render_sla_fora_detalhes(dfp, projeto: str, ano_global: str, mes_global: str
     df["resolved"] = pd.to_datetime(df.get("resolved"), errors="coerce")
 
     base = df[df["resolved"].notna()].copy()
+    base = base[base["resolved"] >= START_TS].copy()  # ✅ corte base em resolved
     base["_dentro_sla_calc"] = base["sla_raw"].apply(dentro_sla_from_raw)
     base["_fora_sla"] = (~base["_dentro_sla_calc"].fillna(False).astype(bool))  # None => Fora
 
     base["mes_dt"] = base["resolved"].dt.to_period("M").dt.to_timestamp()
     base = aplicar_filtro_global(base, "mes_dt", ano_global, mes_global)
 
-    # area_nome
     if "area_nome" not in base.columns:
         def _get_area(x):
             if isinstance(x, dict):
@@ -479,36 +518,27 @@ def render_sla_fora_detalhes(dfp, projeto: str, ano_global: str, mes_global: str
         else:
             base["area_nome"] = np.nan
 
-    # assunto_nome
     if "assunto_nome" not in base.columns:
         if "assunto" in base.columns:
-            base["assunto_nome"] = base["assunto"].apply(
-                lambda x: x.get("value") if isinstance(x, dict) else x
-            )
+            base["assunto_nome"] = base["assunto"].apply(lambda x: x.get("value") if isinstance(x, dict) else x)
         else:
             base["assunto_nome"] = np.nan
 
-    # 👉 assignee_nome (displayName → emailAddress → name → accountId)
     def _assignee_name(a):
         if isinstance(a, dict):
             return a.get("displayName") or a.get("emailAddress") or a.get("name") or a.get("accountId")
         return a
     base["assignee_nome"] = base.get("assignee").apply(_assignee_name) if "assignee" in base.columns else np.nan
 
-    # tempo em horas para ordenar/exibir
     if {"resolved", "created"}.issubset(base.columns):
-        base["tempo_resolucao_horas"] = (
-            (base["resolved"] - base["created"]).dt.total_seconds() / 3600.0
-        )
+        base["tempo_resolucao_horas"] = ((base["resolved"] - base["created"]).dt.total_seconds() / 3600.0)
 
     base_fora = base[base["_fora_sla"]].copy()
 
     st.subheader("🔴 Chamados fora do SLA")
-    # Só mantemos o total (removida a mediana)
     total_fora = int(base_fora["key"].nunique() if "key" in base_fora.columns else len(base_fora))
     st.metric("Total fora do SLA (período filtrado)", total_fora)
 
-    # colunas preferidas (inclui assignee_nome)
     prefer = [
         "key", "created", "resolved", "summary",
         "assignee_nome", "area_nome", "assunto_nome", "tempo_resolucao_horas"
@@ -532,7 +562,6 @@ def render_sla_fora_detalhes(dfp, projeto: str, ano_global: str, mes_global: str
 
 
 def render_sla(dfp, df_monthly_all: pd.DataFrame, projeto: str, ano_global: str, mes_global: str):
-    """Gráfico de SLA + submenu (expander) com lista fora do SLA."""
     import plotly.express as px
     import streamlit as st
 
@@ -576,7 +605,11 @@ def render_sla(dfp, df_monthly_all: pd.DataFrame, projeto: str, ano_global: str,
 
 def render_assunto(dfp: pd.DataFrame, projeto: str, ano_global: str, mes_global: str):
     st.markdown("### 🧾 Assunto Relacionado")
-    df_ass = aplicar_filtro_global(dfp.copy(), "mes_created", ano_global, mes_global)
+
+    # ✅ mantém comportamento antigo: assunto por criação, a partir do DATA_INICIO
+    base = dfp[dfp["created"].notna() & (dfp["created"] >= START_TS)].copy()
+    df_ass = aplicar_filtro_global(base, "mes_created", ano_global, mes_global)
+
     if df_ass.empty:
         st.info("Sem dados para Assunto Relacionado nos filtros atuais.")
         return
@@ -591,7 +624,11 @@ def render_assunto(dfp: pd.DataFrame, projeto: str, ano_global: str, mes_global:
 
 def render_area(dfp: pd.DataFrame, ano_global: str, mes_global: str):
     st.markdown("### 📦 Área Solicitante")
-    df_area = aplicar_filtro_global(dfp.copy(), "mes_created", ano_global, mes_global)
+
+    # ✅ mantém comportamento antigo: área por criação, a partir do DATA_INICIO
+    base = dfp[dfp["created"].notna() & (dfp["created"] >= START_TS)].copy()
+    df_area = aplicar_filtro_global(base, "mes_created", ano_global, mes_global)
+
     if df_area.empty:
         st.info("Sem dados para Área Solicitante nos filtros atuais.")
         return
@@ -603,7 +640,11 @@ def render_area(dfp: pd.DataFrame, ano_global: str, mes_global: str):
 
 def render_encaminhamentos(dfp: pd.DataFrame, ano_global: str, mes_global: str):
     st.markdown("### 🔄 Encaminhamentos")
-    df_enc = aplicar_filtro_global(dfp.copy(), "mes_created", ano_global, mes_global)
+
+    # ✅ mantém comportamento antigo: encaminhamentos por criação, a partir do DATA_INICIO
+    base = dfp[dfp["created"].notna() & (dfp["created"] >= START_TS)].copy()
+    df_enc = aplicar_filtro_global(base, "mes_created", ano_global, mes_global)
+
     if df_enc.empty:
         st.info("Sem dados para Encaminhamentos nos filtros atuais.")
         return
@@ -623,6 +664,9 @@ def render_app_ne(dfp: pd.DataFrame, ano_global: str, mes_global: str):
     if dfp.empty:
         st.info("Sem dados para APP NE.")
         return
+
+    # ✅ comportamento antigo: APP NE por criação a partir do DATA_INICIO
+    dfp = dfp[dfp["created"].notna() & (dfp["created"] >= START_TS)].copy()
 
     dfp = ensure_assunto_nome(dfp.copy(), "TDS")
     s_ass = dfp["assunto_nome"].astype(str).str.strip()
@@ -674,7 +718,7 @@ def render_app_ne(dfp: pd.DataFrame, ano_global: str, mes_global: str):
                           uniformtext_minsize=14, uniformtext_mode="show",
                           bargap=0.15, margin=dict(t=70, r=20, b=60, l=50))
     show_plot(fig_app, "app_ne", "TDS", ano_global, mes_global)
-  
+
 
 # ---- Onboarding (INT)
 def render_onboarding(dfp: pd.DataFrame, ano_global: str, mes_global: str):
@@ -682,6 +726,9 @@ def render_onboarding(dfp: pd.DataFrame, ano_global: str, mes_global: str):
     if dfp.empty:
         st.info("Sem dados de Onboarding.")
         return
+
+    # ✅ comportamento antigo: onboarding por criação a partir do DATA_INICIO
+    dfp = dfp[dfp["created"].notna() & (dfp["created"] >= START_TS)].copy()
 
     ASSUNTO_CLIENTE_NOVO = "Nova integração - Cliente novo"
     ASSUNTOS_ERROS = [
@@ -714,7 +761,6 @@ def render_onboarding(dfp: pd.DataFrame, ano_global: str, mes_global: str):
     c3.metric("Tickets com pendências", tickets_pendencias)
     c4.metric("Possíveis clientes", possiveis_clientes)
 
-    # 1) Cliente novo mensal com variação
     df_cli_novo = df_onb[df_onb["assunto_nome"].astype(str).str.contains("cliente novo", case=False, na=False)].copy()
     if not df_cli_novo.empty:
         serie = (
@@ -765,7 +811,6 @@ def render_onboarding(dfp: pd.DataFrame, ano_global: str, mes_global: str):
                     text=txt, showarrow=False, font=dict(size=12, color=color), yanchor="bottom"
                 )
 
-    # 2) Tipo de Integração
     def _tipo_from_assunto(s: str) -> str:
         s = (s or "").strip().lower()
         if "cliente novo" in s: return "Cliente novo"
@@ -927,6 +972,7 @@ def render_rotinas_manuais(dfp: pd.DataFrame, ano_global: str, mes_global: str):
           .copy()
     )
 
+    df = df[df["resolved"].notna() & (df["resolved"] >= START_TS)].copy()  # ✅ corte base visual
     df["mes_dt"] = df["resolved"].dt.to_period("M").dt.to_timestamp()
     df["assunto_nome"] = df["assunto_nome"].astype(str)
     df["assunto_canon"] = df["assunto_nome"].apply(_canon)
@@ -966,9 +1012,7 @@ def render_rotinas_manuais(dfp: pd.DataFrame, ano_global: str, mes_global: str):
     if not base_ts.empty and assuntos_canon:
         ts_mask_manual = base_ts["assunto_canon"].isin(assuntos_canon)
         ts_manuais = base_ts[ts_mask_manual].copy()
-        monthly_manual = (
-            ts_manuais.groupby("mes_dt")["qtd_encomendas"].sum().rename("Encomendas manuais")
-        )
+        monthly_manual = ts_manuais.groupby("mes_dt")["qtd_encomendas"].sum().rename("Encomendas manuais")
     else:
         ts_manuais = base_ts.iloc[0:0].copy()
         monthly_manual = pd.Series(dtype=float, name="Encomendas manuais")
@@ -981,15 +1025,15 @@ def render_rotinas_manuais(dfp: pd.DataFrame, ano_global: str, mes_global: str):
         base_ops["mes_dt"] if not base_ops.empty else pd.Series(dtype="datetime64[ns]"),
         base_ts["mes_dt"]  if not base_ts.empty  else pd.Series(dtype="datetime64[ns]")
     ]).max()
+
+    # ✅ eixo não começa antes do DATA_INICIO
+    min_m = max(min_m, START_TS)
     idx = pd.date_range(min_m, max_m, freq="MS")
 
     s_tds    = monthly_tds.reindex(idx, fill_value=0.0)
     s_manual = monthly_manual.reindex(idx, fill_value=0.0)
 
-    monthly = pd.concat([
-        s_manual.rename("Encomendas manuais"),
-        s_tds.rename("Encomendas TDS")
-    ], axis=1).reset_index().rename(columns={"index": "mes_dt"})
+    monthly = pd.concat([s_manual.rename("Encomendas manuais"), s_tds.rename("Encomendas TDS")], axis=1).reset_index().rename(columns={"index": "mes_dt"})
     monthly["mes_str"] = monthly["mes_dt"].dt.strftime("%b/%Y")
 
     fig = px.bar(
@@ -1008,14 +1052,8 @@ def render_rotinas_manuais(dfp: pd.DataFrame, ano_global: str, mes_global: str):
     total_tds    = float(s_tds.sum())
     total_manual = float(s_manual.sum())
 
-    df_donut = pd.DataFrame(
-        {"tipo": ["Encomendas manuais", "Encomendas TDS"],
-         "qtd":  [total_manual, total_tds]}
-    )
-    fig_donut = px.pie(
-        df_donut, values="qtd", names="tipo", hole=0.6,
-        title="Participação — Manuais vs TDS"
-    )
+    df_donut = pd.DataFrame({"tipo": ["Encomendas manuais", "Encomendas TDS"], "qtd": [total_manual, total_tds]})
+    fig_donut = px.pie(df_donut, values="qtd", names="tipo", hole=0.6, title="Participação — Manuais vs TDS")
     fig_donut.update_traces(textposition="inside", textinfo="percent+label")
     show_plot(fig_donut, "rotinas_manual_ts_assunto_donut_vs_tds_ops_extras", "TDS", ano_global, mes_global)
 
@@ -1078,11 +1116,11 @@ with colB:
 
 # ================= Coleta de dados ========================
 
+# ✅ Ajuste: incluir tickets fechados após DATA_INICIO, mesmo se criados antes
 def jql_projeto(project_key: str, ano_sel: str, mes_sel: str) -> str:
     base = (
         f'project = "{project_key}" AND ('
-        f'created >= "{DATA_INICIO}" '
-        f'OR resolutiondate >= "{DATA_INICIO}"'
+        f'created >= "{DATA_INICIO}" OR resolutiondate >= "{DATA_INICIO}"'
         f')'
     )
     return base + " ORDER BY created ASC"
@@ -1183,7 +1221,6 @@ for projeto, tab in zip(PROJETOS, tabs):
             else:
                 st.info("Rotinas Manuais disponível somente para Tech Support.")
         else:
-            # Geral
             render_criados_resolvidos(dfp, projeto, ano_global, mes_global)
             render_sla(dfp, _df_monthly_all, projeto, ano_global, mes_global)
             render_assunto(dfp, projeto, ano_global, mes_global)
