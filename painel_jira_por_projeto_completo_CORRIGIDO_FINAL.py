@@ -160,10 +160,13 @@ def normaliza_origem(s: str) -> str:
 
 
 def parse_qtd_encomendas(v) -> int:
+    # Correção para evitar IDs bilionários: garantimos que v não é uma lista/dict de sistema
     if isinstance(v, list):
         v = next((x for x in reversed(v) if x not in (None, "")), None)
     if v is None:
         return 0
+    if isinstance(v, dict):
+        v = v.get("value", 0)
     if isinstance(v, (int, float)):
         try:
             return int(round(float(v)))
@@ -171,10 +174,14 @@ def parse_qtd_encomendas(v) -> int:
             return 0
     s = str(v).strip().replace(".", "").replace(",", ".")
     try:
-        return int(round(float(s)))
+        # Se for uma string puramente numérica longa (como um ID), ignoramos se for maior que 1 milhão
+        val = int(round(float(s)))
+        return val if val < 1000000 else 0
     except Exception:
         digits = re.sub(r"[^\d]", "", s)
-        return int(digits) if digits else 0
+        if digits and len(digits) < 7: # Evita IDs de 10+ dígitos
+            return int(digits)
+        return 0
 
 
 def _canonical(s: str) -> str:
@@ -424,7 +431,7 @@ def render_sla_table(df_monthly_all: pd.DataFrame, projeto: str, ano_global: str
     titulo = f"OKR: {okr:.2f}% — Meta: {meta:.2f}%".replace(".", ",")
 
     show = dfm[["mes_str", "period_ts", "pct_dentro", "pct_fora"]].sort_values("period_ts")
-    show = show.rename(columns={"pct_dentro": "% Dentro SLA", "% Fora SLA": "pct_fora"})
+    show = show.rename(columns={"pct_dentro": "% Dentro SLA", "pct_fora": "pct_fora"})
     fig = px.bar(
         show,
         x="mes_str",
@@ -1080,11 +1087,9 @@ with colB:
 # ================= Coleta de dados (RESOLVE TUDO) ========================
 
 def jql_projeto(project_key: str, ano_sel: str, mes_sel: str) -> str:
-    # RECUPERADO: Lógica cirúrgica para garantir 2025 e manter submenus ativos
     base = f'project = "{project_key}"'
     if ano_sel != "Todos" and mes_sel != "Todos":
         data_foco = f"{ano_sel}-{int(mes_sel):02d}-01"
-        # Garante que ao filtrar o mês, buscamos exatamente os dados dele (evita sumiço de Manuais/Onboarding)
         proximo_mes = int(mes_sel) + 1
         ano_proximo = int(ano_sel)
         if proximo_mes > 12:
@@ -1093,9 +1098,7 @@ def jql_projeto(project_key: str, ano_sel: str, mes_sel: str) -> str:
         data_fim_mes = f"{ano_proximo}-{proximo_mes:02d}-01"
         base += f' AND created >= "{data_foco}" AND created < "{data_fim_mes}"'
     else:
-        # Se estiver em "Todos", usa a data de início histórica
         base += f' AND created >= "{DATA_INICIO}"'
-    # DESC garante que 2025 venha primeiro se a lista for muito longa
     return base + " ORDER BY created DESC"
 
 with st.spinner("Carregando TDS..."):
