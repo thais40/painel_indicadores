@@ -189,6 +189,7 @@ def _canonical(s: str) -> str:
 
 def aplicar_filtro_global(df_in: pd.DataFrame, col_dt: str, ano: str, mes: str) -> pd.DataFrame:
     out = df_in.copy()
+    if out.empty: return out
     if ano != "Todos":
         out = out[out[col_dt].dt.year == int(ano)]
     if mes != "Todos":
@@ -617,6 +618,7 @@ def render_encaminhamentos(dfp: pd.DataFrame, ano_global: str, mes_global: str):
 
 
 # ================= Módulos específicos ====================
+# ---- APP NE (TDS)
 def render_app_ne(dfp: pd.DataFrame, ano_global: str, mes_global: str):
     st.markdown("### 📱 APP NE")
     if dfp.empty:
@@ -1075,37 +1077,35 @@ with colA:
 with colB:
     mes_global = st.selectbox("Mês (global)", opcoes_mes, index=0, key="mes_global")
 
-# ================= Coleta de dados (CORRIGIDO) ========================
+# ================= Coleta de dados (RESOLVE TUDO) ========================
 
 def jql_projeto(project_key: str, ano_sel: str, mes_sel: str) -> str:
-    # Usamos ORDER BY created DESC para garantir que os mais novos venham primeiro nas 500 páginas.
-    # Se houver filtro de Ano/Mês, focamos a busca nesse período para ser mais performático.
+    # RECUPERADO: Lógica cirúrgica para garantir 2025 e manter submenus ativos
     base = f'project = "{project_key}"'
-    
     if ano_sel != "Todos" and mes_sel != "Todos":
         data_foco = f"{ano_sel}-{int(mes_sel):02d}-01"
-        # Busca a partir do mês selecionado
-        base += f' AND created >= "{data_foco}"'
+        # Garante que ao filtrar o mês, buscamos exatamente os dados dele (evita sumiço de Manuais/Onboarding)
+        proximo_mes = int(mes_sel) + 1
+        ano_proximo = int(ano_sel)
+        if proximo_mes > 12:
+            proximo_mes = 1
+            ano_proximo += 1
+        data_fim_mes = f"{ano_proximo}-{proximo_mes:02d}-01"
+        base += f' AND created >= "{data_foco}" AND created < "{data_fim_mes}"'
     else:
-        # Se estiver em "Todos", usa a data base histórica do painel
+        # Se estiver em "Todos", usa a data de início histórica
         base += f' AND created >= "{DATA_INICIO}"'
-        
+    # DESC garante que 2025 venha primeiro se a lista for muito longa
     return base + " ORDER BY created DESC"
 
-# Agora passamos os estados globais para a JQL para que a busca seja cirúrgica
-JQL_TDS = jql_projeto("TDS", ano_global, mes_global)
-JQL_INT = jql_projeto("INT", ano_global, mes_global)
-JQL_TINE = jql_projeto("TINE", ano_global, mes_global)
-JQL_INTEL = jql_projeto("INTEL", ano_global, mes_global)
-
 with st.spinner("Carregando TDS..."):
-    df_tds = buscar_issues("TDS", JQL_TDS)
+    df_tds = buscar_issues("TDS", jql_projeto("TDS", ano_global, mes_global))
 with st.spinner("Carregando INT..."):
-    df_int = buscar_issues("INT", JQL_INT)
+    df_int = buscar_issues("INT", jql_projeto("INT", ano_global, mes_global))
 with st.spinner("Carregando TINE..."):
-    df_tine = buscar_issues("TINE", JQL_TINE)
+    df_tine = buscar_issues("TINE", jql_projeto("TINE", ano_global, mes_global))
 with st.spinner("Carregando INTEL..."):
-    df_intel = buscar_issues("INTEL", JQL_INTEL)
+    df_intel = buscar_issues("INTEL", jql_projeto("INTEL", ano_global, mes_global))
 
 if all(d.empty for d in [df_tds, df_int, df_tine, df_intel]):
     st.warning("Sem dados do Jira em nenhum projeto (verifique credenciais e permissões).")
