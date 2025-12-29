@@ -1080,15 +1080,11 @@ with colB:
 
 def jql_projeto(project_key: str, ano_sel: str, mes_sel: str) -> str:
     base = (
-        f'project = "{project_key}" AND '
-        f'(created >= "{DATA_INICIO}" OR resolutiondate >= "{DATA_INICIO}")'
+        f'project = "{project_key}" AND ('
+        f'created >= "{DATA_INICIO}" '
+        f'OR resolutiondate >= "{DATA_INICIO}"'
+        f')'
     )
-    # (mantém seu filtro opcional por mês, se você um dia passar ano/mes pra cá)
-    if mes_sel != "Todos" and ano_sel != "Todos":
-        a = int(ano_sel)
-        m = int(mes_sel)
-        next_month_first = date(a + (1 if m == 12 else 0), (1 if m == 12 else m + 1), 1)
-        base += f' AND created < "{next_month_first:%Y-%m-%d}"'
     return base + " ORDER BY created ASC"
 
 JQL_TDS = jql_projeto("TDS", "Todos", "Todos")
