@@ -160,13 +160,10 @@ def normaliza_origem(s: str) -> str:
 
 
 def parse_qtd_encomendas(v) -> int:
-    # Correção para evitar IDs bilionários: garantimos que v não é uma lista/dict de sistema
     if isinstance(v, list):
         v = next((x for x in reversed(v) if x not in (None, "")), None)
     if v is None:
         return 0
-    if isinstance(v, dict):
-        v = v.get("value", 0)
     if isinstance(v, (int, float)):
         try:
             return int(round(float(v)))
@@ -174,14 +171,10 @@ def parse_qtd_encomendas(v) -> int:
             return 0
     s = str(v).strip().replace(".", "").replace(",", ".")
     try:
-        # Se for uma string puramente numérica longa (como um ID), ignoramos se for maior que 1 milhão
-        val = int(round(float(s)))
-        return val if val < 1000000 else 0
+        return int(round(float(s)))
     except Exception:
         digits = re.sub(r"[^\d]", "", s)
-        if digits and len(digits) < 7: # Evita IDs de 10+ dígitos
-            return int(digits)
-        return 0
+        return int(digits) if digits else 0
 
 
 def _canonical(s: str) -> str:
@@ -196,7 +189,6 @@ def _canonical(s: str) -> str:
 
 def aplicar_filtro_global(df_in: pd.DataFrame, col_dt: str, ano: str, mes: str) -> pd.DataFrame:
     out = df_in.copy()
-    if out.empty: return out
     if ano != "Todos":
         out = out[out[col_dt].dt.year == int(ano)]
     if mes != "Todos":
@@ -431,7 +423,7 @@ def render_sla_table(df_monthly_all: pd.DataFrame, projeto: str, ano_global: str
     titulo = f"OKR: {okr:.2f}% — Meta: {meta:.2f}%".replace(".", ",")
 
     show = dfm[["mes_str", "period_ts", "pct_dentro", "pct_fora"]].sort_values("period_ts")
-    show = show.rename(columns={"pct_dentro": "% Dentro SLA", "pct_fora": "pct_fora"})
+    show = show.rename(columns={"pct_dentro": "% Dentro SLA", "% Fora SLA": "pct_fora"})
     fig = px.bar(
         show,
         x="mes_str",
@@ -625,7 +617,6 @@ def render_encaminhamentos(dfp: pd.DataFrame, ano_global: str, mes_global: str):
 
 
 # ================= Módulos específicos ====================
-# ---- APP NE (TDS)
 def render_app_ne(dfp: pd.DataFrame, ano_global: str, mes_global: str):
     st.markdown("### 📱 APP NE")
     if dfp.empty:
@@ -905,6 +896,8 @@ def render_rotinas_manuais(dfp: pd.DataFrame, ano_global: str, mes_global: str):
     df["area_nome"] = df["area"].apply(lambda x: safe_get_value(x, "value"))
 
     df["qtd_encomendas"] = df[CAMPO_QTD_ENCOMENDAS].apply(parse_qtd_encomendas)
+    # evita outliers absurdos (ex.: 2.5B) por inconsistência de preenchimento/formato no Jira
+    df.loc[df["qtd_encomendas"] > 1_000_000, "qtd_encomendas"] = 0
     df = df[df["qtd_encomendas"] > 0].copy()
     if df.empty:
         st.info("Sem tickets com 'Quantidade de encomendas' > 0.")
@@ -914,18 +907,16 @@ def render_rotinas_manuais(dfp: pd.DataFrame, ano_global: str, mes_global: str):
     df["created"]  = _parse_dt_col(df.get("created"))
     df["updated"]  = _parse_dt_col(df.get("updated"))
 
+    # ✅ Rotinas manuais devem ser apuradas por mês de FECHAMENTO (resolved).
+    # Sem fallback para created/updated, para não "jogar" tickets abertos no mês.
+    df = df[df["resolved"].notna()].copy()
     df["_best_dt"] = df["resolved"]
-    m = df["_best_dt"].isna() & df["created"].notna()
-    df.loc[m, "_best_dt"] = df.loc[m, "created"]
-    m = df["_best_dt"].isna() & df["updated"].notna()
-    df.loc[m, "_best_dt"] = df.loc[m, "updated"]
-    df = df[df["_best_dt"].notna()].copy()
 
     df = (
         df.sort_values(["key", "_best_dt"])
           .groupby("key", as_index=False)
           .agg({
-              "_best_dt": "min",
+              "_best_dt": "max",   # último fechamento por ticket (caso reaberto)
               "qtd_encomendas": "max",
               "assunto_nome": "first",
               "summary": "first",
@@ -1084,31 +1075,46 @@ with colA:
 with colB:
     mes_global = st.selectbox("Mês (global)", opcoes_mes, index=0, key="mes_global")
 
-# ================= Coleta de dados (RESOLVE TUDO) ========================
+# ================= Coleta de dados (CORRIGIDO) ========================
 
 def jql_projeto(project_key: str, ano_sel: str, mes_sel: str) -> str:
     base = f'project = "{project_key}"'
+
+    # Se filtrar Ano/Mês, buscamos tickets CRIADOS no mês OU FECHADOS no mês
     if ano_sel != "Todos" and mes_sel != "Todos":
-        data_foco = f"{ano_sel}-{int(mes_sel):02d}-01"
-        proximo_mes = int(mes_sel) + 1
-        ano_proximo = int(ano_sel)
-        if proximo_mes > 12:
-            proximo_mes = 1
-            ano_proximo += 1
-        data_fim_mes = f"{ano_proximo}-{proximo_mes:02d}-01"
-        base += f' AND created >= "{data_foco}" AND created < "{data_fim_mes}"'
+        a = int(ano_sel)
+        m = int(mes_sel)
+        ini = date(a, m, 1)
+        fim = date(a + 1, 1, 1) if m == 12 else date(a, m + 1, 1)
+
+        base += (
+            f' AND ('
+            f' (created >= "{ini:%Y-%m-%d}" AND created < "{fim:%Y-%m-%d}")'
+            f' OR '
+            f' (resolutiondate >= "{ini:%Y-%m-%d}" AND resolutiondate < "{fim:%Y-%m-%d}")'
+            f' )'
+        )
     else:
-        base += f' AND created >= "{DATA_INICIO}"'
+        # Em "Todos": traz o histórico considerando abertura OU fechamento desde DATA_INICIO
+        base += f' AND (created >= "{DATA_INICIO}" OR resolutiondate >= "{DATA_INICIO}")'
+
+    # Ordena pelos mais novos (melhor pra paginação)
     return base + " ORDER BY created DESC"
 
+# Agora passamos os estados globais para a JQL para que a busca seja cirúrgica
+JQL_TDS = jql_projeto("TDS", ano_global, mes_global)
+JQL_INT = jql_projeto("INT", ano_global, mes_global)
+JQL_TINE = jql_projeto("TINE", ano_global, mes_global)
+JQL_INTEL = jql_projeto("INTEL", ano_global, mes_global)
+
 with st.spinner("Carregando TDS..."):
-    df_tds = buscar_issues("TDS", jql_projeto("TDS", ano_global, mes_global))
+    df_tds = buscar_issues("TDS", JQL_TDS)
 with st.spinner("Carregando INT..."):
-    df_int = buscar_issues("INT", jql_projeto("INT", ano_global, mes_global))
+    df_int = buscar_issues("INT", JQL_INT)
 with st.spinner("Carregando TINE..."):
-    df_tine = buscar_issues("TINE", jql_projeto("TINE", ano_global, mes_global))
+    df_tine = buscar_issues("TINE", JQL_TINE)
 with st.spinner("Carregando INTEL..."):
-    df_intel = buscar_issues("INTEL", jql_projeto("INTEL", ano_global, mes_global))
+    df_intel = buscar_issues("INTEL", JQL_INTEL)
 
 if all(d.empty for d in [df_tds, df_int, df_tine, df_intel]):
     st.warning("Sem dados do Jira em nenhum projeto (verifique credenciais e permissões).")
