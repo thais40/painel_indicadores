@@ -72,7 +72,7 @@ ASSUNTO_ALVO_APPNE = "Problemas no App NE - App EN"
 
 # 👉 ADIÇÃO: vamos buscar também o assignee
 JIRA_FIELDS_BASE = [
-    "key", "summary", "created", "updated", "resolutiondate", "resolved", "status", "issuetype",
+    "key", "summary", "created", "updated", "resolutiondate", "resolved", "statuscategorychangedate", "status", "issuetype",
     "assignee",  # <— NOVO
     CAMPO_AREA, CAMPO_N3, CAMPO_ORIGEM, CAMPO_QTD_ENCOMENDAS,
 ]
@@ -189,7 +189,6 @@ def _canonical(s: str) -> str:
 
 def aplicar_filtro_global(df_in: pd.DataFrame, col_dt: str, ano: str, mes: str) -> pd.DataFrame:
     out = df_in.copy()
-    if out.empty: return out
     if ano != "Todos":
         out = out[out[col_dt].dt.year == int(ano)]
     if mes != "Todos":
@@ -269,7 +268,7 @@ def buscar_issues(projeto: str, jql: str, max_pages: int = 500) -> pd.DataFrame:
                 "created": f.get("created"),
                 "updated": f.get("updated"),
                 "resolutiondate": f.get("resolutiondate"),
-                "resolved": f.get("resolved") or f.get("resolutiondate"),
+                "resolved": f.get("resolved") or f.get("resolutiondate") or f.get("statuscategorychangedate"),
                 "status": safe_get_value(f.get("status"), "name"),
                 "issuetype": f.get("issuetype"),
                 "assunto": assunto_val,
@@ -618,7 +617,6 @@ def render_encaminhamentos(dfp: pd.DataFrame, ano_global: str, mes_global: str):
 
 
 # ================= Módulos específicos ====================
-# ---- APP NE (TDS)
 def render_app_ne(dfp: pd.DataFrame, ano_global: str, mes_global: str):
     st.markdown("### 📱 APP NE")
     if dfp.empty:
@@ -898,6 +896,15 @@ def render_rotinas_manuais(dfp: pd.DataFrame, ano_global: str, mes_global: str):
     df["area_nome"] = df["area"].apply(lambda x: safe_get_value(x, "value"))
 
     df["qtd_encomendas"] = df[CAMPO_QTD_ENCOMENDAS].apply(parse_qtd_encomendas)
+    # evita outliers absurdos (ex.: 2.5B) por inconsistência de preenchimento/formato no Jira
+    df.loc[df["qtd_encomendas"] > 1_000_000, "qtd_encomendas"] = 0
+    # clamp adicional por distribuição (remove outliers residuais sem precisar adivinhar limite)
+    try:
+        _cap = float(df["qtd_encomendas"].quantile(0.995))
+        if _cap > 0:
+            df.loc[df["qtd_encomendas"] > _cap, "qtd_encomendas"] = 0
+    except Exception:
+        pass
     df = df[df["qtd_encomendas"] > 0].copy()
     if df.empty:
         st.info("Sem tickets com 'Quantidade de encomendas' > 0.")
@@ -907,26 +914,30 @@ def render_rotinas_manuais(dfp: pd.DataFrame, ano_global: str, mes_global: str):
     df["created"]  = _parse_dt_col(df.get("created"))
     df["updated"]  = _parse_dt_col(df.get("updated"))
 
-    df["_best_dt"] = df["resolved"]
-    m = df["_best_dt"].isna() & df["created"].notna()
-    df.loc[m, "_best_dt"] = df.loc[m, "created"]
-    m = df["_best_dt"].isna() & df["updated"].notna()
-    df.loc[m, "_best_dt"] = df.loc[m, "updated"]
-    df = df[df["_best_dt"].notna()].copy()
+    # ✅ Data de referência (mês a mês) como era antes:
+    # - se o ticket tem 'resolved', usamos o ÚLTIMO fechamento (caso reaberto)
+    # - se não tem 'resolved', usamos a data de criação (sem cair em 'updated', que distorce a série)
+    df["_resolved_dt"] = df["resolved"]
+    df["_created_dt"]  = df["created"]
 
     df = (
-        df.sort_values(["key", "_best_dt"])
+        df.sort_values(["key", "_resolved_dt"])
           .groupby("key", as_index=False)
           .agg({
-              "_best_dt": "min",
+              "_resolved_dt": "max",
+              "_created_dt": "min",
               "qtd_encomendas": "max",
               "assunto_nome": "first",
               "summary": "first",
               "area_nome": "first",
           })
-          .rename(columns={"_best_dt": "resolved"})
           .copy()
     )
+    df["_best_dt"] = df["_resolved_dt"]
+    m = df["_best_dt"].isna() & df["_created_dt"].notna()
+    df.loc[m, "_best_dt"] = df.loc[m, "_created_dt"]
+    df = df[df["_best_dt"].notna()].copy()
+    df = df.rename(columns={"_best_dt": "resolved"}).copy()
 
     df["mes_dt"] = df["resolved"].dt.to_period("M").dt.to_timestamp()
     df["assunto_nome"] = df["assunto_nome"].astype(str)
@@ -1077,36 +1088,48 @@ with colA:
 with colB:
     mes_global = st.selectbox("Mês (global)", opcoes_mes, index=0, key="mes_global")
 
-# ================= Coleta de dados (RESOLVE TUDO) ========================
+# ================= Coleta de dados (CORRIGIDO) ========================
 
 def jql_projeto(project_key: str, ano_sel: str, mes_sel: str) -> str:
-    # Base da busca: traz chamados do projeto respeitando a data mínima de início do painel
     base = f'project = "{project_key}"'
-    
+
+    # Se filtrar Ano/Mês, buscamos tickets CRIADOS no mês OU FECHADOS no mês
     if ano_sel != "Todos" and mes_sel != "Todos":
-        data_foco = f"{ano_sel}-{int(mes_sel):02d}-01"
-        proximo_mes = int(mes_sel) + 1
-        ano_proximo = int(ano_sel)
-        if proximo_mes > 12:
-            proximo_mes = 1
-            ano_proximo += 1
-        data_fim_mes = f"{ano_proximo}-{proximo_mes:02d}-01"
-        
-        # Filtra chamados que foram criados OU resolvidos no mês selecionado
-        # Isso garante que tickets antigos fechados agora apareçam
-        base += f' AND ((created >= "{data_foco}" AND created < "{data_fim_mes}") OR (resolved >= "{data_foco}" AND resolved < "{data_fim_mes}"))'
+        a = int(ano_sel)
+        m = int(mes_sel)
+        ini = date(a, m, 1)
+        fim = date(a + 1, 1, 1) if m == 12 else date(a, m + 1, 1)
+
+        base += (
+            f' AND ('
+            f' (created >= "{ini:%Y-%m-%d}" AND created < "{fim:%Y-%m-%d}")'
+            f' OR '
+            f' (resolutiondate >= "{ini:%Y-%m-%d}" AND resolutiondate < "{fim:%Y-%m-%d}")'
+            f' OR '
+            f' (statusCategoryChangedDate >= "{ini:%Y-%m-%d}" AND statusCategoryChangedDate < "{fim:%Y-%m-%d}")'
+            f' )'
+        )
     else:
-        # Se estiver em "Todos", busca tudo desde o início do painel
-        base += f' AND (created >= "{DATA_INICIO}" OR resolved >= "{DATA_INICIO}")'
-        
-    # ORDER BY created DESC garante que os dados de 2025 venham primeiro na fila
+        # Em "Todos": traz o histórico considerando abertura OU fechamento desde DATA_INICIO
+        base += f' AND (created >= "{DATA_INICIO}" OR resolutiondate >= "{DATA_INICIO}" OR statusCategoryChangedDate >= "{DATA_INICIO}")'
+
+    # Ordena pelos mais novos (melhor pra paginação)
     return base + " ORDER BY created DESC"
 
-with st.spinner("Carregando dados do Jira..."):
-    df_tds = buscar_issues("TDS", jql_projeto("TDS", ano_global, mes_global))
-    df_int = buscar_issues("INT", jql_projeto("INT", ano_global, mes_global))
-    df_tine = buscar_issues("TINE", jql_projeto("TINE", ano_global, mes_global))
-    df_intel = buscar_issues("INTEL", jql_projeto("INTEL", ano_global, mes_global))
+# Agora passamos os estados globais para a JQL para que a busca seja cirúrgica
+JQL_TDS = jql_projeto("TDS", ano_global, mes_global)
+JQL_INT = jql_projeto("INT", ano_global, mes_global)
+JQL_TINE = jql_projeto("TINE", ano_global, mes_global)
+JQL_INTEL = jql_projeto("INTEL", ano_global, mes_global)
+
+with st.spinner("Carregando TDS..."):
+    df_tds = buscar_issues("TDS", JQL_TDS)
+with st.spinner("Carregando INT..."):
+    df_int = buscar_issues("INT", JQL_INT)
+with st.spinner("Carregando TINE..."):
+    df_tine = buscar_issues("TINE", JQL_TINE)
+with st.spinner("Carregando INTEL..."):
+    df_intel = buscar_issues("INTEL", JQL_INTEL)
 
 if all(d.empty for d in [df_tds, df_int, df_tine, df_intel]):
     st.warning("Sem dados do Jira em nenhum projeto (verifique credenciais e permissões).")
