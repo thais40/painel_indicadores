@@ -40,7 +40,7 @@ if not EMAIL or not TOKEN:
 
 auth = HTTPBasicAuth(EMAIL, TOKEN)
 TZ_BR = ZoneInfo("America/Sao_Paulo")
-DATA_INICIO = "2024-08-01"
+DATA_INICIO = "2024-06-01"
 
 # ================= Campos / Constantes =====================
 SLA_CAMPOS = {
@@ -239,7 +239,7 @@ def _jira_search_jql(jql: str, next_page_token: Optional[str] = None, max_result
     return resp.json()
 
 
-@st.cache_data(show_spinner="🔄 Buscando dados do Jira...", ttl=None)
+@st.cache_data(show_spinner="🔄 Buscando dados do Jira...", ttl=60 * 30)
 def buscar_issues(projeto: str, jql: str, max_pages: int = 500) -> pd.DataFrame:
     todos, last_error = [], None
     next_token, page = None, 0
@@ -617,6 +617,7 @@ def render_encaminhamentos(dfp: pd.DataFrame, ano_global: str, mes_global: str):
 
 
 # ================= Módulos específicos ====================
+# ---- APP NE (TDS)
 def render_app_ne(dfp: pd.DataFrame, ano_global: str, mes_global: str):
     st.markdown("### 📱 APP NE")
     if dfp.empty:
@@ -896,15 +897,6 @@ def render_rotinas_manuais(dfp: pd.DataFrame, ano_global: str, mes_global: str):
     df["area_nome"] = df["area"].apply(lambda x: safe_get_value(x, "value"))
 
     df["qtd_encomendas"] = df[CAMPO_QTD_ENCOMENDAS].apply(parse_qtd_encomendas)
-    # evita outliers absurdos (ex.: 2.5B) por inconsistência de preenchimento/formato no Jira
-    df.loc[df["qtd_encomendas"] > 1_000_000, "qtd_encomendas"] = 0
-    # clamp adicional por distribuição (remove outliers residuais sem precisar adivinhar limite)
-    try:
-        _cap = float(df["qtd_encomendas"].quantile(0.995))
-        if _cap > 0:
-            df.loc[df["qtd_encomendas"] > _cap, "qtd_encomendas"] = 0
-    except Exception:
-        pass
     df = df[df["qtd_encomendas"] > 0].copy()
     if df.empty:
         st.info("Sem tickets com 'Quantidade de encomendas' > 0.")
@@ -914,30 +906,26 @@ def render_rotinas_manuais(dfp: pd.DataFrame, ano_global: str, mes_global: str):
     df["created"]  = _parse_dt_col(df.get("created"))
     df["updated"]  = _parse_dt_col(df.get("updated"))
 
-    # ✅ Data de referência (mês a mês) como era antes:
-    # - se o ticket tem 'resolved', usamos o ÚLTIMO fechamento (caso reaberto)
-    # - se não tem 'resolved', usamos a data de criação (sem cair em 'updated', que distorce a série)
-    df["_resolved_dt"] = df["resolved"]
-    df["_created_dt"]  = df["created"]
+    df["_best_dt"] = df["resolved"]
+    m = df["_best_dt"].isna() & df["created"].notna()
+    df.loc[m, "_best_dt"] = df.loc[m, "created"]
+    m = df["_best_dt"].isna() & df["updated"].notna()
+    df.loc[m, "_best_dt"] = df.loc[m, "updated"]
+    df = df[df["_best_dt"].notna()].copy()
 
     df = (
-        df.sort_values(["key", "_resolved_dt"])
+        df.sort_values(["key", "_best_dt"])
           .groupby("key", as_index=False)
           .agg({
-              "_resolved_dt": "max",
-              "_created_dt": "min",
+              "_best_dt": "min",
               "qtd_encomendas": "max",
               "assunto_nome": "first",
               "summary": "first",
               "area_nome": "first",
           })
+          .rename(columns={"_best_dt": "resolved"})
           .copy()
     )
-    df["_best_dt"] = df["_resolved_dt"]
-    m = df["_best_dt"].isna() & df["_created_dt"].notna()
-    df.loc[m, "_best_dt"] = df.loc[m, "_created_dt"]
-    df = df[df["_best_dt"].notna()].copy()
-    df = df.rename(columns={"_best_dt": "resolved"}).copy()
 
     df["mes_dt"] = df["resolved"].dt.to_period("M").dt.to_timestamp()
     df["assunto_nome"] = df["assunto_nome"].astype(str)
@@ -1088,37 +1076,24 @@ with colA:
 with colB:
     mes_global = st.selectbox("Mês (global)", opcoes_mes, index=0, key="mes_global")
 
-# ================= Coleta de dados (CORRIGIDO) ========================
+# ================= Coleta de dados ========================
 
 def jql_projeto(project_key: str, ano_sel: str, mes_sel: str) -> str:
-    base = f'project = "{project_key}"'
-
-    # Se filtrar Ano/Mês, buscamos tickets CRIADOS no mês OU FECHADOS no mês
-    if ano_sel != "Todos" and mes_sel != "Todos":
+    base = f'project = "{project_key}" AND created >= "{DATA_INICIO}"'
+    if mes_sel != "Todos" and ano_sel != "Todos":
         a = int(ano_sel)
         m = int(mes_sel)
-        ini = date(a, m, 1)
-        fim = date(a + 1, 1, 1) if m == 12 else date(a, m + 1, 1)
+        if m == 12:
+            next_month_first = date(a + 1, 1, 1)
+        else:
+            next_month_first = date(a, m + 1, 1)
+        base += f' AND created < "{next_month_first:%Y-%m-%d}"'
+    return base + " ORDER BY created ASC"
 
-        base += (
-            f' AND ('
-            f' (created >= "{ini:%Y-%m-%d}" AND created < "{fim:%Y-%m-%d}")'
-            f' OR '
-            f' (resolutiondate >= "{ini:%Y-%m-%d}" AND resolutiondate < "{fim:%Y-%m-%d}")'
-            f' )'
-        )
-    else:
-        # Em "Todos": traz o histórico considerando abertura OU fechamento desde DATA_INICIO
-        base += f' AND (created >= "{DATA_INICIO}" OR resolutiondate >= "{DATA_INICIO}")'
-
-    # Ordena pelos mais novos (melhor pra paginação)
-    return base + " ORDER BY created DESC"
-
-# Agora passamos os estados globais para a JQL para que a busca seja cirúrgica
-JQL_TDS = jql_projeto("TDS", ano_global, mes_global)
-JQL_INT = jql_projeto("INT", ano_global, mes_global)
-JQL_TINE = jql_projeto("TINE", ano_global, mes_global)
-JQL_INTEL = jql_projeto("INTEL", ano_global, mes_global)
+JQL_TDS = jql_projeto("TDS", "Todos", "Todos")
+JQL_INT = jql_projeto("INT", "Todos", "Todos")
+JQL_TINE = jql_projeto("TINE", "Todos", "Todos")
+JQL_INTEL = jql_projeto("INTEL", "Todos", "Todos")
 
 with st.spinner("Carregando TDS..."):
     df_tds = buscar_issues("TDS", JQL_TDS)
