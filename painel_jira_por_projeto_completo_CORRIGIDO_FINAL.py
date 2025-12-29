@@ -1080,31 +1080,32 @@ with colB:
 # ================= Coleta de dados (RESOLVE TUDO) ========================
 
 def jql_projeto(project_key: str, ano_sel: str, mes_sel: str) -> str:
-    # RECUPERADO: Lógica cirúrgica para garantir 2025 e manter submenus ativos
+    # Base da busca: traz chamados do projeto respeitando a data mínima de início do painel
     base = f'project = "{project_key}"'
+    
     if ano_sel != "Todos" and mes_sel != "Todos":
         data_foco = f"{ano_sel}-{int(mes_sel):02d}-01"
-        # Garante que ao filtrar o mês, buscamos exatamente os dados dele (evita sumiço de Manuais/Onboarding)
         proximo_mes = int(mes_sel) + 1
         ano_proximo = int(ano_sel)
         if proximo_mes > 12:
             proximo_mes = 1
             ano_proximo += 1
         data_fim_mes = f"{ano_proximo}-{proximo_mes:02d}-01"
-        base += f' AND created >= "{data_foco}" AND created < "{data_fim_mes}"'
+        
+        # Filtra chamados que foram criados OU resolvidos no mês selecionado
+        # Isso garante que tickets antigos fechados agora apareçam
+        base += f' AND ((created >= "{data_foco}" AND created < "{data_fim_mes}") OR (resolved >= "{data_foco}" AND resolved < "{data_fim_mes}"))'
     else:
-        # Se estiver em "Todos", usa a data de início histórica
-        base += f' AND created >= "{DATA_INICIO}"'
-    # DESC garante que 2025 venha primeiro se a lista for muito longa
+        # Se estiver em "Todos", busca tudo desde o início do painel
+        base += f' AND (created >= "{DATA_INICIO}" OR resolved >= "{DATA_INICIO}")'
+        
+    # ORDER BY created DESC garante que os dados de 2025 venham primeiro na fila
     return base + " ORDER BY created DESC"
 
-with st.spinner("Carregando TDS..."):
+with st.spinner("Carregando dados do Jira..."):
     df_tds = buscar_issues("TDS", jql_projeto("TDS", ano_global, mes_global))
-with st.spinner("Carregando INT..."):
     df_int = buscar_issues("INT", jql_projeto("INT", ano_global, mes_global))
-with st.spinner("Carregando TINE..."):
     df_tine = buscar_issues("TINE", jql_projeto("TINE", ano_global, mes_global))
-with st.spinner("Carregando INTEL..."):
     df_intel = buscar_issues("INTEL", jql_projeto("INTEL", ano_global, mes_global))
 
 if all(d.empty for d in [df_tds, df_int, df_tine, df_intel]):
