@@ -268,7 +268,18 @@ def buscar_issues(projeto: str, jql: str, max_pages: int = 500) -> pd.DataFrame:
                 "created": f.get("created"),
                 "updated": f.get("updated"),
                 "resolutiondate": f.get("resolutiondate"),
-                "resolved": f.get("resolved") or f.get("resolutiondate") or f.get("statuscategorychangedate"),
+                "resolved": (
+                    f.get("resolved")
+                    or f.get("resolutiondate")
+                    or f.get("statuscategorychangedate")
+                    or (
+                        (f.get("updated") if (
+                            isinstance(f.get("status"), dict)
+                            and isinstance((f.get("status") or {}).get("statusCategory"), dict)
+                            and ((f.get("status") or {}).get("statusCategory") or {}).get("key") == "done"
+                        ) else None)
+                    )
+                ),
                 "status": safe_get_value(f.get("status"), "name"),
                 "issuetype": f.get("issuetype"),
                 "assunto": assunto_val,
@@ -1111,7 +1122,7 @@ def jql_projeto(project_key: str, ano_sel: str, mes_sel: str) -> str:
         )
     else:
         # Em "Todos": traz o histórico considerando abertura OU fechamento desde DATA_INICIO
-        base += f' AND (created >= "{DATA_INICIO}" OR resolutiondate >= "{DATA_INICIO}" OR statusCategoryChangedDate >= "{DATA_INICIO}")'
+        base += f' AND (created >= "{DATA_INICIO}" OR resolutiondate >= "{DATA_INICIO}" OR statusCategoryChangedDate >= "{DATA_INICIO}" OR (statusCategory = Done AND updated >= "{DATA_INICIO}"))'
 
     # Ordena pelos mais novos (melhor pra paginação)
     return base + " ORDER BY created DESC"
