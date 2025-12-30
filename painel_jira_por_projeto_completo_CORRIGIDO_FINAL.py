@@ -330,10 +330,17 @@ def build_monthly_tables(df_all: pd.DataFrame) -> pd.DataFrame:
     base["per_created"] = base["created"].dt.to_period("M")
     base["per_resolved"] = base["resolved"].dt.to_period("M")
 
+    # ✅ Mantém o SLA como no arquivo original, mas respeita DATA_INICIO no recorte do painel:
+    # - "Criados": só a partir de DATA_INICIO
+    # - "Resolvidos"/SLA: só a partir de DATA_INICIO
+    _dt_inicio = pd.to_datetime(DATA_INICIO)
+    base_created = base[base["created"].notna() & (base["created"] >= _dt_inicio)].copy()
+    base_resolved = base[base["resolved"].notna() & (base["resolved"] >= _dt_inicio)].copy()
+
     created = (
-        base.groupby(["projeto", "per_created"]).size().reset_index(name="Criados").rename(columns={"per_created": "period"})
+        base_created.groupby(["projeto", "per_created"]).size().reset_index(name="Criados").rename(columns={"per_created": "period"})
     )
-    res = base[base["resolved"].notna()].copy()
+    res = base_resolved.copy()
     res["dentro_sla"] = res["sla_raw"].apply(dentro_sla_from_raw).fillna(False)
     resolved = (
         res.groupby(["projeto", "per_resolved"]).agg(Resolvidos=("key", "count"), Dentro=("dentro_sla", "sum")).reset_index().rename(columns={"per_resolved": "period"})
