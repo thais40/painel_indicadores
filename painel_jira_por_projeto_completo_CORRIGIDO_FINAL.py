@@ -272,13 +272,7 @@ def buscar_issues(projeto: str, jql: str, max_pages: int = 500) -> pd.DataFrame:
                     f.get("resolved")
                     or f.get("resolutiondate")
                     or f.get("statuscategorychangedate")
-                    or (
-                        (f.get("updated") if (
-                            isinstance(f.get("status"), dict)
-                            and isinstance((f.get("status") or {}).get("statusCategory"), dict)
-                            and ((f.get("status") or {}).get("statusCategory") or {}).get("key") == "done"
-                        ) else None)
-                    )
+                    # ✅ Removido o fallback 'updated' para garantir a integridade do SLA
                 ),
                 "status": safe_get_value(f.get("status"), "name"),
                 "issuetype": f.get("issuetype"),
@@ -319,15 +313,11 @@ def build_monthly_tables(df_all: pd.DataFrame) -> pd.DataFrame:
     base = df_all.copy()
     base["per_created"] = base["created"].dt.to_period("M")
     base["per_resolved"] = base["resolved"].dt.to_period("M")
-    # ✅ Respeita DATA_INICIO: criados contam a partir de DATA_INICIO; resolvidos contam a partir de DATA_INICIO
-    _dt_inicio = pd.to_datetime(DATA_INICIO)
-    base_created = base[base["created"].notna() & (base["created"] >= _dt_inicio)].copy()
-    base_resolved = base[base["resolved"].notna() & (base["resolved"] >= _dt_inicio)].copy()
 
     created = (
-        base_created.groupby(["projeto", "per_created"]).size().reset_index(name="Criados").rename(columns={"per_created": "period"})
+        base.groupby(["projeto", "per_created"]).size().reset_index(name="Criados").rename(columns={"per_created": "period"})
     )
-    res = base_resolved.copy()
+    res = base[base["resolved"].notna()].copy()
     res["dentro_sla"] = res["sla_raw"].apply(dentro_sla_from_raw).fillna(False)
     resolved = (
         res.groupby(["projeto", "per_resolved"]).agg(Resolvidos=("key", "count"), Dentro=("dentro_sla", "sum")).reset_index().rename(columns={"per_resolved": "period"})
@@ -388,16 +378,6 @@ def render_criados_resolvidos(dfp: pd.DataFrame, projeto: str, ano_global: str, 
         st.info("Sem dados de criação/resolução para montar a série.")
         return
 
-    # ✅ Respeita DATA_INICIO: série começa em DATA_INICIO (criados por created; resolvidos por resolved)
-    _dt_inicio = pd.to_datetime(DATA_INICIO)
-    if not cdf.empty:
-        cdf = cdf[cdf["created"].notna() & (cdf["created"] >= _dt_inicio)].copy()
-    if not rdf.empty:
-        rdf = rdf[rdf["resolved"].notna() & (rdf["resolved"] >= _dt_inicio)].copy()
-    if cdf.empty and rdf.empty:
-        st.info("Sem dados a partir de DATA_INICIO para montar a série.")
-        return
-
     mins = [x["mes_dt"].min() for x in (cdf, rdf) if not x.empty]
     maxs = [x["mes_dt"].max() for x in (cdf, rdf) if not x.empty]
     idx = pd.date_range(min(mins), max(maxs), freq="MS")
@@ -448,7 +428,7 @@ def render_sla_table(df_monthly_all: pd.DataFrame, projeto: str, ano_global: str
     titulo = f"OKR: {okr:.2f}% — Meta: {meta:.2f}%".replace(".", ",")
 
     show = dfm[["mes_str", "period_ts", "pct_dentro", "pct_fora"]].sort_values("period_ts")
-    show = show.rename(columns={"pct_dentro": "% Dentro SLA", "% Fora SLA": "pct_fora"})
+    show = show.rename(columns={"pct_dentro": "% Dentro SLA", "pct_fora": "pct_fora"})
     fig = px.bar(
         show,
         x="mes_str",
@@ -1113,30 +1093,28 @@ with colA:
 with colB:
     mes_global = st.selectbox("Mês (global)", opcoes_mes, index=0, key="mes_global")
 
-# ================= Coleta de dados (CORRIGIDO) ========================
+# ================= Coleta de dados (REVISADO) ========================
 
 def jql_projeto(project_key: str, ano_sel: str, mes_sel: str) -> str:
     base = f'project = "{project_key}"'
 
-    # Se filtrar Ano/Mês, buscamos tickets CRIADOS no mês OU FECHADOS no mês
     if ano_sel != "Todos" and mes_sel != "Todos":
         a = int(ano_sel)
         m = int(mes_sel)
         ini = date(a, m, 1)
         fim = date(a + 1, 1, 1) if m == 12 else date(a, m + 1, 1)
 
+        # ✅ Filtra estritamente chamados que foram CRIADOS ou RESOLVIDOS no mês selecionado
         base += (
             f' AND ('
             f' (created >= "{ini:%Y-%m-%d}" AND created < "{fim:%Y-%m-%d}")'
             f' OR '
             f' (resolutiondate >= "{ini:%Y-%m-%d}" AND resolutiondate < "{fim:%Y-%m-%d}")'
-            f' OR '
-            f' (statusCategoryChangedDate >= "{ini:%Y-%m-%d}" AND statusCategoryChangedDate < "{fim:%Y-%m-%d}")'
             f' )'
         )
     else:
-        # Em "Todos": traz o histórico considerando abertura OU fechamento desde DATA_INICIO
-        base += f' AND (created >= "{DATA_INICIO}" OR resolutiondate >= "{DATA_INICIO}" OR statusCategoryChangedDate >= "{DATA_INICIO}" OR (statusCategory = Done AND updated >= "{DATA_INICIO}"))'
+        # ✅ Garante que NADA anterior à DATA_INICIO seja trazido, independente de atualizações
+        base += f' AND (created >= "{DATA_INICIO}" OR resolutiondate >= "{DATA_INICIO}")'
 
     # Ordena pelos mais novos (melhor pra paginação)
     return base + " ORDER BY created DESC"
