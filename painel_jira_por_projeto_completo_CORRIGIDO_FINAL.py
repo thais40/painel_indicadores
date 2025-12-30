@@ -319,11 +319,15 @@ def build_monthly_tables(df_all: pd.DataFrame) -> pd.DataFrame:
     base = df_all.copy()
     base["per_created"] = base["created"].dt.to_period("M")
     base["per_resolved"] = base["resolved"].dt.to_period("M")
+    # ✅ Respeita DATA_INICIO: criados contam a partir de DATA_INICIO; resolvidos contam a partir de DATA_INICIO
+    _dt_inicio = pd.to_datetime(DATA_INICIO)
+    base_created = base[base["created"].notna() & (base["created"] >= _dt_inicio)].copy()
+    base_resolved = base[base["resolved"].notna() & (base["resolved"] >= _dt_inicio)].copy()
 
     created = (
-        base.groupby(["projeto", "per_created"]).size().reset_index(name="Criados").rename(columns={"per_created": "period"})
+        base_created.groupby(["projeto", "per_created"]).size().reset_index(name="Criados").rename(columns={"per_created": "period"})
     )
-    res = base[base["resolved"].notna()].copy()
+    res = base_resolved.copy()
     res["dentro_sla"] = res["sla_raw"].apply(dentro_sla_from_raw).fillna(False)
     resolved = (
         res.groupby(["projeto", "per_resolved"]).agg(Resolvidos=("key", "count"), Dentro=("dentro_sla", "sum")).reset_index().rename(columns={"per_resolved": "period"})
@@ -382,6 +386,16 @@ def render_criados_resolvidos(dfp: pd.DataFrame, projeto: str, ano_global: str, 
 
     if cdf.empty and rdf.empty:
         st.info("Sem dados de criação/resolução para montar a série.")
+        return
+
+    # ✅ Respeita DATA_INICIO: série começa em DATA_INICIO (criados por created; resolvidos por resolved)
+    _dt_inicio = pd.to_datetime(DATA_INICIO)
+    if not cdf.empty:
+        cdf = cdf[cdf["created"].notna() & (cdf["created"] >= _dt_inicio)].copy()
+    if not rdf.empty:
+        rdf = rdf[rdf["resolved"].notna() & (rdf["resolved"] >= _dt_inicio)].copy()
+    if cdf.empty and rdf.empty:
+        st.info("Sem dados a partir de DATA_INICIO para montar a série.")
         return
 
     mins = [x["mes_dt"].min() for x in (cdf, rdf) if not x.empty]
