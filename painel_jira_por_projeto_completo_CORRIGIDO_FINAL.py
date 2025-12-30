@@ -108,8 +108,11 @@ if "last_update" not in st.session_state:
 
 st.markdown('<div class="update-row">', unsafe_allow_html=True)
 if st.button("🔄 Atualizar dados"):
-    st.cache_data.clear()
     st.session_state["last_update"] = now_br_str()
+    # limpa cache em memória (session_state) para forçar nova busca no Jira
+    for k in ["df_TDS","df_INT","df_TINE","df_INTEL"]:
+        if k in st.session_state:
+            del st.session_state[k]
     st.rerun()
 st.markdown(
     f'<span class="update-caption">🕒 Última atualização: {st.session_state["last_update"]} (BRT)</span>',
@@ -239,7 +242,6 @@ def _jira_search_jql(jql: str, next_page_token: Optional[str] = None, max_result
     return resp.json()
 
 
-@st.cache_data(show_spinner="🔄 Buscando dados do Jira...", ttl=None)
 def buscar_issues(projeto: str, jql: str, max_pages: int = 500) -> pd.DataFrame:
     todos, last_error = [], None
     next_token, page = None, 0
@@ -268,16 +270,23 @@ def buscar_issues(projeto: str, jql: str, max_pages: int = 500) -> pd.DataFrame:
                 "created": f.get("created"),
                 "updated": f.get("updated"),
                 "resolutiondate": f.get("resolutiondate"),
-                "resolved": (
+                "resolved": f.get("resolved") or f.get("resolutiondate"),
+                # ✅ Data de "fechamento" (para volumes) mesmo quando não há resolutiondate:
+                # 1) resolutiondate/resolved (se existir)
+                # 2) statuscategorychangedate (quando entra em Done)
+                # 3) updated (somente se statusCategory = Done)
+                "closed_dt": (
                     f.get("resolved")
                     or f.get("resolutiondate")
                     or f.get("statuscategorychangedate")
                     or (
-                        (f.get("updated") if (
+                        f.get("updated")
+                        if (
                             isinstance(f.get("status"), dict)
                             and isinstance((f.get("status") or {}).get("statusCategory"), dict)
                             and ((f.get("status") or {}).get("statusCategory") or {}).get("key") == "done"
-                        ) else None)
+                        )
+                        else None
                     )
                 ),
                 "status": safe_get_value(f.get("status"), "name"),
@@ -302,12 +311,13 @@ def buscar_issues(projeto: str, jql: str, max_pages: int = 500) -> pd.DataFrame:
         return dfp
 
     if not dfp.empty:
-        for c in ("created", "resolved", "resolutiondate", "updated"):
+        for c in ("created", "resolved", "resolutiondate", "updated", "closed_dt"):
             dfp[c] = (
                 pd.to_datetime(dfp[c], errors="coerce", utc=True).dt.tz_convert(TZ_BR).dt.tz_localize(None)
             )
         dfp["mes_created"] = dfp["created"].dt.to_period("M").dt.to_timestamp()
         dfp["mes_resolved"] = dfp["resolved"].dt.to_period("M").dt.to_timestamp()
+        dfp["mes_closed"] = dfp["closed_dt"].dt.to_period("M").dt.to_timestamp()
     return dfp
 
 
@@ -319,24 +329,14 @@ def build_monthly_tables(df_all: pd.DataFrame) -> pd.DataFrame:
     base = df_all.copy()
     base["per_created"] = base["created"].dt.to_period("M")
     base["per_resolved"] = base["resolved"].dt.to_period("M")
-    # ✅ Respeita DATA_INICIO: criados contam a partir de DATA_INICIO; resolvidos contam a partir de DATA_INICIO
-    _dt_inicio = pd.to_datetime(DATA_INICIO)
-    base_created = base[base["created"].notna() & (base["created"] >= _dt_inicio)].copy()
-    base_resolved = base[base["resolved"].notna() & (base["resolved"] >= _dt_inicio)].copy()
 
     created = (
-        base_created.groupby(["projeto", "per_created"]).size().reset_index(name="Criados").rename(columns={"per_created": "period"})
+        base.groupby(["projeto", "per_created"]).size().reset_index(name="Criados").rename(columns={"per_created": "period"})
     )
-    res = base_resolved.copy()
-    # ✅ SLA: não penalizar tickets sem dado de SLA (ex.: workflows sem resolutiondate/SLA vazio)
-    # dentro_sla_from_raw -> True/False/None. None = "não mensurável" e deve sair do denominador.
-    res["dentro_sla"] = res["sla_raw"].apply(dentro_sla_from_raw)
-    res_valid = res[res["dentro_sla"].notna()].copy()
+    res = base[base["resolved"].notna()].copy()
+    res["dentro_sla"] = res["sla_raw"].apply(dentro_sla_from_raw).fillna(False)
     resolved = (
-        res_valid.groupby(["projeto", "per_resolved"])
-                 .agg(Resolvidos=("key", "count"), Dentro=("dentro_sla", lambda s: int(s.astype(bool).sum())))
-                 .reset_index()
-                 .rename(columns={"per_resolved": "period"})
+        res.groupby(["projeto", "per_resolved"]).agg(Resolvidos=("key", "count"), Dentro=("dentro_sla", "sum")).reset_index().rename(columns={"per_resolved": "period"})
     )
 
     monthly = pd.merge(created, resolved, how="outer", on=["projeto", "period"]).fillna(0)
@@ -368,7 +368,7 @@ def render_criados_resolvidos(dfp: pd.DataFrame, projeto: str, ano_global: str, 
 
     df = dfp.copy()
     created  = pd.to_datetime(df.get("created"),  errors="coerce")
-    resolved = pd.to_datetime(df.get("resolved"), errors="coerce")
+    resolved = pd.to_datetime(df.get("closed_dt"), errors="coerce")
 
     cdf = (
         df[created.notna()]
@@ -394,7 +394,7 @@ def render_criados_resolvidos(dfp: pd.DataFrame, projeto: str, ano_global: str, 
         st.info("Sem dados de criação/resolução para montar a série.")
         return
 
-    # ✅ Respeita DATA_INICIO: série começa em DATA_INICIO (criados por created; resolvidos por resolved)
+    # ✅ Respeita DATA_INICIO no eixo: criados por created, resolvidos por closed_dt
     _dt_inicio = pd.to_datetime(DATA_INICIO)
     if not cdf.empty:
         cdf = cdf[cdf["created"].notna() & (cdf["created"] >= _dt_inicio)].copy()
@@ -494,9 +494,7 @@ def render_sla_fora_detalhes(dfp, projeto: str, ano_global: str, mes_global: str
 
     base = df[df["resolved"].notna()].copy()
     base["_dentro_sla_calc"] = base["sla_raw"].apply(dentro_sla_from_raw)
-    # ✅ Só considera fora SLA quando o SLA é mensurável (True/False). None = sem métrica, não entra na lista.
-    base = base[base["_dentro_sla_calc"].notna()].copy()
-    base["_fora_sla"] = (~base["_dentro_sla_calc"].astype(bool))
+    base["_fora_sla"] = (~base["_dentro_sla_calc"].fillna(False).astype(bool))  # None => Fora
 
     base["mes_dt"] = base["resolved"].dt.to_period("M").dt.to_timestamp()
     base = aplicar_filtro_global(base, "mes_dt", ano_global, mes_global)
@@ -929,15 +927,6 @@ def render_rotinas_manuais(dfp: pd.DataFrame, ano_global: str, mes_global: str):
     df["area_nome"] = df["area"].apply(lambda x: safe_get_value(x, "value"))
 
     df["qtd_encomendas"] = df[CAMPO_QTD_ENCOMENDAS].apply(parse_qtd_encomendas)
-    # evita outliers absurdos (ex.: 2.5B) por inconsistência de preenchimento/formato no Jira
-    df.loc[df["qtd_encomendas"] > 1_000_000, "qtd_encomendas"] = 0
-    # clamp adicional por distribuição (remove outliers residuais sem precisar adivinhar limite)
-    try:
-        _cap = float(df["qtd_encomendas"].quantile(0.995))
-        if _cap > 0:
-            df.loc[df["qtd_encomendas"] > _cap, "qtd_encomendas"] = 0
-    except Exception:
-        pass
     df = df[df["qtd_encomendas"] > 0].copy()
     if df.empty:
         st.info("Sem tickets com 'Quantidade de encomendas' > 0.")
@@ -947,30 +936,26 @@ def render_rotinas_manuais(dfp: pd.DataFrame, ano_global: str, mes_global: str):
     df["created"]  = _parse_dt_col(df.get("created"))
     df["updated"]  = _parse_dt_col(df.get("updated"))
 
-    # ✅ Data de referência (mês a mês) como era antes:
-    # - se o ticket tem 'resolved', usamos o ÚLTIMO fechamento (caso reaberto)
-    # - se não tem 'resolved', usamos a data de criação (sem cair em 'updated', que distorce a série)
-    df["_resolved_dt"] = df["resolved"]
-    df["_created_dt"]  = df["created"]
+    df["_best_dt"] = df["resolved"]
+    m = df["_best_dt"].isna() & df["created"].notna()
+    df.loc[m, "_best_dt"] = df.loc[m, "created"]
+    m = df["_best_dt"].isna() & df["updated"].notna()
+    df.loc[m, "_best_dt"] = df.loc[m, "updated"]
+    df = df[df["_best_dt"].notna()].copy()
 
     df = (
-        df.sort_values(["key", "_resolved_dt"])
+        df.sort_values(["key", "_best_dt"])
           .groupby("key", as_index=False)
           .agg({
-              "_resolved_dt": "max",
-              "_created_dt": "min",
+              "_best_dt": "min",
               "qtd_encomendas": "max",
               "assunto_nome": "first",
               "summary": "first",
               "area_nome": "first",
           })
+          .rename(columns={"_best_dt": "resolved"})
           .copy()
     )
-    df["_best_dt"] = df["_resolved_dt"]
-    m = df["_best_dt"].isna() & df["_created_dt"].notna()
-    df.loc[m, "_best_dt"] = df.loc[m, "_created_dt"]
-    df = df[df["_best_dt"].notna()].copy()
-    df = df.rename(columns={"_best_dt": "resolved"}).copy()
 
     df["mes_dt"] = df["resolved"].dt.to_period("M").dt.to_timestamp()
     df["assunto_nome"] = df["assunto_nome"].astype(str)
@@ -1126,27 +1111,34 @@ with colB:
 def jql_projeto(project_key: str, ano_sel: str, mes_sel: str) -> str:
     base = f'project = "{project_key}"'
 
-    # Se filtrar Ano/Mês, buscamos tickets CRIADOS no mês OU FECHADOS no mês
+    # ✅ Sempre respeita DATA_INICIO para o recorte do painel, mas sem perder tickets
+    # fechados depois (mesmo que criados antes).
     if ano_sel != "Todos" and mes_sel != "Todos":
         a = int(ano_sel)
         m = int(mes_sel)
         ini = date(a, m, 1)
         fim = date(a + 1, 1, 1) if m == 12 else date(a, m + 1, 1)
-
         base += (
             f' AND ('
             f' (created >= "{ini:%Y-%m-%d}" AND created < "{fim:%Y-%m-%d}")'
-            f' OR '
+            f' OR ' 
             f' (resolutiondate >= "{ini:%Y-%m-%d}" AND resolutiondate < "{fim:%Y-%m-%d}")'
-            f' OR '
+            f' OR ' 
             f' (statusCategoryChangedDate >= "{ini:%Y-%m-%d}" AND statusCategoryChangedDate < "{fim:%Y-%m-%d}")'
+            f' OR ' 
+            f' (statusCategory = Done AND updated >= "{ini:%Y-%m-%d}" AND updated < "{fim:%Y-%m-%d}")'
             f' )'
         )
     else:
-        # Em "Todos": traz o histórico considerando abertura OU fechamento desde DATA_INICIO
-        base += f' AND (created >= "{DATA_INICIO}" OR resolutiondate >= "{DATA_INICIO}" OR statusCategoryChangedDate >= "{DATA_INICIO}" OR (statusCategory = Done AND updated >= "{DATA_INICIO}"))'
+        base += (
+            f' AND ('
+            f' created >= "{DATA_INICIO}"'
+            f' OR resolutiondate >= "{DATA_INICIO}"'
+            f' OR statusCategoryChangedDate >= "{DATA_INICIO}"'
+            f' OR (statusCategory = Done AND updated >= "{DATA_INICIO}")'
+            f' )'
+        )
 
-    # Ordena pelos mais novos (melhor pra paginação)
     return base + " ORDER BY created DESC"
 
 # Agora passamos os estados globais para a JQL para que a busca seja cirúrgica
@@ -1155,14 +1147,19 @@ JQL_INT = jql_projeto("INT", ano_global, mes_global)
 JQL_TINE = jql_projeto("TINE", ano_global, mes_global)
 JQL_INTEL = jql_projeto("INTEL", ano_global, mes_global)
 
-with st.spinner("Carregando TDS..."):
-    df_tds = buscar_issues("TDS", JQL_TDS)
-with st.spinner("Carregando INT..."):
-    df_int = buscar_issues("INT", JQL_INT)
-with st.spinner("Carregando TINE..."):
-    df_tine = buscar_issues("TINE", JQL_TINE)
-with st.spinner("Carregando INTEL..."):
-    df_intel = buscar_issues("INTEL", JQL_INTEL)
+def _get_or_fetch(proj: str, jql: str):
+    key = f"df_{proj}"
+    if key in st.session_state and isinstance(st.session_state.get(key), pd.DataFrame):
+        return st.session_state[key]
+    with st.spinner(f"Carregando {proj}..."):
+        dfp = buscar_issues(proj, jql)
+    st.session_state[key] = dfp
+    return dfp
+
+df_tds   = _get_or_fetch("TDS",   JQL_TDS)
+df_int   = _get_or_fetch("INT",   JQL_INT)
+df_tine  = _get_or_fetch("TINE",  JQL_TINE)
+df_intel = _get_or_fetch("INTEL", JQL_INTEL)
 
 if all(d.empty for d in [df_tds, df_int, df_tine, df_intel]):
     st.warning("Sem dados do Jira em nenhum projeto (verifique credenciais e permissões).")
@@ -1215,6 +1212,8 @@ for projeto, tab in zip(PROJETOS, tabs):
 
         dfp["mes_created"] = pd.to_datetime(dfp["created"], errors="coerce")
         dfp["mes_resolved"] = pd.to_datetime(dfp["resolved"], errors="coerce")
+        if "closed_dt" in dfp.columns:
+            dfp["mes_closed"] = pd.to_datetime(dfp["closed_dt"], errors="coerce")
         dfp = ensure_assunto_nome(dfp, projeto)
 
         visao = st.selectbox("Visão", opcoes, key=f"visao_{projeto}")
