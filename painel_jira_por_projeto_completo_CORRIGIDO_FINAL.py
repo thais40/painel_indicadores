@@ -677,9 +677,9 @@ def render_app_ne(dfp: pd.DataFrame, ano_global: str, mes_global: str):
     df_app["origem_cat"]  = df_app["origem_nome"].apply(normaliza_origem)
 
     df_app["mes_dt"] = df_app["mes_created"].dt.to_period("M").dt.to_timestamp()
-    # ✅ Respeita DATA_INICIO no APP NE
+    # ✅ Respeita DATA_INICIO no APP NE (comparando pelo created)
     _dt_inicio = pd.to_datetime(DATA_INICIO)
-    df_app = df_app[df_app["mes_dt"].notna() & (df_app["mes_dt"] >= _dt_inicio)].copy()
+    df_app = df_app[df_app["mes_created"].notna() & (df_app["mes_created"] >= _dt_inicio)].copy()
     df_app = aplicar_filtro_global(df_app, "mes_dt", ano_global, mes_global)
     if df_app.empty:
         st.info("Sem dados para exibir com os filtros selecionados.")
@@ -742,7 +742,11 @@ def render_onboarding(dfp: pd.DataFrame, ano_global: str, mes_global: str):
     df_onb = aplicar_filtro_global(dfp.copy(), "mes_created", ano_global, mes_global)
     # ✅ Respeita DATA_INICIO no Onboarding
     _dt_inicio = pd.to_datetime(DATA_INICIO)
-    df_onb = df_onb[df_onb["created"].notna() & (df_onb["created"] >= _dt_inicio)].copy()
+    # usa mes_created (já normalizado no pipeline) para evitar qualquer divergência de timezone/string
+    if "mes_created" in df_onb.columns:
+        df_onb = df_onb[df_onb["mes_created"].notna() & (df_onb["mes_created"] >= _dt_inicio)].copy()
+    else:
+        df_onb = df_onb[df_onb["created"].notna() & (df_onb["created"] >= _dt_inicio)].copy()
 
     total_clientes_novos = int((df_onb["assunto_nome"] == ASSUNTO_CLIENTE_NOVO).sum())
     df_erros = df_onb[df_onb["assunto_nome"].isin(ASSUNTOS_ERROS)].copy()
@@ -972,10 +976,10 @@ def render_rotinas_manuais(dfp: pd.DataFrame, ano_global: str, mes_global: str):
           .copy()
     )
 
-    df["mes_dt"] = df["resolved"].dt.to_period("M").dt.to_timestamp()
-    # ✅ Respeita DATA_INICIO em Rotinas Manuais
+    # ✅ Respeita DATA_INICIO em Rotinas Manuais (pelo resolved)
     _dt_inicio = pd.to_datetime(DATA_INICIO)
-    df = df[df["mes_dt"].notna() & (df["mes_dt"] >= _dt_inicio)].copy()
+    df = df[df["resolved"].notna() & (df["resolved"] >= _dt_inicio)].copy()
+    df["mes_dt"] = df["resolved"].dt.to_period("M").dt.to_timestamp()
     df["assunto_nome"] = df["assunto_nome"].astype(str)
     df["assunto_canon"] = df["assunto_nome"].apply(_canon)
 
