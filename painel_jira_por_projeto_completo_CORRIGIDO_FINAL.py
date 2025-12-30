@@ -677,6 +677,9 @@ def render_app_ne(dfp: pd.DataFrame, ano_global: str, mes_global: str):
     df_app["origem_cat"]  = df_app["origem_nome"].apply(normaliza_origem)
 
     df_app["mes_dt"] = df_app["mes_created"].dt.to_period("M").dt.to_timestamp()
+    # ✅ Respeita DATA_INICIO no APP NE
+    _dt_inicio = pd.to_datetime(DATA_INICIO)
+    df_app = df_app[df_app["mes_dt"].notna() & (df_app["mes_dt"] >= _dt_inicio)].copy()
     df_app = aplicar_filtro_global(df_app, "mes_dt", ano_global, mes_global)
     if df_app.empty:
         st.info("Sem dados para exibir com os filtros selecionados.")
@@ -737,6 +740,9 @@ def render_onboarding(dfp: pd.DataFrame, ano_global: str, mes_global: str):
 
     dfp = ensure_assunto_nome(dfp.copy(), "INT")
     df_onb = aplicar_filtro_global(dfp.copy(), "mes_created", ano_global, mes_global)
+    # ✅ Respeita DATA_INICIO no Onboarding
+    _dt_inicio = pd.to_datetime(DATA_INICIO)
+    df_onb = df_onb[df_onb["created"].notna() & (df_onb["created"] >= _dt_inicio)].copy()
 
     total_clientes_novos = int((df_onb["assunto_nome"] == ASSUNTO_CLIENTE_NOVO).sum())
     df_erros = df_onb[df_onb["assunto_nome"].isin(ASSUNTOS_ERROS)].copy()
@@ -762,7 +768,9 @@ def render_onboarding(dfp: pd.DataFrame, ano_global: str, mes_global: str):
             .reset_index()
         )
         if not serie.empty:
-            idx = pd.date_range(serie["created"].min(), serie["created"].max(), freq="MS")
+            _dt_inicio = pd.to_datetime(DATA_INICIO)
+            _min = max(serie["created"].min(), _dt_inicio)
+            idx = pd.date_range(_min, serie["created"].max(), freq="MS")
             serie = (
                 serie.set_index("created")
                      .reindex(idx)
@@ -965,6 +973,9 @@ def render_rotinas_manuais(dfp: pd.DataFrame, ano_global: str, mes_global: str):
     )
 
     df["mes_dt"] = df["resolved"].dt.to_period("M").dt.to_timestamp()
+    # ✅ Respeita DATA_INICIO em Rotinas Manuais
+    _dt_inicio = pd.to_datetime(DATA_INICIO)
+    df = df[df["mes_dt"].notna() & (df["mes_dt"] >= _dt_inicio)].copy()
     df["assunto_nome"] = df["assunto_nome"].astype(str)
     df["assunto_canon"] = df["assunto_nome"].apply(_canon)
 
@@ -1018,6 +1029,8 @@ def render_rotinas_manuais(dfp: pd.DataFrame, ano_global: str, mes_global: str):
         base_ops["mes_dt"] if not base_ops.empty else pd.Series(dtype="datetime64[ns]"),
         base_ts["mes_dt"]  if not base_ts.empty  else pd.Series(dtype="datetime64[ns]")
     ]).max()
+    _dt_inicio = pd.to_datetime(DATA_INICIO)
+    min_m = max(min_m, _dt_inicio)
     idx = pd.date_range(min_m, max_m, freq="MS")
 
     s_tds    = monthly_tds.reindex(idx, fill_value=0.0)
