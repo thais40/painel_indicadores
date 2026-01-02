@@ -542,11 +542,9 @@ def render_sla_fora_detalhes(dfp, projeto: str, ano_global: str, mes_global: str
     base_fora = base[base["_fora_sla"]].copy()
 
     st.subheader("🔴 Chamados fora do SLA")
-    # Só mantemos o total (removida a mediana)
     total_fora = int(base_fora["key"].nunique() if "key" in base_fora.columns else len(base_fora))
     st.metric("Total fora do SLA (período filtrado)", total_fora)
 
-    # colunas preferidas (inclui assignee_nome)
     prefer = [
         "key", "created", "resolved", "summary",
         "assignee_nome", "area_nome", "assunto_nome", "tempo_resolucao_horas"
@@ -559,15 +557,30 @@ def render_sla_fora_detalhes(dfp, projeto: str, ano_global: str, mes_global: str
         base_fora = base_fora.sort_values("tempo_resolucao_horas", ascending=False)
         base_fora["tempo_resolucao_horas"] = base_fora["tempo_resolucao_horas"].astype(float).round(1)
 
-    st.dataframe(base_fora[cols], use_container_width=True, hide_index=True)
-    csv = base_fora[cols].to_csv(index=False).encode("utf-8-sig")
+    # ✅ AQUI é a correção (Arrow): criamos um df "limpo" antes de passar pro st.dataframe
+    show_df = base_fora[cols].copy()
+
+    # 1) datetime com timezone -> sem timezone (Arrow costuma quebrar com tz)
+    for c in show_df.columns:
+        if pd.api.types.is_datetime64tz_dtype(show_df[c]):
+            show_df[c] = show_df[c].dt.tz_convert(TZ_BR).dt.tz_localize(None)
+
+    # 2) qualquer dict/list/objeto vira string (Arrow não aceita dict em célula)
+    for c in show_df.columns:
+        if show_df[c].dtype == "object":
+            show_df[c] = show_df[c].apply(
+                lambda x: x if (x is None or isinstance(x, (str, int, float, bool))) else str(x)
+            )
+
+    st.dataframe(show_df, use_container_width=True, hide_index=True)
+
+    csv = show_df.to_csv(index=False).encode("utf-8-sig")
     st.download_button(
         "⬇️ Baixar CSV (fora SLA)",
         data=csv,
         file_name=f"{projeto.lower().replace(' ','_')}_fora_sla.csv",
         mime="text/csv",
     )
-
 
 def render_sla(dfp, df_monthly_all: pd.DataFrame, projeto: str, ano_global: str, mes_global: str):
     """Gráfico de SLA + submenu (expander) com lista fora do SLA."""
