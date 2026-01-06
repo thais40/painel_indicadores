@@ -1255,59 +1255,59 @@ for projeto, tab in zip(PROJETOS, tabs):
 
         visao = st.selectbox("Visão", opcoes, key=f"visao_{projeto}")
 
-          if visao == "Criados vs Resolvidos":
-              render_criados_resolvidos(dfp, projeto, ano_global, mes_global)
+if visao == "Criados vs Resolvidos":
+    render_criados_resolvidos(dfp, projeto, ano_global, mes_global)
+
+elif visao == "SLA":
+    render_sla(dfp, _df_monthly_all, projeto, ano_global, mes_global)
+
+elif visao == "Assunto Relacionado":
+    render_assunto(dfp, projeto, ano_global, mes_global)
+
+elif visao == "Área Solicitante":
+    if projeto == "INTEL":
+        st.info("Este projeto não possui Área Solicitante.")
+    else:
+        render_area(dfp, ano_global, mes_global)
+
+elif visao == "Onboarding":
+    if projeto == "INT":
+        render_onboarding(dfp, ano_global, mes_global)
+    else:
+        st.info("Onboarding disponível somente para Integrations.")
+
+elif visao == "APP NE":
+    if projeto == "TDS":
+        render_app_ne(dfp, ano_global, mes_global)
+    else:
+        st.info("APP NE disponível somente para Tech Support.")
+
+elif visao == "Rotinas Manuais":
+    if projeto == "TDS":
+        render_rotinas_manuais(dfp, ano_global, mes_global)
+    else:
+        st.info("Rotinas Manuais disponível somente para Tech Support.")
+
+else:
+    # Geral
+    render_criados_resolvidos(dfp, projeto, ano_global, mes_global)
+    render_sla(dfp, _df_monthly_all, projeto, ano_global, mes_global)
+    render_assunto(dfp, projeto, ano_global, mes_global)
+
+    if projeto != "INTEL":
+        render_area(dfp, ano_global, mes_global)
+
+    if projeto in ("TDS", "INT"):
+        render_encaminhamentos(dfp, ano_global, mes_global)
+
+    if projeto == "TDS":
+        render_app_ne(dfp, ano_global, mes_global)
+        with st.expander("🛠️ Rotinas Manuais", expanded=False):
+            render_rotinas_manuais(dfp, ano_global, mes_global)
+
+    if projeto == "INT":
+        with st.expander("🧭 Onboarding", expanded=False):
+            render_onboarding(dfp, ano_global, mes_global)
           
-          elif visao == "SLA":
-              render_sla(dfp, _df_monthly_all, projeto, ano_global, mes_global)
-          
-          elif visao == "Assunto Relacionado":
-              render_assunto(dfp, projeto, ano_global, mes_global)
-          
-          elif visao == "Área Solicitante":
-              if projeto == "INTEL":
-                  st.info("Este projeto não possui Área Solicitante.")
-              else:
-                  render_area(dfp, ano_global, mes_global)
-          
-          elif visao == "Onboarding":
-              if projeto == "INT":
-                  render_onboarding(dfp, ano_global, mes_global)
-              else:
-                  st.info("Onboarding disponível somente para Integrations.")
-          
-          elif visao == "APP NE":
-              if projeto == "TDS":
-                  render_app_ne(dfp, ano_global, mes_global)
-              else:
-                  st.info("APP NE disponível somente para Tech Support.")
-          
-          elif visao == "Rotinas Manuais":
-              if projeto == "TDS":
-                  render_rotinas_manuais(dfp, ano_global, mes_global)
-              else:
-                  st.info("Rotinas Manuais disponível somente para Tech Support.")
-          
-          else:
-              # Geral
-              render_criados_resolvidos(dfp, projeto, ano_global, mes_global)
-              render_sla(dfp, _df_monthly_all, projeto, ano_global, mes_global)
-              render_assunto(dfp, projeto, ano_global, mes_global)
-          
-              if projeto != "INTEL":
-                  render_area(dfp, ano_global, mes_global)
-          
-              if projeto in ("TDS", "INT"):
-                  render_encaminhamentos(dfp, ano_global, mes_global)
-          
-              if projeto == "TDS":
-                  render_app_ne(dfp, ano_global, mes_global)
-                  with st.expander("🛠️ Rotinas Manuais", expanded=False):
-                      render_rotinas_manuais(dfp, ano_global, mes_global)
-          
-              if projeto == "INT":
-                  with st.expander("🧭 Onboarding", expanded=False):
-                      render_onboarding(dfp, ano_global, mes_global)
-                  
 st.markdown("---")
 st.caption("💙 Desenvolvido por Thaís Franco.")
