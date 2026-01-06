@@ -1253,7 +1253,7 @@ for projeto, tab in zip(PROJETOS, tabs):
             dfp["mes_closed"] = pd.to_datetime(dfp["closed_dt"], errors="coerce")
         dfp = ensure_assunto_nome(dfp, projeto)
 
-                visao = st.selectbox("Visão", opcoes, key=f"visao_{projeto}")
+        visao = st.selectbox("Visão", opcoes, key=f"visao_{projeto}")
 
         # 🔎 DEBUG — INTEL: o que está sendo contado como "Resolvidos" (por mês)
         if projeto == "INTEL":
