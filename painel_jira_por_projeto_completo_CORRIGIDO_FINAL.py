@@ -1253,20 +1253,20 @@ for projeto, tab in zip(PROJETOS, tabs):
             dfp["mes_closed"] = pd.to_datetime(dfp["closed_dt"], errors="coerce")
         dfp = ensure_assunto_nome(dfp, projeto)
 
-        visao = st.selectbox("Visão", opcoes, key=f"visao_{projeto}")
+               visao = st.selectbox("Visão", opcoes, key=f"visao_{projeto}")
 
-        # 🔎 DEBUG TEMPORÁRIO — INTEL fechados em Jan/2026
-        # (Cole aqui para não quebrar a cadeia if/elif da variável "visao")
-        if projeto == "INTEL" and "closed_dt" in dfp.columns:
-            tmp = dfp[dfp["closed_dt"].notna()].copy()
-            tmp["ano"] = pd.to_datetime(tmp["closed_dt"], errors="coerce").dt.year
-            tmp["mes"] = pd.to_datetime(tmp["closed_dt"], errors="coerce").dt.month
+        # 🔎 DEBUG TEMPORÁRIO — INTEL RESOLVIDOS em Jan/2026 (fechados reais)
+        # (Usa "resolved" / resolutiondate. NÃO usa closed_dt porque pode estar preenchido com ticket aberto.)
+        if projeto == "INTEL":
+            tmp = dfp[dfp["resolved"].notna()].copy()  # <-- FECHADO REAL
+            tmp["ano"] = pd.to_datetime(tmp["resolved"], errors="coerce").dt.year
+            tmp["mes"] = pd.to_datetime(tmp["resolved"], errors="coerce").dt.month
 
             dbg = tmp[(tmp["ano"] == 2026) & (tmp["mes"] == 1)][
-                ["key", "created", "resolved", "closed_dt", "status"]
-            ]
+                ["key", "created", "resolved", "status"]
+            ].sort_values("resolved", ascending=False)
 
-            st.subheader("DEBUG — INTEL fechados em Jan/2026")
+            st.subheader("DEBUG — INTEL RESOLVIDOS em Jan/2026 (fechados reais)")
             st.write("Qtd encontrada:", len(dbg))
             st.dataframe(dbg, use_container_width=True, hide_index=True)
 
