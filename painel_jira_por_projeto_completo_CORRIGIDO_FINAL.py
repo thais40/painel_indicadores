@@ -1255,6 +1255,21 @@ for projeto, tab in zip(PROJETOS, tabs):
 
         visao = st.selectbox("Visão", opcoes, key=f"visao_{projeto}")
 
+        # 🔎 DEBUG TEMPORÁRIO — INTEL fechados em Jan/2026
+        # (Cole aqui para não quebrar a cadeia if/elif da variável "visao")
+        if projeto == "INTEL" and "closed_dt" in dfp.columns:
+            tmp = dfp[dfp["closed_dt"].notna()].copy()
+            tmp["ano"] = pd.to_datetime(tmp["closed_dt"], errors="coerce").dt.year
+            tmp["mes"] = pd.to_datetime(tmp["closed_dt"], errors="coerce").dt.month
+
+            dbg = tmp[(tmp["ano"] == 2026) & (tmp["mes"] == 1)][
+                ["key", "created", "resolved", "closed_dt", "status"]
+            ]
+
+            st.subheader("DEBUG — INTEL fechados em Jan/2026")
+            st.write("Qtd encontrada:", len(dbg))
+            st.dataframe(dbg, use_container_width=True, hide_index=True)
+
         if visao == "Criados vs Resolvidos":
             render_criados_resolvidos(dfp, projeto, ano_global, mes_global)
         elif visao == "SLA":
