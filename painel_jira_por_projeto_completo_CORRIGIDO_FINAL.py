@@ -1256,16 +1256,39 @@ for projeto, tab in zip(PROJETOS, tabs):
         visao = st.selectbox("Visão", opcoes, key=f"visao_{projeto}")
 
         if visao == "Criados vs Resolvidos":
+                
+        st.subheader("DEBUG — INTEL fechados em Jan/2026")
         
-            # 🔎 DEBUG TEMPORÁRIO — descobrir ticket contado como resolvido em Jan/2026
-            st.write(
-                dfp[
-                    (dfp["closed_dt"].notna()) &
-                    (dfp["closed_dt"].dt.year == 2026) &
-                    (dfp["closed_dt"].dt.month == 1)
-                ][["key", "created", "resolved", "closed_dt", "status"]]
-            )
+        st.write("Projeto:", projeto)
+        st.write("Colunas:", list(dfp.columns))
         
+        # Tentamos primeiro por closed_dt (se existir)
+        if "closed_dt" in dfp.columns:
+            tmp = dfp[dfp["closed_dt"].notna()].copy()
+            tmp["ano"] = pd.to_datetime(tmp["closed_dt"], errors="coerce").dt.year
+            tmp["mes"] = pd.to_datetime(tmp["closed_dt"], errors="coerce").dt.month
+        
+            dbg = tmp[(tmp["ano"] == 2026) & (tmp["mes"] == 1)][
+                ["key", "created", "resolved", "closed_dt", "status"]
+            ].sort_values("closed_dt", ascending=False)
+        
+            st.write("Qtd encontrada:", len(dbg))
+            st.dataframe(dbg, use_container_width=True, hide_index=True)
+        
+        else:
+            st.warning("Não existe 'closed_dt' nesse arquivo/df. Vou checar por 'resolved'.")
+        
+            tmp = dfp[dfp["resolved"].notna()].copy()
+            tmp["ano"] = pd.to_datetime(tmp["resolved"], errors="coerce").dt.year
+            tmp["mes"] = pd.to_datetime(tmp["resolved"], errors="coerce").dt.month
+        
+            dbg = tmp[(tmp["ano"] == 2026) & (tmp["mes"] == 1)][
+                ["key", "created", "resolved", "status"]
+            ].sort_values("resolved", ascending=False)
+        
+            st.write("Qtd encontrada:", len(dbg))
+            st.dataframe(dbg, use_container_width=True, hide_index=True)
+   
             render_criados_resolvidos(dfp, projeto, ano_global, mes_global)
 
         elif visao == "SLA":
