@@ -366,7 +366,7 @@ def render_criados_resolvidos(dfp: pd.DataFrame, projeto: str, ano_global: str, 
     """
     Tickets Criados vs Resolvidos — TODAS as áreas (para o projeto atual).
     - Criados: primeiro 'created' por key (mês de criação)
-    - Resolvidos: último 'resolved' por key (mês de resolução final)
+    - Resolvidos: último 'resolved' REAL por key (mês de resolução final)
     - Eixo mensal contínuo (não pula meses).
     """
     import pandas as pd
@@ -374,8 +374,12 @@ def render_criados_resolvidos(dfp: pd.DataFrame, projeto: str, ano_global: str, 
     import streamlit as st
 
     df = dfp.copy()
-    created  = pd.to_datetime(df.get("created"),  errors="coerce")
-    resolved = pd.to_datetime(df.get("closed_dt"), errors="coerce")
+
+    # 🔵 Criados
+    created = pd.to_datetime(df.get("created"), errors="coerce")
+
+    # 🟢 Resolvidos REAIS (resolutiondate)
+    resolved = pd.to_datetime(df.get("resolved"), errors="coerce")
 
     cdf = (
         df[created.notna()]
@@ -401,12 +405,12 @@ def render_criados_resolvidos(dfp: pd.DataFrame, projeto: str, ano_global: str, 
         st.info("Sem dados de criação/resolução para montar a série.")
         return
 
-    # ✅ Respeita DATA_INICIO no eixo: criados por created, resolvidos por closed_dt
+    # ✅ Respeita DATA_INICIO no eixo
     _dt_inicio = pd.to_datetime(DATA_INICIO)
     if not cdf.empty:
-        cdf = cdf[cdf["created"].notna() & (cdf["created"] >= _dt_inicio)].copy()
+        cdf = cdf[cdf["created"] >= _dt_inicio].copy()
     if not rdf.empty:
-        rdf = rdf[rdf["resolved"].notna() & (rdf["resolved"] >= _dt_inicio)].copy()
+        rdf = rdf[rdf["resolved"] >= _dt_inicio].copy()
     if cdf.empty and rdf.empty:
         st.info("Sem dados a partir de DATA_INICIO para montar a série.")
         return
@@ -435,7 +439,7 @@ def render_criados_resolvidos(dfp: pd.DataFrame, projeto: str, ano_global: str, 
         y=["Criados", "Resolvidos"],
         barmode="group",
         text_auto=True,
-        title=f"Tickets Criados vs Resolvidos",
+        title="Tickets Criados vs Resolvidos",
         height=420,
     )
     fig.update_traces(textangle=0, cliponaxis=False)
