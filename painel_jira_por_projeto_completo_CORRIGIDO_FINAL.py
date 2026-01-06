@@ -1255,20 +1255,33 @@ for projeto, tab in zip(PROJETOS, tabs):
 
         visao = st.selectbox("Visão", opcoes, key=f"visao_{projeto}")
 
-        # 🔎 DEBUG TEMPORÁRIO — INTEL RESOLVIDOS em Jan/2026 (fechados reais)
-        # (Usa "resolved" / resolutiondate. NÃO usa closed_dt porque pode estar preenchido com ticket aberto.)
+        # 🔎 DEBUG — INTEL: o que o gráfico está contando como "Resolvidos"
+        # (Mostra TODOS os tickets com resolved preenchido + resumo por mês)
         if projeto == "INTEL":
-            tmp = dfp[dfp["resolved"].notna()].copy()  # <-- FECHADO REAL
-            tmp["ano"] = pd.to_datetime(tmp["resolved"], errors="coerce").dt.year
-            tmp["mes"] = pd.to_datetime(tmp["resolved"], errors="coerce").dt.month
+            dbg = dfp.copy()
 
-            dbg = tmp[(tmp["ano"] == 2026) & (tmp["mes"] == 1)][
-                ["key", "created", "resolved", "status"]
-            ].sort_values("resolved", ascending=False)
+            dbg["created_dt"]  = pd.to_datetime(dbg.get("created"), errors="coerce")
+            dbg["resolved_dt"] = pd.to_datetime(dbg.get("resolved"), errors="coerce")
 
-            st.subheader("DEBUG — INTEL RESOLVIDOS em Jan/2026 (fechados reais)")
-            st.write("Qtd encontrada:", len(dbg))
-            st.dataframe(dbg, use_container_width=True, hide_index=True)
+            dbg_res = dbg[dbg["resolved_dt"].notna()].copy()
+            dbg_res["mes_res"] = dbg_res["resolved_dt"].dt.to_period("M").dt.to_timestamp()
+
+            st.subheader("DEBUG — INTEL: tickets com resolved preenchido (base do gráfico)")
+            st.write("Qtd com resolved preenchido:", int(len(dbg_res)))
+
+            if len(dbg_res) > 0:
+                resumo = dbg_res.groupby("mes_res")["key"].nunique().reset_index(name="qtd")
+                resumo["mes_str"] = resumo["mes_res"].dt.strftime("%b/%Y")
+                st.dataframe(resumo.sort_values("mes_res"), use_container_width=True, hide_index=True)
+
+                st.dataframe(
+                    dbg_res[["key", "created_dt", "resolved_dt", "status"]]
+                        .sort_values("resolved_dt", ascending=False),
+                    use_container_width=True,
+                    hide_index=True,
+                )
+            else:
+                st.info("Nenhum ticket com 'resolved' preenchido no dataframe carregado.")
 
         if visao == "Criados vs Resolvidos":
             render_criados_resolvidos(dfp, projeto, ano_global, mes_global)
