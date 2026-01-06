@@ -1257,8 +1257,6 @@ for projeto, tab in zip(PROJETOS, tabs):
 
         if visao == "Criados vs Resolvidos":
                 
-        if visao == "Criados vs Resolvidos":
-
     st.subheader("DEBUG — INTEL fechados em Jan/2026")
 
     st.write("Projeto:", projeto)
