@@ -1256,16 +1256,18 @@ for projeto, tab in zip(PROJETOS, tabs):
         visao = st.selectbox("Visão", opcoes, key=f"visao_{projeto}")
 
         if visao == "Criados vs Resolvidos":
-
-                # 🔎 DEBUG TEMPORÁRIO — descobrir ticket contado como resolvido em Jan/2026
-          st.write(
-              dfp[
-                  (dfp["closed_dt"].notna()) &
-                  (dfp["closed_dt"].dt.year == 2026) &
-                  (dfp["closed_dt"].dt.month == 1)
-              ][["key", "created", "resolved", "closed_dt", "status"]]
-          )
+        
+            # 🔎 DEBUG TEMPORÁRIO — descobrir ticket contado como resolvido em Jan/2026
+            st.write(
+                dfp[
+                    (dfp["closed_dt"].notna()) &
+                    (dfp["closed_dt"].dt.year == 2026) &
+                    (dfp["closed_dt"].dt.month == 1)
+                ][["key", "created", "resolved", "closed_dt", "status"]]
+            )
+        
             render_criados_resolvidos(dfp, projeto, ano_global, mes_global)
+
         elif visao == "SLA":
             render_sla(dfp, _df_monthly_all, projeto, ano_global, mes_global)
         elif visao == "Assunto Relacionado":
