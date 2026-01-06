@@ -1255,95 +1255,59 @@ for projeto, tab in zip(PROJETOS, tabs):
 
         visao = st.selectbox("Visão", opcoes, key=f"visao_{projeto}")
 
-        # 🔎 DEBUG — INTEL: o que está sendo contado como "Resolvidos" (por mês)
-        if projeto == "INTEL":
-            dbg = dfp.copy()
-
-            # garante datetime
-            dbg["created_dt"]  = pd.to_datetime(dbg.get("created"), errors="coerce")
-            dbg["resolved_dt"] = pd.to_datetime(dbg.get("resolved"), errors="coerce")
-
-            # base "resolvidos" (resolved preenchido)
-            dbg_res = dbg[dbg["resolved_dt"].notna()].copy()
-            dbg_res["mes_res"] = dbg_res["resolved_dt"].dt.to_period("M").dt.to_timestamp()
-
-            st.subheader("DEBUG — INTEL: tickets com resolved preenchido (base do gráfico)")
-            st.write("Qtd com resolved preenchido:", int(len(dbg_res)))
-
-            if len(dbg_res) > 0:
-                # resumo por mês (todos)
-                resumo = dbg_res.groupby("mes_res")["key"].nunique().reset_index(name="qtd")
-                resumo["mes_str"] = resumo["mes_res"].dt.strftime("%b/%Y")
-                st.dataframe(resumo.sort_values("mes_res"), use_container_width=True, hide_index=True)
-
-                # resumo só últimos meses (pra achar Jan/2026)
-                st.subheader("DEBUG — INTEL: resumo resolved (últimos meses)")
-                resumo2 = resumo.sort_values("mes_res")
-                resumo2 = resumo2[resumo2["mes_res"] >= pd.Timestamp("2025-10-01")]
-                st.dataframe(resumo2, use_container_width=True, hide_index=True)
-
-                # listar tickets com resolved em 2026 (se houver)
-                st.subheader("DEBUG — INTEL: tickets com resolved em 2026")
-                dbg_2026 = dbg_res[dbg_res["resolved_dt"].dt.year == 2026][
-                    ["key", "created_dt", "resolved_dt", "status"]
-                ].sort_values("resolved_dt", ascending=False)
-
-                st.write("Qtd resolved em 2026:", int(len(dbg_2026)))
-                st.dataframe(dbg_2026, use_container_width=True, hide_index=True)
-
-                # lista completa (opcional)
-                st.subheader("DEBUG — INTEL: lista completa (resolved preenchido)")
-                st.dataframe(
-                    dbg_res[["key", "created_dt", "resolved_dt", "status"]]
-                        .sort_values("resolved_dt", ascending=False),
-                    use_container_width=True,
-                    hide_index=True,
-                )
-            else:
-                st.info("Nenhum ticket com 'resolved' preenchido no dataframe carregado.")
-
-        if visao == "Criados vs Resolvidos":
-            render_criados_resolvidos(dfp, projeto, ano_global, mes_global)
-        elif visao == "SLA":
-            render_sla(dfp, _df_monthly_all, projeto, ano_global, mes_global)
-        elif visao == "Assunto Relacionado":
-            render_assunto(dfp, projeto, ano_global, mes_global)
-        elif visao == "Área Solicitante":
-            if projeto == "INTEL":
-                st.info("Este projeto não possui Área Solicitante.")
-            else:
-                render_area(dfp, ano_global, mes_global)
-        elif visao == "Onboarding":
-            if projeto == "INT":
-                render_onboarding(dfp, ano_global, mes_global)
-            else:
-                st.info("Onboarding disponível somente para Integrations.")
-        elif visao == "APP NE":
-            if projeto == "TDS":
-                render_app_ne(dfp, ano_global, mes_global)
-            else:
-                st.info("APP NE disponível somente para Tech Support.")
-        elif visao == "Rotinas Manuais":
-            if projeto == "TDS":
-                render_rotinas_manuais(dfp, ano_global, mes_global)
-            else:
-                st.info("Rotinas Manuais disponível somente para Tech Support.")
-        else:
-            # Geral
-            render_criados_resolvidos(dfp, projeto, ano_global, mes_global)
-            render_sla(dfp, _df_monthly_all, projeto, ano_global, mes_global)
-            render_assunto(dfp, projeto, ano_global, mes_global)
-            if projeto != "INTEL":
-                render_area(dfp, ano_global, mes_global)
-            if projeto in ("TDS", "INT"):
-                render_encaminhamentos(dfp, ano_global, mes_global)
-            if projeto == "TDS":
-                render_app_ne(dfp, ano_global, mes_global)
-                with st.expander("🛠️ Rotinas Manuais", expanded=False):
-                    render_rotinas_manuais(dfp, ano_global, mes_global)
-            if projeto == "INT":
-                with st.expander("🧭 Onboarding", expanded=False):
-                    render_onboarding(dfp, ano_global, mes_global)
+          if visao == "Criados vs Resolvidos":
+              render_criados_resolvidos(dfp, projeto, ano_global, mes_global)
+          
+          elif visao == "SLA":
+              render_sla(dfp, _df_monthly_all, projeto, ano_global, mes_global)
+          
+          elif visao == "Assunto Relacionado":
+              render_assunto(dfp, projeto, ano_global, mes_global)
+          
+          elif visao == "Área Solicitante":
+              if projeto == "INTEL":
+                  st.info("Este projeto não possui Área Solicitante.")
+              else:
+                  render_area(dfp, ano_global, mes_global)
+          
+          elif visao == "Onboarding":
+              if projeto == "INT":
+                  render_onboarding(dfp, ano_global, mes_global)
+              else:
+                  st.info("Onboarding disponível somente para Integrations.")
+          
+          elif visao == "APP NE":
+              if projeto == "TDS":
+                  render_app_ne(dfp, ano_global, mes_global)
+              else:
+                  st.info("APP NE disponível somente para Tech Support.")
+          
+          elif visao == "Rotinas Manuais":
+              if projeto == "TDS":
+                  render_rotinas_manuais(dfp, ano_global, mes_global)
+              else:
+                  st.info("Rotinas Manuais disponível somente para Tech Support.")
+          
+          else:
+              # Geral
+              render_criados_resolvidos(dfp, projeto, ano_global, mes_global)
+              render_sla(dfp, _df_monthly_all, projeto, ano_global, mes_global)
+              render_assunto(dfp, projeto, ano_global, mes_global)
+          
+              if projeto != "INTEL":
+                  render_area(dfp, ano_global, mes_global)
+          
+              if projeto in ("TDS", "INT"):
+                  render_encaminhamentos(dfp, ano_global, mes_global)
+          
+              if projeto == "TDS":
+                  render_app_ne(dfp, ano_global, mes_global)
+                  with st.expander("🛠️ Rotinas Manuais", expanded=False):
+                      render_rotinas_manuais(dfp, ano_global, mes_global)
+          
+              if projeto == "INT":
+                  with st.expander("🧭 Onboarding", expanded=False):
+                      render_onboarding(dfp, ano_global, mes_global)
                   
 st.markdown("---")
 st.caption("💙 Desenvolvido por Thaís Franco.")
