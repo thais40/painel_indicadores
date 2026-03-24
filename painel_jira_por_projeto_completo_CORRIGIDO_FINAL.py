@@ -723,8 +723,9 @@ def render_app_ne(dfp: pd.DataFrame, ano_global: str, mes_global: str):
         st.info(f"Não há chamados para '{ASSUNTO_ALVO_APPNE}'.")
         return
 
+    st.write("COLUNAS DO DF_APP:")
     st.write(df_app.columns)
-
+  
     df_app["origem_nome"] = df_app["origem"].apply(lambda x: safe_get_value(x, "value"))
     df_app["origem_cat"]  = df_app["origem_nome"].apply(normaliza_origem)
 
@@ -796,11 +797,11 @@ def render_app_ne(dfp: pd.DataFrame, ano_global: str, mes_global: str):
     # 🧾 ASSUNTO RELACIONADO (APP NE - customfield_13621)
     # ============================================================
 
-    st.markdown("### 🧾 Assunto Relacionado")
+    #st.markdown("### 🧾 Assunto Relacionado")
 
-    if "customfield_13621" not in df_app.columns:
-        st.warning("Campo customfield_13621 não encontrado no dataframe.")
-        return
+    #if "customfield_13621" not in df_app.columns:
+     #   st.warning("Campo customfield_13621 não encontrado no dataframe.")
+     #   return
 
     df_ass = df_app.copy()
 
