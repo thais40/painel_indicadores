@@ -707,28 +707,22 @@ def render_menu_assunto_app(dfp, ano_global, mes_global):
 
 def render_app_ne(dfp: pd.DataFrame, ano_global: str, mes_global: str):
     st.markdown("### 📱 APP NE")
-
     if dfp.empty:
         st.info("Sem dados para APP NE.")
         return
 
     dfp = ensure_assunto_nome(dfp.copy(), "TDS")
-
-    # ================= FILTRO APP NE =================
     s_ass = dfp["assunto_nome"].astype(str).str.strip()
     alvo = ASSUNTO_ALVO_APPNE.strip().casefold()
-
     mask_assunto = s_ass.str.casefold().eq(alvo)
     if not mask_assunto.any():
         mask_assunto = s_ass.str.contains(r"app\s*ne", case=False, regex=True)
 
     df_app = dfp[mask_assunto].copy()
-
     if df_app.empty:
         st.info(f"Não há chamados para '{ASSUNTO_ALVO_APPNE}'.")
         return
 
-    # ================= MÉTRICAS =================
     df_app["origem_nome"] = df_app["origem"].apply(lambda x: safe_get_value(x, "value"))
     df_app["origem_cat"]  = df_app["origem_nome"].apply(normaliza_origem)
 
@@ -742,64 +736,75 @@ def render_app_ne(dfp: pd.DataFrame, ano_global: str, mes_global: str):
         st.info("Sem dados para exibir com os filtros selecionados.")
         return
 
-    # ================= GRÁFICO =================
-    serie = (
-        df_app.groupby(["mes_dt", "origem_cat"])
-        .size()
-        .reset_index(name="Qtd")
-        .sort_values("mes_dt")
-    )
+    total_app = int(len(df_app))
+    contagem  = df_app["origem_cat"].value_counts()
+
+    m1,m2,m3 = st.columns(3)
+    m1.metric("Total (APP NE/EN)", total_app)
+    m2.metric("APP NE", int(contagem.get("APP NE", 0)))
+    m3.metric("APP EN", int(contagem.get("APP EN", 0)))
+
+    serie = (df_app.groupby(["mes_dt","origem_cat"]).size()
+             .reset_index(name="Qtd").sort_values("mes_dt"))
 
     serie["mes_str"] = serie["mes_dt"].dt.strftime("%b/%Y")
+    cats = serie["mes_str"].dropna().unique().tolist()
+    serie["mes_str"] = pd.Categorical(serie["mes_str"], categories=cats, ordered=True)
 
     fig_app = px.bar(
         serie,
         x="mes_str",
         y="Qtd",
         color="origem_cat",
-        color_discrete_map={
-            "APP EN": "#1F3A5F",
-            "APP NE": "#2ECC71",
-            "Outros": "#BDC3C7",
-            "Não informado": "#BDC3C7"
-        },
         barmode="group",
         title="APP NE — Volumes por mês e Origem do problema",
+        color_discrete_map={
+            "APP NE":"#2ca02c",              # verde
+            "APP EN":"#1f77b4",              # azul
+            "Outros/Não informado":"#9ca3af" # cinza
+        },
         text="Qtd",
         height=460,
+        category_orders={"origem_cat": ["APP NE", "APP EN", "Outros/Não informado"]},
     )
 
-    fig_app.update_traces(texttemplate="%{text}", textposition="outside", cliponaxis=False)
+    fig_app.update_traces(
+        texttemplate="%{text}",
+        textposition="outside",
+        textfont_size=16,
+        cliponaxis=False
+    )
+
+    max_qtd = int(serie["Qtd"].max()) if not serie.empty else 0
+    if max_qtd > 0:
+        fig_app.update_yaxes(range=[0, max_qtd * 1.25])
+
+    fig_app.update_layout(
+        yaxis_title="Qtd",
+        xaxis_title="Mês",
+        uniformtext_minsize=14,
+        uniformtext_mode="show",
+        bargap=0.15,
+        margin=dict(t=70, r=20, b=60, l=50)
+    )
 
     show_plot(fig_app, "app_ne", "TDS", ano_global, mes_global)
 
     # ============================================================
-    # 🧾 ASSUNTO RELACIONADO (13621 CORRETO)
+    # 🧾 ASSUNTO RELACIONADO (APP NE - customfield_13621)
     # ============================================================
 
     st.markdown("### 🧾 Assunto Relacionado")
 
-    # tenta achar o campo automaticamente
-    campo_assunto = None
-    for col in df_app.columns:
-        if "13621" in col:
-            campo_assunto = col
-            break
-
-    if not campo_assunto:
-        st.warning("Campo de Assunto Relacionado não encontrado.")
+    if "customfield_13621" not in df_app.columns:
+        st.warning("Campo customfield_13621 não encontrado no dataframe.")
         return
 
     df_ass = df_app.copy()
 
-    df_ass["assuntos_rel"] = df_ass[campo_assunto].apply(
-        lambda x: x if isinstance(x, list) else []
-    )
-
-    df_ass = df_ass.explode("assuntos_rel")
-
-    df_ass["assunto_rel_nome"] = df_ass["assuntos_rel"].apply(
-        lambda x: safe_get_value(x, "value")
+    # 👉 campo é SELECT (dict), não lista
+    df_ass["assunto_rel_nome"] = df_ass["customfield_13621"].apply(
+        lambda x: x.get("value") if isinstance(x, dict) else None
     )
 
     df_ass = df_ass[df_ass["assunto_rel_nome"].notna()]
