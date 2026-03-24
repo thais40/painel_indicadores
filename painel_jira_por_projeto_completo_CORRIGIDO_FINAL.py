@@ -626,6 +626,7 @@ def render_sla(dfp, df_monthly_all: pd.DataFrame, projeto: str, ano_global: str,
 
     with st.expander("🔎 Ver chamados fora do SLA (lista detalhada)", expanded=False):
         render_sla_fora_detalhes(dfp, projeto, ano_global, mes_global)
+      
 # ==================/ SLA – gráfico + submenu ==================
 
 
@@ -793,55 +794,59 @@ def render_app_ne(dfp: pd.DataFrame, ano_global: str, mes_global: str):
 
     show_plot(fig_app, "app_ne", "TDS", ano_global, mes_global)
 
-    # ============================================================
-    # 🧾 ASSUNTO RELACIONADO (APP NE - customfield_13621)
-    # ============================================================
+# ============================================================
+# 🧾 ASSUNTO RELACIONADO (APP NE - via fields)
+# ============================================================
 
-    #st.markdown("### 🧾 Assunto Relacionado")
+st.markdown("### 🧾 Assunto Relacionado")
 
-    #if "customfield_13621" not in df_app.columns:
-     #   st.warning("Campo customfield_13621 não encontrado no dataframe.")
-     #   return
+df_ass = df_app.copy()
 
-    df_ass = df_app.copy()
+if "fields" not in df_ass.columns:
+    st.warning("Coluna 'fields' não encontrada no dataframe.")
+    return
 
-    # 👉 campo é SELECT (dict), não lista
-    df_ass["assunto_rel_nome"] = df_ass["customfield_13621"].apply(
-        lambda x: x.get("value") if isinstance(x, dict) else None
+# 👉 pega o customfield dentro do fields
+df_ass["assunto_rel_nome"] = df_ass["fields"].apply(
+    lambda f: (
+        f.get("customfield_13621", {}).get("value")
+        if isinstance(f, dict) and f.get("customfield_13621")
+        else None
     )
+)
 
-    df_ass = df_ass[df_ass["assunto_rel_nome"].notna()]
+df_ass = df_ass[df_ass["assunto_rel_nome"].notna()]
 
-    if df_ass.empty:
-        st.info("Sem dados de Assunto Relacionado.")
-        return
+if df_ass.empty:
+    st.info("Sem dados de Assunto Relacionado.")
+    return
 
-    assunto_count = (
-        df_ass["assunto_rel_nome"]
-        .value_counts()
-        .reset_index()
-    )
+assunto_count = (
+    df_ass["assunto_rel_nome"]
+    .value_counts()
+    .reset_index()
+)
 
-    assunto_count.columns = ["Assunto", "Qtd"]
+assunto_count.columns = ["Assunto", "Qtd"]
 
-    assunto_top = assunto_count.head(10)
+assunto_top = assunto_count.head(10)
 
-    fig_assunto = px.bar(
-        assunto_top.sort_values("Qtd"),
-        x="Qtd",
-        y="Assunto",
-        orientation="h",
-        text="Qtd",
-        height=350,
-    )
+fig_assunto = px.bar(
+    assunto_top.sort_values("Qtd"),
+    x="Qtd",
+    y="Assunto",
+    orientation="h",
+    text="Qtd",
+    height=350,
+)
 
-    fig_assunto.update_traces(textposition="outside")
-    fig_assunto.update_layout(yaxis_title="", xaxis_title="Qtd")
+fig_assunto.update_traces(textposition="outside")
+fig_assunto.update_layout(yaxis_title="", xaxis_title="Qtd")
 
-    st.plotly_chart(fig_assunto, use_container_width=True)
+st.plotly_chart(fig_assunto, use_container_width=True)
 
-    with st.expander("📋 Ver todos"):
-        st.dataframe(assunto_count, use_container_width=True, hide_index=True)
+with st.expander("📋 Ver todos"):
+    st.dataframe(assunto_count, use_container_width=True, hide_index=True)
       
 # ---- Onboarding (INT)
 def render_onboarding(dfp: pd.DataFrame, ano_global: str, mes_global: str):
