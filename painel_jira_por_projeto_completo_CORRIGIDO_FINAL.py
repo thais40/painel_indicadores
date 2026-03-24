@@ -208,22 +208,22 @@ def ensure_assunto_nome(df_proj: pd.DataFrame, projeto: str) -> pd.DataFrame:
     if df_proj is None or df_proj.empty:
         return df_proj
 
-def _from_field(v):
-    if isinstance(v, dict):
-        # 👇 AQUI É A MÁGICA
-        key = v.get("id") or v.get("key")
-        if key:
-            try:
-                key_int = int(key)
-                if key_int in MAPA_ASSUNTOS_APP_NE:
-                    return MAPA_ASSUNTOS_APP_NE[key_int]
-            except:
-                pass
+    def _from_field(v):
+        if isinstance(v, dict):
+            key = v.get("id") or v.get("key")
+            if key:
+                try:
+                    key_int = int(key)
+                    if key_int in MAPA_ASSUNTOS_APP_NE:
+                        return MAPA_ASSUNTOS_APP_NE[key_int]
+                except:
+                    pass
 
-        return v.get("value") or v.get("name") or str(v)
-    return v
+            return v.get("value") or v.get("name") or str(v)
+        return v
 
     col = "assunto_nome"
+
     if col not in df_proj.columns:
         if CAMPOS_ASSUNTO.get(projeto) == "issuetype":
             df_proj[col] = df_proj["issuetype"].apply(_from_field)
@@ -237,7 +237,6 @@ def _from_field(v):
             df_proj[col] = df_proj["assunto"].apply(_from_field)
 
     return df_proj
-
 
 # ================= Jira fetch =============================
 
