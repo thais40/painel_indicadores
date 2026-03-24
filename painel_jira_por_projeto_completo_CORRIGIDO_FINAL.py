@@ -633,7 +633,6 @@ def render_sla(dfp, df_monthly_all: pd.DataFrame, projeto: str, ano_global: str,
       
 # ==================/ SLA – gráfico + submenu ==================
 
-
 def render_assunto(dfp: pd.DataFrame, projeto: str, ano_global: str, mes_global: str):
     st.markdown("### 🧾 Assunto Relacionado")
     df_ass = aplicar_filtro_global(dfp.copy(), "mes_created", ano_global, mes_global)
@@ -813,23 +812,15 @@ def render_app_ne(dfp: pd.DataFrame, ano_global: str, mes_global: str):
     show_plot(fig_app, "app_ne", "TDS", ano_global, mes_global)
 
     # ============================================================
-    # 🧾 ASSUNTO RELACIONADO (MAPEANDO ID → TEXTO)
+    # 🧾 ASSUNTO RELACIONADO (SEM DEPENDER DE CAMPO BUGADO)
     # ============================================================
 
     st.markdown("### 🧾 Assunto Relacionado")
 
     df_ass = df_app.copy()
 
-    if "customfield_13666" not in df_ass.columns:
-        st.warning("Campo de assunto relacionado não encontrado.")
-        return
-
-    def traduzir_assunto(x):
-        if pd.isna(x):
-            return None
-        return MAPA_ASSUNTOS_APP_NE.get(x)
-
-    df_ass["assunto_rel_nome"] = df_ass["customfield_13666"].apply(traduzir_assunto)
+    # 👉 fallback inteligente: usa assunto_nome direto
+    df_ass["assunto_rel_nome"] = df_ass["assunto_nome"]
 
     df_ass = df_ass[df_ass["assunto_rel_nome"].notna()]
 
@@ -845,10 +836,8 @@ def render_app_ne(dfp: pd.DataFrame, ano_global: str, mes_global: str):
 
     assunto_count.columns = ["Assunto", "Qtd"]
 
-    assunto_top = assunto_count.head(10)
-
     fig_assunto = px.bar(
-        assunto_top.sort_values("Qtd"),
+        assunto_count.head(10).sort_values("Qtd"),
         x="Qtd",
         y="Assunto",
         orientation="h",
