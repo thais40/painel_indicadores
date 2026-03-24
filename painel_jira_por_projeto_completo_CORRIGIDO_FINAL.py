@@ -29,7 +29,7 @@ from requests.auth import HTTPBasicAuth
 
 MAPA_ASSUNTOS_APP_NE = {
     17335: "Dúvida cotação frete - App EN",
-
+}
 # ================= Config da página =======================
 st.set_page_config(page_title="Painel de Indicadores", page_icon="📊", layout="wide")
 
