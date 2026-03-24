@@ -730,9 +730,6 @@ def render_app_ne(dfp: pd.DataFrame, ano_global: str, mes_global: str):
         st.info(f"Não há chamados para '{ASSUNTO_ALVO_APPNE}'.")
         return
 
-    st.write("COLUNAS DO DF_APP:")
-    st.write(list(df_app.columns))
-
     # ================= ORIGEM =================
     df_app["origem_nome"] = df_app["origem"].apply(lambda x: safe_get_value(x, "value"))
     df_app["origem_cat"]  = df_app["origem_nome"].apply(normaliza_origem)
@@ -813,23 +810,19 @@ def render_app_ne(dfp: pd.DataFrame, ano_global: str, mes_global: str):
     show_plot(fig_app, "app_ne", "TDS", ano_global, mes_global)
 
     # ============================================================
-    # 🧾 ASSUNTO RELACIONADO (APP NE - customfield_13621)
+    # 🧾 ASSUNTO RELACIONADO (USANDO customfield_13666)
     # ============================================================
 
     st.markdown("### 🧾 Assunto Relacionado")
 
     df_ass = df_app.copy()
 
-    if "fields" not in df_ass.columns:
-        st.warning("Coluna 'fields' não encontrada no dataframe.")
+    if "customfield_13666" not in df_ass.columns:
+        st.warning("Campo de assunto relacionado não encontrado.")
         return
 
-    df_ass["assunto_rel_nome"] = df_ass["fields"].apply(
-        lambda f: (
-            f.get("customfield_13621", {}).get("value")
-            if isinstance(f, dict) and f.get("customfield_13621")
-            else None
-        )
+    df_ass["assunto_rel_nome"] = df_ass["customfield_13666"].apply(
+        lambda x: x.get("value") if isinstance(x, dict) else None
     )
 
     df_ass = df_ass[df_ass["assunto_rel_nome"].notna()]
