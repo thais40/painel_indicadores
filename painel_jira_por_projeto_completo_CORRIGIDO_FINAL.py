@@ -707,24 +707,20 @@ def render_menu_assunto_app(dfp, ano_global, mes_global):
 
 def render_app_ne(dfp: pd.DataFrame, ano_global: str, mes_global: str):
     st.markdown("### 📱 APP NE")
+
     if dfp.empty:
         st.info("Sem dados para APP NE.")
         return
 
     dfp = ensure_assunto_nome(dfp.copy(), "TDS")
 
-    # 👉 MENU NOVO AQUI
-    assunto_filtro = render_menu_assunto_app(dfp, ano_global, mes_global)
-
-    if assunto_filtro and assunto_filtro != "Todos":
-        dfp = dfp[dfp["assunto_nome"] == assunto_filtro]
-
+    # ================= FILTRO APP NE (igual já era) =================
     s_ass = dfp["assunto_nome"].astype(str).str.strip()
     alvo = ASSUNTO_ALVO_APPNE.strip().casefold()
 
     mask_assunto = s_ass.str.casefold().eq(alvo)
     if not mask_assunto.any():
-        mask_assunto = s_ass.str.contains(r"app\\s*ne", case=False, regex=True)
+        mask_assunto = s_ass.str.contains(r"app\s*ne", case=False, regex=True)
 
     df_app = dfp[mask_assunto].copy()
 
@@ -732,6 +728,7 @@ def render_app_ne(dfp: pd.DataFrame, ano_global: str, mes_global: str):
         st.info(f"Não há chamados para '{ASSUNTO_ALVO_APPNE}'.")
         return
 
+    # ================= MÉTRICAS =================
     df_app["origem_nome"] = df_app["origem"].apply(lambda x: safe_get_value(x, "value"))
     df_app["origem_cat"]  = df_app["origem_nome"].apply(normaliza_origem)
 
@@ -748,13 +745,18 @@ def render_app_ne(dfp: pd.DataFrame, ano_global: str, mes_global: str):
     total_app = int(len(df_app))
     contagem  = df_app["origem_cat"].value_counts()
 
-    m1,m2,m3 = st.columns(3)
+    m1, m2, m3 = st.columns(3)
     m1.metric("Total (APP NE/EN)", total_app)
     m2.metric("APP NE", int(contagem.get("APP NE", 0)))
     m3.metric("APP EN", int(contagem.get("APP EN", 0)))
 
-    serie = (df_app.groupby(["mes_dt","origem_cat"]).size()
-             .reset_index(name="Qtd").sort_values("mes_dt"))
+    # ================= GRÁFICO ORIGINAL =================
+    serie = (
+        df_app.groupby(["mes_dt", "origem_cat"])
+        .size()
+        .reset_index(name="Qtd")
+        .sort_values("mes_dt")
+    )
 
     serie["mes_str"] = serie["mes_dt"].dt.strftime("%b/%Y")
 
@@ -770,8 +772,49 @@ def render_app_ne(dfp: pd.DataFrame, ano_global: str, mes_global: str):
     )
 
     fig_app.update_traces(texttemplate="%{text}", textposition="outside", cliponaxis=False)
-
     show_plot(fig_app, "app_ne", "TDS", ano_global, mes_global)
+
+    # ============================================================
+    # 🔥 NOVO: ASSUNTO RELACIONADO (IGUAL BI - EMBAIXO DO GRÁFICO)
+    # ============================================================
+
+    st.markdown("### 🧾 Assunto Relacionado")
+
+    df_ass = df_app.copy()
+
+    if df_ass.empty:
+        st.info("Sem dados de assunto.")
+        return
+
+    assunto_count = (
+        df_ass["assunto_nome"]
+        .value_counts()
+        .reset_index()
+    )
+
+    assunto_count.columns = ["Assunto", "Qtd"]
+
+    # 👉 TOP 10 (igual BI lateral)
+    assunto_top = assunto_count.head(10)
+
+    fig_assunto = px.bar(
+        assunto_top.sort_values("Qtd"),
+        x="Qtd",
+        y="Assunto",
+        orientation="h",
+        text="Qtd",
+        title="Top Assuntos",
+        height=400,
+    )
+
+    fig_assunto.update_traces(textposition="outside")
+    fig_assunto.update_layout(yaxis_title="", xaxis_title="Qtd")
+
+    st.plotly_chart(fig_assunto, use_container_width=True)
+
+    # 👉 tabela completa (igual BI antigo)
+    with st.expander("📋 Ver todos os assuntos"):
+        st.dataframe(assunto_count, use_container_width=True, hide_index=True)
 
 # ---- Onboarding (INT)
 def render_onboarding(dfp: pd.DataFrame, ano_global: str, mes_global: str):
