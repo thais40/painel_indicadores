@@ -821,10 +821,19 @@ def render_app_ne(dfp: pd.DataFrame, ano_global: str, mes_global: str):
         st.warning("Campo de assunto relacionado não encontrado.")
         return
 
-    df_ass["assunto_rel_nome"] = df_ass["customfield_13666"].apply(
-        lambda x: x.get("value") if isinstance(x, dict) else None
-    )
-
+    def extrair_assunto(x):
+        if isinstance(x, dict):
+            return x.get("value")
+        elif isinstance(x, list) and len(x) > 0:
+            if isinstance(x[0], dict):
+                return x[0].get("value")
+            return str(x[0])
+        elif isinstance(x, str):
+            return x
+        return None
+    
+    df_ass["assunto_rel_nome"] = df_ass["customfield_13666"].apply(extrair_assunto)
+    
     df_ass = df_ass[df_ass["assunto_rel_nome"].notna()]
 
     if df_ass.empty:
