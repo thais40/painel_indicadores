@@ -482,6 +482,7 @@ def render_sla_table(df_monthly_all: pd.DataFrame, projeto: str, ano_global: str
 
 
 # ================== SLA – gráfico + submenu "Chamados fora do SLA" ==================
+
 def render_sla_fora_detalhes(dfp, projeto: str, ano_global: str, mes_global: str):
     """
     Lista de tickets fora do SLA alinhada ao gráfico:
@@ -708,48 +709,62 @@ def render_menu_assunto_app(dfp, ano_global, mes_global):
 
 def render_app_ne(dfp: pd.DataFrame, ano_global: str, mes_global: str):
     st.markdown("### 📱 APP NE")
+
     if dfp.empty:
         st.info("Sem dados para APP NE.")
         return
 
     dfp = ensure_assunto_nome(dfp.copy(), "TDS")
+
+    # ================= FILTRO APP NE =================
     s_ass = dfp["assunto_nome"].astype(str).str.strip()
     alvo = ASSUNTO_ALVO_APPNE.strip().casefold()
+
     mask_assunto = s_ass.str.casefold().eq(alvo)
     if not mask_assunto.any():
         mask_assunto = s_ass.str.contains(r"app\s*ne", case=False, regex=True)
 
     df_app = dfp[mask_assunto].copy()
+
     if df_app.empty:
         st.info(f"Não há chamados para '{ASSUNTO_ALVO_APPNE}'.")
         return
 
-    st.write("COLUNAS DO DF_APP:")
-    st.write(df_app.columns)
-  
+    # ================= ORIGEM =================
     df_app["origem_nome"] = df_app["origem"].apply(lambda x: safe_get_value(x, "value"))
     df_app["origem_cat"]  = df_app["origem_nome"].apply(normaliza_origem)
 
+    # ================= DATA =================
     df_app["mes_dt"] = df_app["mes_created"].dt.to_period("M").dt.to_timestamp()
 
     _dt_inicio = pd.to_datetime(DATA_INICIO)
-    df_app = df_app[df_app["mes_created"].notna() & (df_app["mes_created"] >= _dt_inicio)].copy()
+    df_app = df_app[
+        df_app["mes_created"].notna() &
+        (df_app["mes_created"] >= _dt_inicio)
+    ].copy()
+
     df_app = aplicar_filtro_global(df_app, "mes_dt", ano_global, mes_global)
 
     if df_app.empty:
         st.info("Sem dados para exibir com os filtros selecionados.")
         return
 
+    # ================= MÉTRICAS =================
     total_app = int(len(df_app))
     contagem  = df_app["origem_cat"].value_counts()
 
-    m1,m2,m3 = st.columns(3)
+    m1, m2, m3 = st.columns(3)
     m1.metric("Total (APP NE/EN)", total_app)
     m2.metric("APP NE", int(contagem.get("APP NE", 0)))
     m3.metric("APP EN", int(contagem.get("APP EN", 0)))
 
-    serie = (df_app.groupby(["mes_dt","origem_cat"]).size()
-             .reset_index(name="Qtd").sort_values("mes_dt"))
+    # ================= GRÁFICO =================
+    serie = (
+        df_app.groupby(["mes_dt", "origem_cat"])
+        .size()
+        .reset_index(name="Qtd")
+        .sort_values("mes_dt")
+    )
 
     serie["mes_str"] = serie["mes_dt"].dt.strftime("%b/%Y")
     cats = serie["mes_str"].dropna().unique().tolist()
@@ -763,9 +778,9 @@ def render_app_ne(dfp: pd.DataFrame, ano_global: str, mes_global: str):
         barmode="group",
         title="APP NE — Volumes por mês e Origem do problema",
         color_discrete_map={
-            "APP NE":"#2ca02c",              # verde
-            "APP EN":"#1f77b4",              # azul
-            "Outros/Não informado":"#9ca3af" # cinza
+            "APP NE": "#2ca02c",              # verde
+            "APP EN": "#1f77b4",              # azul
+            "Outros/Não informado": "#9ca3af" # cinza
         },
         text="Qtd",
         height=460,
@@ -794,59 +809,58 @@ def render_app_ne(dfp: pd.DataFrame, ano_global: str, mes_global: str):
 
     show_plot(fig_app, "app_ne", "TDS", ano_global, mes_global)
 
-# ============================================================
-# 🧾 ASSUNTO RELACIONADO (APP NE - via fields)
-# ============================================================
+    # ============================================================
+    # 🧾 ASSUNTO RELACIONADO (APP NE - customfield_13621)
+    # ============================================================
 
-st.markdown("### 🧾 Assunto Relacionado")
+    st.markdown("### 🧾 Assunto Relacionado")
 
-df_ass = df_app.copy()
+    df_ass = df_app.copy()
 
-if "fields" not in df_ass.columns:
-    st.warning("Coluna 'fields' não encontrada no dataframe.")
-    return
+    if "fields" not in df_ass.columns:
+        st.warning("Coluna 'fields' não encontrada no dataframe.")
+        return
 
-# 👉 pega o customfield dentro do fields
-df_ass["assunto_rel_nome"] = df_ass["fields"].apply(
-    lambda f: (
-        f.get("customfield_13621", {}).get("value")
-        if isinstance(f, dict) and f.get("customfield_13621")
-        else None
+    df_ass["assunto_rel_nome"] = df_ass["fields"].apply(
+        lambda f: (
+            f.get("customfield_13621", {}).get("value")
+            if isinstance(f, dict) and f.get("customfield_13621")
+            else None
+        )
     )
-)
 
-df_ass = df_ass[df_ass["assunto_rel_nome"].notna()]
+    df_ass = df_ass[df_ass["assunto_rel_nome"].notna()]
 
-if df_ass.empty:
-    st.info("Sem dados de Assunto Relacionado.")
-    return
+    if df_ass.empty:
+        st.info("Sem dados de Assunto Relacionado.")
+        return
 
-assunto_count = (
-    df_ass["assunto_rel_nome"]
-    .value_counts()
-    .reset_index()
-)
+    assunto_count = (
+        df_ass["assunto_rel_nome"]
+        .value_counts()
+        .reset_index()
+    )
 
-assunto_count.columns = ["Assunto", "Qtd"]
+    assunto_count.columns = ["Assunto", "Qtd"]
 
-assunto_top = assunto_count.head(10)
+    assunto_top = assunto_count.head(10)
 
-fig_assunto = px.bar(
-    assunto_top.sort_values("Qtd"),
-    x="Qtd",
-    y="Assunto",
-    orientation="h",
-    text="Qtd",
-    height=350,
-)
+    fig_assunto = px.bar(
+        assunto_top.sort_values("Qtd"),
+        x="Qtd",
+        y="Assunto",
+        orientation="h",
+        text="Qtd",
+        height=350,
+    )
 
-fig_assunto.update_traces(textposition="outside")
-fig_assunto.update_layout(yaxis_title="", xaxis_title="Qtd")
+    fig_assunto.update_traces(textposition="outside")
+    fig_assunto.update_layout(yaxis_title="", xaxis_title="Qtd")
 
-st.plotly_chart(fig_assunto, use_container_width=True)
+    st.plotly_chart(fig_assunto, use_container_width=True)
 
-with st.expander("📋 Ver todos"):
-    st.dataframe(assunto_count, use_container_width=True, hide_index=True)
+    with st.expander("📋 Ver todos"):
+        st.dataframe(assunto_count, use_container_width=True, hide_index=True)
       
 # ---- Onboarding (INT)
 def render_onboarding(dfp: pd.DataFrame, ano_global: str, mes_global: str):
