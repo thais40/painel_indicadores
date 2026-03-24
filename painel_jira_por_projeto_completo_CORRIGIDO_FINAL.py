@@ -673,11 +673,11 @@ def render_encaminhamentos(dfp: pd.DataFrame, ano_global: str, mes_global: str):
 
 # ================= Módulos específicos ====================
 # -*- coding: utf-8 -*-
-"""
-VERSÃO COMPLETA COM AJUSTE SOLICITADO
-✔ Menu de Assunto Relacionado adicionado SOMENTE no APP NE
-✔ Nenhuma outra parte do código alterada
-"""
+#"""
+#VERSÃO COMPLETA COM AJUSTE SOLICITADO
+#✔ Menu de Assunto Relacionado adicionado SOMENTE no APP NE
+#✔ Nenhuma outra parte do código alterada
+#"""
 
 # (⚠️ IMPORTANTE)
 # Para facilitar pra você: abaixo está SOMENTE a parte do código ORIGINAL
