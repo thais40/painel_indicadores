@@ -778,9 +778,9 @@ def render_app_ne(dfp: pd.DataFrame, ano_global: str, mes_global: str):
         barmode="group",
         title="APP NE — Volumes por mês e Origem do problema",
         color_discrete_map={
-            "APP NE": "#2ca02c",              # verde
-            "APP EN": "#1f77b4",              # azul
-            "Outros/Não informado": "#9ca3af" # cinza
+            "APP NE": "#2ca02c",
+            "APP EN": "#1f77b4",
+            "Outros/Não informado": "#9ca3af"
         },
         text="Qtd",
         height=460,
@@ -809,14 +809,8 @@ def render_app_ne(dfp: pd.DataFrame, ano_global: str, mes_global: str):
 
     show_plot(fig_app, "app_ne", "TDS", ano_global, mes_global)
 
-    st.write("VALORES DO CAMPO customfield_13666:")
-    st.write(df_app["customfield_13666"].head(20))
-
-    st.write("TOTAL NÃO NULOS:")
-    st.write(df_app["customfield_13666"].notna().sum())
-
     # ============================================================
-    # 🧾 ASSUNTO RELACIONADO (USANDO customfield_13666)
+    # 🧾 ASSUNTO RELACIONADO (MAPEANDO ID → TEXTO)
     # ============================================================
 
     st.markdown("### 🧾 Assunto Relacionado")
@@ -827,19 +821,13 @@ def render_app_ne(dfp: pd.DataFrame, ano_global: str, mes_global: str):
         st.warning("Campo de assunto relacionado não encontrado.")
         return
 
-    def extrair_assunto(x):
-        if isinstance(x, dict):
-            return x.get("value")
-        elif isinstance(x, list) and len(x) > 0:
-            if isinstance(x[0], dict):
-                return x[0].get("value")
-            return str(x[0])
-        elif isinstance(x, str):
-            return x
-        return None
-    
-    df_ass["assunto_rel_nome"] = df_ass["customfield_13666"].apply(extrair_assunto)
-    
+    def traduzir_assunto(x):
+        if pd.isna(x):
+            return None
+        return MAPA_ASSUNTOS_APP_NE.get(x)
+
+    df_ass["assunto_rel_nome"] = df_ass["customfield_13666"].apply(traduzir_assunto)
+
     df_ass = df_ass[df_ass["assunto_rel_nome"].notna()]
 
     if df_ass.empty:
