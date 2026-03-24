@@ -809,6 +809,12 @@ def render_app_ne(dfp: pd.DataFrame, ano_global: str, mes_global: str):
 
     show_plot(fig_app, "app_ne", "TDS", ano_global, mes_global)
 
+    st.write("VALORES DO CAMPO customfield_13666:")
+    st.write(df_app["customfield_13666"].head(20))
+
+    st.write("TOTAL NÃO NULOS:")
+    st.write(df_app["customfield_13666"].notna().sum())
+
     # ============================================================
     # 🧾 ASSUNTO RELACIONADO (USANDO customfield_13666)
     # ============================================================
