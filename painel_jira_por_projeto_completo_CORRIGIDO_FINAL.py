@@ -742,15 +742,7 @@ def render_app_ne(dfp: pd.DataFrame, ano_global: str, mes_global: str):
         st.info("Sem dados para exibir com os filtros selecionados.")
         return
 
-    total_app = int(len(df_app))
-    contagem  = df_app["origem_cat"].value_counts()
-
-    m1, m2, m3 = st.columns(3)
-    m1.metric("Total (APP NE/EN)", total_app)
-    m2.metric("APP NE", int(contagem.get("APP NE", 0)))
-    m3.metric("APP EN", int(contagem.get("APP EN", 0)))
-
-    # ================= GRÁFICO ORIGINAL (SEM ALTERAR CORES) =================
+    # ================= GRÁFICO =================
     serie = (
         df_app.groupby(["mes_dt", "origem_cat"])
         .size()
@@ -765,6 +757,12 @@ def render_app_ne(dfp: pd.DataFrame, ano_global: str, mes_global: str):
         x="mes_str",
         y="Qtd",
         color="origem_cat",
+        color_discrete_map={
+            "APP EN": "#1F3A5F",
+            "APP NE": "#2ECC71",
+            "Outros": "#BDC3C7",
+            "Não informado": "#BDC3C7"
+        },
         barmode="group",
         title="APP NE — Volumes por mês e Origem do problema",
         text="Qtd",
@@ -773,30 +771,33 @@ def render_app_ne(dfp: pd.DataFrame, ano_global: str, mes_global: str):
 
     fig_app.update_traces(texttemplate="%{text}", textposition="outside", cliponaxis=False)
 
-    # ⚠️ mantém exatamente seu comportamento original (cores vêm daqui)
     show_plot(fig_app, "app_ne", "TDS", ano_global, mes_global)
 
     # ============================================================
-    # 🧾 ASSUNTO RELACIONADO (customfield_13621 - CORRETO)
+    # 🧾 ASSUNTO RELACIONADO (13621 CORRETO)
     # ============================================================
 
     st.markdown("### 🧾 Assunto Relacionado")
 
-    if "customfield_13621" not in df_app.columns:
-        st.warning("Campo customfield_13621 não encontrado.")
+    # tenta achar o campo automaticamente
+    campo_assunto = None
+    for col in df_app.columns:
+        if "13621" in col:
+            campo_assunto = col
+            break
+
+    if not campo_assunto:
+        st.warning("Campo de Assunto Relacionado não encontrado.")
         return
 
     df_ass = df_app.copy()
 
-    # garante lista
-    df_ass["assuntos_rel"] = df_ass["customfield_13621"].apply(
+    df_ass["assuntos_rel"] = df_ass[campo_assunto].apply(
         lambda x: x if isinstance(x, list) else []
     )
 
-    # explode
     df_ass = df_ass.explode("assuntos_rel")
 
-    # extrai valor
     df_ass["assunto_rel_nome"] = df_ass["assuntos_rel"].apply(
         lambda x: safe_get_value(x, "value")
     )
@@ -815,7 +816,6 @@ def render_app_ne(dfp: pd.DataFrame, ano_global: str, mes_global: str):
 
     assunto_count.columns = ["Assunto", "Qtd"]
 
-    # TOP 10 estilo BI
     assunto_top = assunto_count.head(10)
 
     fig_assunto = px.bar(
@@ -828,15 +828,10 @@ def render_app_ne(dfp: pd.DataFrame, ano_global: str, mes_global: str):
     )
 
     fig_assunto.update_traces(textposition="outside")
-    fig_assunto.update_layout(
-        title="Top Assuntos Relacionados",
-        yaxis_title="",
-        xaxis_title="Qtd"
-    )
+    fig_assunto.update_layout(yaxis_title="", xaxis_title="Qtd")
 
     st.plotly_chart(fig_assunto, use_container_width=True)
 
-    # tabela completa
     with st.expander("📋 Ver todos"):
         st.dataframe(assunto_count, use_container_width=True, hide_index=True)
       
