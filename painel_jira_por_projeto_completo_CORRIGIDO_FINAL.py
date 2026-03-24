@@ -741,6 +741,19 @@ def render_app_ne(dfp: pd.DataFrame, ano_global: str, mes_global: str):
         st.info(f"Não há chamados para '{ASSUNTO_ALVO_APPNE}'.")
         return
 
+    # ================= 🔥 AQUI ESTÁ A MÁGICA =================
+    # 👉 puxamos o campo ORIGINAL de assunto relacionado
+    def _get_assunto_rel(v):
+        if isinstance(v, list):
+            v = next((x for x in reversed(v) if x), None)
+
+        if isinstance(v, dict):
+            return v.get("value") or v.get("name") or str(v)
+
+        return v
+
+    df_app["assunto_rel_nome"] = df_app["assunto"].apply(_get_assunto_rel)
+
     # ================= ORIGEM =================
     df_app["origem_nome"] = df_app["origem"].apply(lambda x: safe_get_value(x, "value"))
     df_app["origem_cat"]  = df_app["origem_nome"].apply(normaliza_origem)
@@ -795,42 +808,18 @@ def render_app_ne(dfp: pd.DataFrame, ano_global: str, mes_global: str):
         },
         text="Qtd",
         height=460,
-        category_orders={"origem_cat": ["APP NE", "APP EN", "Outros/Não informado"]},
     )
 
-    fig_app.update_traces(
-        texttemplate="%{text}",
-        textposition="outside",
-        textfont_size=16,
-        cliponaxis=False
-    )
-
-    max_qtd = int(serie["Qtd"].max()) if not serie.empty else 0
-    if max_qtd > 0:
-        fig_app.update_yaxes(range=[0, max_qtd * 1.25])
-
-    fig_app.update_layout(
-        yaxis_title="Qtd",
-        xaxis_title="Mês",
-        uniformtext_minsize=14,
-        uniformtext_mode="show",
-        bargap=0.15,
-        margin=dict(t=70, r=20, b=60, l=50)
-    )
-
+    fig_app.update_traces(textposition="outside", cliponaxis=False)
     show_plot(fig_app, "app_ne", "TDS", ano_global, mes_global)
 
     # ============================================================
-    # 🧾 ASSUNTO RELACIONADO (SEM DEPENDER DE CAMPO BUGADO)
+    # 🧾 ASSUNTO RELACIONADO (AGORA CORRETO 🔥)
     # ============================================================
 
     st.markdown("### 🧾 Assunto Relacionado")
 
     df_ass = df_app.copy()
-
-    # 👉 fallback inteligente: usa assunto_nome direto
-    df_ass["assunto_rel_nome"] = df_ass["assunto_nome"]
-
     df_ass = df_ass[df_ass["assunto_rel_nome"].notna()]
 
     if df_ass.empty:
