@@ -714,7 +714,7 @@ def render_app_ne(dfp: pd.DataFrame, ano_global: str, mes_global: str):
 
     dfp = ensure_assunto_nome(dfp.copy(), "TDS")
 
-    # ================= FILTRO APP NE (igual já era) =================
+    # ================= FILTRO APP NE =================
     s_ass = dfp["assunto_nome"].astype(str).str.strip()
     alvo = ASSUNTO_ALVO_APPNE.strip().casefold()
 
@@ -750,7 +750,7 @@ def render_app_ne(dfp: pd.DataFrame, ano_global: str, mes_global: str):
     m2.metric("APP NE", int(contagem.get("APP NE", 0)))
     m3.metric("APP EN", int(contagem.get("APP EN", 0)))
 
-    # ================= GRÁFICO ORIGINAL =================
+    # ================= GRÁFICO ORIGINAL (SEM ALTERAR CORES) =================
     serie = (
         df_app.groupby(["mes_dt", "origem_cat"])
         .size()
@@ -772,29 +772,50 @@ def render_app_ne(dfp: pd.DataFrame, ano_global: str, mes_global: str):
     )
 
     fig_app.update_traces(texttemplate="%{text}", textposition="outside", cliponaxis=False)
+
+    # ⚠️ mantém exatamente seu comportamento original (cores vêm daqui)
     show_plot(fig_app, "app_ne", "TDS", ano_global, mes_global)
 
     # ============================================================
-    # 🔥 NOVO: ASSUNTO RELACIONADO (IGUAL BI - EMBAIXO DO GRÁFICO)
+    # 🧾 ASSUNTO RELACIONADO (customfield_13621 - CORRETO)
     # ============================================================
 
     st.markdown("### 🧾 Assunto Relacionado")
 
+    if "customfield_13621" not in df_app.columns:
+        st.warning("Campo customfield_13621 não encontrado.")
+        return
+
     df_ass = df_app.copy()
 
+    # garante lista
+    df_ass["assuntos_rel"] = df_ass["customfield_13621"].apply(
+        lambda x: x if isinstance(x, list) else []
+    )
+
+    # explode
+    df_ass = df_ass.explode("assuntos_rel")
+
+    # extrai valor
+    df_ass["assunto_rel_nome"] = df_ass["assuntos_rel"].apply(
+        lambda x: safe_get_value(x, "value")
+    )
+
+    df_ass = df_ass[df_ass["assunto_rel_nome"].notna()]
+
     if df_ass.empty:
-        st.info("Sem dados de assunto.")
+        st.info("Sem dados de Assunto Relacionado.")
         return
 
     assunto_count = (
-        df_ass["assunto_nome"]
+        df_ass["assunto_rel_nome"]
         .value_counts()
         .reset_index()
     )
 
     assunto_count.columns = ["Assunto", "Qtd"]
 
-    # 👉 TOP 10 (igual BI lateral)
+    # TOP 10 estilo BI
     assunto_top = assunto_count.head(10)
 
     fig_assunto = px.bar(
@@ -803,19 +824,22 @@ def render_app_ne(dfp: pd.DataFrame, ano_global: str, mes_global: str):
         y="Assunto",
         orientation="h",
         text="Qtd",
-        title="Top Assuntos",
-        height=400,
+        height=350,
     )
 
     fig_assunto.update_traces(textposition="outside")
-    fig_assunto.update_layout(yaxis_title="", xaxis_title="Qtd")
+    fig_assunto.update_layout(
+        title="Top Assuntos Relacionados",
+        yaxis_title="",
+        xaxis_title="Qtd"
+    )
 
     st.plotly_chart(fig_assunto, use_container_width=True)
 
-    # 👉 tabela completa (igual BI antigo)
-    with st.expander("📋 Ver todos os assuntos"):
+    # tabela completa
+    with st.expander("📋 Ver todos"):
         st.dataframe(assunto_count, use_container_width=True, hide_index=True)
-
+      
 # ---- Onboarding (INT)
 def render_onboarding(dfp: pd.DataFrame, ano_global: str, mes_global: str):
     st.markdown("### 🧭 Onboarding")
