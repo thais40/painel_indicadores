@@ -303,7 +303,9 @@ def buscar_issues(projeto: str, jql: str, max_pages: int = 500) -> pd.DataFrame:
                 ),
                 "status": safe_get_value(f.get("status"), "name"),
                 "issuetype": f.get("issuetype"),
-                "assunto": assunto_val,
+                "assunto_raw": f.get(ASSUNTO_TDS_PRIMARY),
+                "assunto_fallback": f.get(ASSUNTO_TDS_FALLBACK),
+                "issuetype": f.get("issuetype"),
                 "area": f.get(CAMPO_AREA),
                 "n3": f.get(CAMPO_N3),
                 "origem": f.get(CAMPO_ORIGEM),
@@ -752,7 +754,18 @@ def render_app_ne(dfp: pd.DataFrame, ano_global: str, mes_global: str):
 
         return v
 
-    df_app["assunto_rel_nome"] = df_app["assunto"].apply(_get_assunto_rel)
+    def _get_assunto_rel(row):
+    v = row["assunto_raw"] or row["assunto_fallback"]
+
+    if isinstance(v, list):
+        v = next((x for x in reversed(v) if x), None)
+
+    if isinstance(v, dict):
+        return v.get("value") or v.get("name") or str(v)
+
+    return None
+
+    df_app["assunto_rel_nome"] = df_app.apply(_get_assunto_rel, axis=1)
 
     # ================= ORIGEM =================
     df_app["origem_nome"] = df_app["origem"].apply(lambda x: safe_get_value(x, "value"))
