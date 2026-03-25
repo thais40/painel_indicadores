@@ -729,19 +729,21 @@ def render_app_ne(dfp: pd.DataFrame, ano_global: str, mes_global: str):
     dfp = ensure_assunto_nome(dfp.copy(), "TDS")
 
     # ================= FILTRO APP NE =================
-    ds_ass = dfp["assunto_nome"].astype(str).str.strip()
+      
+    dfp = ensure_assunto_nome(dfp.copy(), "TDS")
+      
+    # 👉 GARANTE que essa linha existe
+    s_ass = dfp["assunto_nome"].astype(str).str.strip()
+      
     alvo = ASSUNTO_ALVO_APPNE.strip().casefold()
-
+      
     mask_assunto = s_ass.str.casefold().eq(alvo)
+      
     if not mask_assunto.any():
         mask_assunto = s_ass.str.contains(r"app\s*ne", case=False, regex=True)
-
+      
     df_app = dfp[mask_assunto].copy()
-
-    if df_app.empty:
-        st.info(f"Não há chamados para '{ASSUNTO_ALVO_APPNE}'.")
-        return
-
+  
     # ================= 🔥 AQUI ESTÁ A MÁGICA =================
     # 👉 puxamos o campo ORIGINAL de assunto relacionado
     
