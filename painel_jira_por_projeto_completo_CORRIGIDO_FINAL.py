@@ -222,28 +222,36 @@ def ensure_assunto_nome(df_proj: pd.DataFrame, projeto: str) -> pd.DataFrame:
 
     col = "assunto_nome"
 
-    # 🔥 GARANTE que as colunas existem antes de usar
-    if "assunto" not in df_proj.columns:
-        df_proj["assunto"] = None
+    # 🚨 NÃO sobrescreve se já existe
+    has_assunto = "assunto" in df_proj.columns
+    has_issuetype = "issuetype" in df_proj.columns
 
-    if "issuetype" not in df_proj.columns:
-        df_proj["issuetype"] = None
-
-    # 🚀 cria coluna se não existir
     if col not in df_proj.columns:
-        if CAMPOS_ASSUNTO.get(projeto) == "issuetype":
+        if CAMPOS_ASSUNTO.get(projeto) == "issuetype" and has_issuetype:
             df_proj[col] = df_proj["issuetype"].apply(_from_field)
-        else:
+
+        elif has_assunto:
             df_proj[col] = df_proj["assunto"].apply(_from_field)
 
-    # 🔁 fallback se veio vazio
+        elif has_issuetype:
+            df_proj[col] = df_proj["issuetype"].apply(_from_field)
+
+        else:
+            df_proj[col] = "Não informado"
+
+    # 🔁 fallback só se ficou vazio
     if df_proj[col].isna().all() or (df_proj[col].astype(str).str.strip() == "").all():
-        if CAMPOS_ASSUNTO.get(projeto) == "issuetype":
-            df_proj[col] = df_proj["issuetype"].apply(_from_field)
-        else:
+
+        if has_assunto:
             df_proj[col] = df_proj["assunto"].apply(_from_field)
 
-    # 🛡️ fallback final absoluto
+        elif has_issuetype:
+            df_proj[col] = df_proj["issuetype"].apply(_from_field)
+
+        else:
+            df_proj[col] = "Não informado"
+
+    # 🛡️ garante preenchimento
     df_proj[col] = df_proj[col].fillna("Não informado")
 
     return df_proj
