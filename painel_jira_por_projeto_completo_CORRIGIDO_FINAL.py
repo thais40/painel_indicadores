@@ -756,7 +756,7 @@ def render_app_ne(dfp: pd.DataFrame, ano_global: str, mes_global: str):
         if isinstance(v, dict):
             return v.get("value") or v.get("name") or str(v)
     
-        return None
+        return v if v not in (None, "") else None
     
     
     df_app["assunto_rel_nome"] = df_app.apply(_get_assunto_rel, axis=1)
