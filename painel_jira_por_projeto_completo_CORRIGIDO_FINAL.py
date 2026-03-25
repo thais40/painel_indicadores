@@ -730,7 +730,7 @@ def render_app_ne(dfp: pd.DataFrame, ano_global: str, mes_global: str):
     dfp = ensure_assunto_nome(dfp.copy(), "TDS")
 
     # ================= FILTRO APP NE =================
-    s_ass = dfp["assunto_nome"].astype(str).str.strip()
+    ds_ass = dfp["assunto_nome"].astype(str).str.strip()
     alvo = ASSUNTO_ALVO_APPNE.strip().casefold()
 
     mask_assunto = s_ass.str.casefold().eq(alvo)
