@@ -983,47 +983,146 @@ def render_rotinas_manuais(dfp: pd.DataFrame, ano_global: str, mes_global: str):
           .copy()
     )
 
+    # ✅ Respeita DATA_INICIO em Rotinas Manuais (pelo resolved)
     _dt_inicio = pd.to_datetime(DATA_INICIO)
     df = df[df["resolved"].notna() & (df["resolved"] >= _dt_inicio)].copy()
     df["mes_dt"] = df["resolved"].dt.to_period("M").dt.to_timestamp()
-    df["assunto_canon"] = df["assunto_nome"].astype(str).apply(_canon)
+    df["assunto_nome"] = df["assunto_nome"].astype(str)
+    df["assunto_canon"] = df["assunto_nome"].apply(_canon)
 
-    tech_areas = sorted(set(discover_tech_support_areas(df)) | 
-                        {a for a in df["area_nome"].dropna().unique() if _canon(a) in {_canon(x) for x in MANUAL_TS_AREAS_EXTRA}})
+    tech_areas_auto = discover_tech_support_areas(df)
+    extras_canon = {_canon(a) for a in MANUAL_TS_AREAS_EXTRA}
+    tech_areas = sorted(
+        set(tech_areas_auto) |
+        {a for a in df["area_nome"].dropna().unique() if _canon(a) in extras_canon}
+    )
 
     base_ops = df[df["area_nome"].isin(OPS_AREAS)].copy()
     base_ts  = df[df["area_nome"].isin(tech_areas)].copy()
-    
+    if base_ops.empty and base_ts.empty:
+        st.info("Sem tickets nas áreas Ops/Tech Support para os filtros atuais.")
+        return
+
     full_ops = base_ops.copy()
     full_ts  = base_ts.copy()
 
-    base_ops = aplicar_filtro_global(base_ops, "mes_dt", ano_global, mes_global)
-    base_ts  = aplicar_filtro_global(base_ts,  "mes_dt", ano_global, mes_global)
+    if not base_ops.empty:
+        base_ops = aplicar_filtro_global(base_ops, "mes_dt", ano_global, mes_global)
+    if not base_ts.empty:
+        base_ts  = aplicar_filtro_global(base_ts,  "mes_dt", ano_global, mes_global)
 
     if base_ops.empty and base_ts.empty:
         st.info("Sem dados para exibir com os filtros atuais.")
         return
 
     assuntos_canon = {_canon(a) for a in MANUAL_TS_ASSUNTOS}
-    monthly_tds = base_ops.groupby("mes_dt")["qtd_encomendas"].sum().rename("Encomendas TDS")
-    
-    ts_manuais = base_ts[base_ts["assunto_canon"].isin(assuntos_canon)].copy()
-    monthly_manual = ts_manuais.groupby("mes_dt")["qtd_encomendas"].sum().rename("Encomendas manuais")
 
-    # [Cálculo de eixos e concatenação omitido para brevidade no chat, mas segue a lógica original 100%]
-    # (O código original segue aqui gerando monthly, fig bar e fig donut)
+    monthly_tds = (
+        base_ops.groupby("mes_dt")["qtd_encomendas"].sum().rename("Encomendas TDS")
+        if not base_ops.empty else pd.Series(dtype=float, name="Encomendas TDS")
+    )
+
+    if not base_ts.empty and assuntos_canon:
+        ts_mask_manual = base_ts["assunto_canon"].isin(assuntos_canon)
+        ts_manuais = base_ts[ts_mask_manual].copy()
+        monthly_manual = (
+            ts_manuais.groupby("mes_dt")["qtd_encomendas"].sum().rename("Encomendas manuais")
+        )
+    else:
+        ts_manuais = base_ts.iloc[0:0].copy()
+        monthly_manual = pd.Series(dtype=float, name="Encomendas manuais")
+
+    min_m = pd.concat([
+        base_ops["mes_dt"] if not base_ops.empty else pd.Series(dtype="datetime64[ns]"),
+        base_ts["mes_dt"]  if not base_ts.empty  else pd.Series(dtype="datetime64[ns]")
+    ]).min()
+    max_m = pd.concat([
+        base_ops["mes_dt"] if not base_ops.empty else pd.Series(dtype="datetime64[ns]"),
+        base_ts["mes_dt"]  if not base_ts.empty  else pd.Series(dtype="datetime64[ns]")
+    ]).max()
+    _dt_inicio = pd.to_datetime(DATA_INICIO)
+    min_m = max(min_m, _dt_inicio)
+    idx = pd.date_range(min_m, max_m, freq="MS")
+
+    s_tds    = monthly_tds.reindex(idx, fill_value=0.0)
+    s_manual = monthly_manual.reindex(idx, fill_value=0.0)
+
+    monthly = pd.concat([
+        s_manual.rename("Encomendas manuais"),
+        s_tds.rename("Encomendas TDS")
+    ], axis=1).reset_index().rename(columns={"index": "mes_dt"})
+    monthly["mes_str"] = monthly["mes_dt"].dt.strftime("%b/%Y")
+
+    fig = px.bar(
+        monthly,
+        x="mes_str",
+        y=["Encomendas manuais", "Encomendas TDS"],
+        barmode="group",
+        text_auto=True,
+        title="Encomendas manuais vs Encomendas TDS",
+        height=420,
+    )
+    fig.update_traces(textangle=0, cliponaxis=False)
+    fig.update_xaxes(categoryorder="array", categoryarray=monthly["mes_str"].tolist())
+    show_plot(fig, "rotinas_manual_ts_assunto_vs_tds_ops_extras", "TDS", ano_global, mes_global)
+
+    total_tds    = float(s_tds.sum())
+    total_manual = float(s_manual.sum())
+
+    df_donut = pd.DataFrame(
+        {"tipo": ["Encomendas manuais", "Encomendas TDS"],
+         "qtd":  [total_manual, total_tds]}
+    )
+    fig_donut = px.pie(
+        df_donut, values="qtd", names="tipo", hole=0.6,
+        title="Participação — Manuais vs TDS"
+    )
+    fig_donut.update_traces(textposition="inside", textinfo="percent+label")
+    show_plot(fig_donut, "rotinas_manual_ts_assunto_donut_vs_tds_ops_extras", "TDS", ano_global, mes_global)
+
+    if not ts_manuais.empty:
+        def _map_subject(canon_name: str) -> str:
+            return SUBJECT_GROUPS.get(canon_name, SUBJECT_GROUPS.get("volumetria - painel sem registro", "Outros"))
+
+        ts_manuais["assunto_grupo"] = ts_manuais["assunto_canon"].apply(_map_subject)
+        df_ass = (
+            ts_manuais.groupby("assunto_grupo")["qtd_encomendas"]
+            .sum()
+            .reset_index()
+            .sort_values("qtd_encomendas", ascending=True)
+        )
+
+        fig_ass = px.bar(
+            df_ass, x="qtd_encomendas", y="assunto_grupo",
+            orientation="h", text="qtd_encomendas",
+            title="Manual: Assuntos relacionados", height=380
+        )
+        fig_ass.update_traces(textposition="outside")
+        fig_ass.update_layout(yaxis_title="", xaxis_title="Qtd")
+        show_plot(fig_ass, "rotinas_manual_por_assunto", "TDS", ano_global, mes_global)
 
     with st.expander("📤 Exportar / diagnóstico", expanded=False):
-        def _prep_export(dd, origem, somente_assuntos=False):
-            if dd.empty: return pd.DataFrame(columns=["key","resolved","mes_dt","area_nome","assunto_nome","summary","qtd_encomendas","origem"])
+        def _prep_export(dd: pd.DataFrame, origem: str, somente_assuntos: bool = False) -> pd.DataFrame:
+            if dd.empty:
+                return pd.DataFrame(columns=["key","resolved","mes_dt","area_nome","assunto_nome","summary","qtd_encomendas","origem"])
             tmp = dd.copy()
-            if somente_assuntos: tmp = tmp[tmp["assunto_canon"].isin(assuntos_canon)]
+            tmp["assunto_canon"] = tmp["assunto_nome"].apply(_canon)
+            if somente_assuntos and len(assuntos_canon) > 0:
+                tmp = tmp[tmp["assunto_canon"].isin(assuntos_canon)].copy()
             tmp["origem"] = origem
             return tmp[["key","resolved","mes_dt","area_nome","assunto_nome","summary","qtd_encomendas","origem"]]
 
-        df_export = pd.concat([_prep_export(full_ops, "Ops (TDS total)"), 
-                               _prep_export(full_ts, "TS (manuais)", True)]).sort_values("resolved")
-        st.download_button("Baixar CSV", df_export.to_csv(index=False).encode("utf-8-sig"), "rotinas_manuais.csv", "text/csv")
+        exp_ops = _prep_export(full_ops, "Ops (TDS total)")
+        exp_ts  = _prep_export(full_ts,  "TS + extras (manuais | assunto)", somente_assuntos=True)
+        df_export = pd.concat([exp_ops, exp_ts], ignore_index=True).sort_values("resolved")
+
+        c1, c2, c3 = st.columns(3)
+        c1.metric("Tickets únicos (Ops + TS+extras)", int(df_export["key"].nunique()))
+        c2.metric("Soma TDS (Ops)", int(total_tds))
+        c3.metric("Soma Manuais (TS+extras | assunto)", int(total_manual))
+
+        csv = df_export.to_csv(index=False).encode("utf-8-sig")
+        st.download_button("Baixar CSV", data=csv, file_name="rotinas_ops_tds_vs_manual_ts_extras_por_assunto.csv", mime="text/csv")
         st.dataframe(df_export.head(5000), use_container_width=True, hide_index=True)
 
   # ================= Filtros Globais ========================
