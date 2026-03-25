@@ -217,26 +217,37 @@ def ensure_assunto_nome(df_proj: pd.DataFrame, projeto: str) -> pd.DataFrame:
                         return MAPA_ASSUNTOS_APP_NE[key_int]
                 except:
                     pass
-
             return v.get("value") or v.get("name") or str(v)
         return v
 
     col = "assunto_nome"
 
+    # 🔥 GARANTE que as colunas existem antes de usar
+    if "assunto" not in df_proj.columns:
+        df_proj["assunto"] = None
+
+    if "issuetype" not in df_proj.columns:
+        df_proj["issuetype"] = None
+
+    # 🚀 cria coluna se não existir
     if col not in df_proj.columns:
         if CAMPOS_ASSUNTO.get(projeto) == "issuetype":
             df_proj[col] = df_proj["issuetype"].apply(_from_field)
         else:
             df_proj[col] = df_proj["assunto"].apply(_from_field)
 
+    # 🔁 fallback se veio vazio
     if df_proj[col].isna().all() or (df_proj[col].astype(str).str.strip() == "").all():
         if CAMPOS_ASSUNTO.get(projeto) == "issuetype":
             df_proj[col] = df_proj["issuetype"].apply(_from_field)
         else:
             df_proj[col] = df_proj["assunto"].apply(_from_field)
 
-    return df_proj
+    # 🛡️ fallback final absoluto
+    df_proj[col] = df_proj[col].fillna("Não informado")
 
+    return df_proj
+  
 # ================= Jira fetch =============================
 
 def _jira_search_jql(jql: str, next_page_token: Optional[str] = None, max_results: int = 100) -> Dict[str, Any]:
