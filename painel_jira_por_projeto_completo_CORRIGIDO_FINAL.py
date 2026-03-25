@@ -27,9 +27,6 @@ import requests
 import streamlit as st
 from requests.auth import HTTPBasicAuth
 
-MAPA_ASSUNTOS_APP_NE = {
-    17335: "Dúvida cotação frete - App EN",
-}
 # ================= Config da página =======================
 st.set_page_config(page_title="Painel de Indicadores", page_icon="📊", layout="wide")
 
@@ -55,7 +52,6 @@ SLA_CAMPOS = {
 
 ASSUNTO_TDS_PRIMARY = "customfield_13747"   # Assunto Relacionado
 ASSUNTO_TDS_FALLBACK = "customfield_13712"  # fallback
-CAMPO_ASSUNTO_APP_NE_XML = "customfield_13621" # Assunto Relacionado APP NE
 
 CAMPOS_ASSUNTO = {
     "TDS": ASSUNTO_TDS_PRIMARY,
@@ -74,15 +70,16 @@ TITULOS = {"TDS": "Tech Support", "INT": "Integrations", "TINE": "IT Support NE"
 META_SLA = {"TDS": 98.00, "INT": 96.00, "TINE": 96.00, "INTEL": 96.00}
 ASSUNTO_ALVO_APPNE = "Problemas no App NE - App EN"
 
+# 👉 ADIÇÃO: vamos buscar também o assignee
 JIRA_FIELDS_BASE = [
     "key", "summary", "created", "updated", "resolutiondate", "resolved", "statuscategorychangedate", "status", "issuetype",
-    "assignee",
+    "assignee",  # <— NOVO
     CAMPO_AREA, CAMPO_N3, CAMPO_ORIGEM, CAMPO_QTD_ENCOMENDAS,
 ]
 FIELDS_SLA_ALL = list(set(SLA_CAMPOS.values()))
 FIELDS_ASSUNTO_ALL = list(set([v for v in CAMPOS_ASSUNTO.values() if v != "issuetype"]))
 FIELDS_ALL: List[str] = list(
-    dict.fromkeys(JIRA_FIELDS_BASE + FIELDS_SLA_ALL + FIELDS_ASSUNTO_ALL + [ASSUNTO_TDS_FALLBACK, CAMPO_ASSUNTO_APP_NE_XML])
+    dict.fromkeys(JIRA_FIELDS_BASE + FIELDS_SLA_ALL + FIELDS_ASSUNTO_ALL + [ASSUNTO_TDS_FALLBACK])
 )
 
 # ================= UI: Cabeçalho ===========================
@@ -112,6 +109,7 @@ if "last_update" not in st.session_state:
 st.markdown('<div class="update-row">', unsafe_allow_html=True)
 if st.button("🔄 Atualizar dados"):
     st.session_state["last_update"] = now_br_str()
+    # limpa cache em memória (session_state) para forçar nova busca no Jira
     for k in ["df_TDS","df_INT","df_TINE","df_INTEL"]:
         if k in st.session_state:
             del st.session_state[k]
@@ -209,53 +207,25 @@ def ensure_assunto_nome(df_proj: pd.DataFrame, projeto: str) -> pd.DataFrame:
 
     def _from_field(v):
         if isinstance(v, dict):
-            key = v.get("id") or v.get("key")
-            if key:
-                try:
-                    key_int = int(key)
-                    if key_int in MAPA_ASSUNTOS_APP_NE:
-                        return MAPA_ASSUNTOS_APP_NE[key_int]
-                except:
-                    pass
             return v.get("value") or v.get("name") or str(v)
         return v
 
     col = "assunto_nome"
-
-    # 🚨 NÃO sobrescreve se já existe
-    has_assunto = "assunto" in df_proj.columns
-    has_issuetype = "issuetype" in df_proj.columns
-
     if col not in df_proj.columns:
-        if CAMPOS_ASSUNTO.get(projeto) == "issuetype" and has_issuetype:
+        if CAMPOS_ASSUNTO.get(projeto) == "issuetype":
             df_proj[col] = df_proj["issuetype"].apply(_from_field)
-
-        elif has_assunto:
+        else:
             df_proj[col] = df_proj["assunto"].apply(_from_field)
 
-        elif has_issuetype:
-            df_proj[col] = df_proj["issuetype"].apply(_from_field)
-
-        else:
-            df_proj[col] = "Não informado"
-
-    # 🔁 fallback só se ficou vazio
     if df_proj[col].isna().all() or (df_proj[col].astype(str).str.strip() == "").all():
-
-        if has_assunto:
-            df_proj[col] = df_proj["assunto"].apply(_from_field)
-
-        elif has_issuetype:
+        if CAMPOS_ASSUNTO.get(projeto) == "issuetype":
             df_proj[col] = df_proj["issuetype"].apply(_from_field)
-
         else:
-            df_proj[col] = "Não informado"
-
-    # 🛡️ garante preenchimento
-    df_proj[col] = df_proj[col].fillna("Não informado")
+            df_proj[col] = df_proj["assunto"].apply(_from_field)
 
     return df_proj
-  
+
+
 # ================= Jira fetch =============================
 
 def _jira_search_jql(jql: str, next_page_token: Optional[str] = None, max_results: int = 100) -> Dict[str, Any]:
@@ -321,13 +291,11 @@ def buscar_issues(projeto: str, jql: str, max_pages: int = 500) -> pd.DataFrame:
                 ),
                 "status": safe_get_value(f.get("status"), "name"),
                 "issuetype": f.get("issuetype"),
-                "assunto_raw": f.get(ASSUNTO_TDS_PRIMARY),
-                "assunto_fallback": f.get(ASSUNTO_TDS_FALLBACK),
-                "assunto_app_ne_xml": f.get(CAMPO_ASSUNTO_APP_NE_XML),
+                "assunto": assunto_val,
                 "area": f.get(CAMPO_AREA),
                 "n3": f.get(CAMPO_N3),
                 "origem": f.get(CAMPO_ORIGEM),
-                "assignee": f.get("assignee"),
+                "assignee": f.get("assignee"),  # <— NOVO
                 CAMPO_QTD_ENCOMENDAS: f.get(CAMPO_QTD_ENCOMENDAS),
                 "sla_raw": f.get(SLA_CAMPOS[projeto], {}),
             }
@@ -351,6 +319,7 @@ def buscar_issues(projeto: str, jql: str, max_pages: int = 500) -> pd.DataFrame:
         dfp["mes_resolved"] = dfp["resolved"].dt.to_period("M").dt.to_timestamp()
         dfp["mes_closed"] = dfp["closed_dt"].dt.to_period("M").dt.to_timestamp()
     return dfp
+
 
 # ================= Builders / SLA =========================
 
@@ -389,6 +358,7 @@ def build_monthly_tables(df_all: pd.DataFrame) -> pd.DataFrame:
     monthly["pct_dentro"] = monthly.apply(lambda r: (r["Dentro"] / r["Resolvidos"] * 100) if r["Resolvidos"] > 0 else 0.0, axis=1).round(2)
     monthly["pct_fora"] = monthly.apply(lambda r: (r["Fora"] / r["Resolvidos"] * 100) if r["Resolvidos"] > 0 else 0.0, axis=1).round(2)
     return monthly.sort_values(["projeto", "period"])
+
 
 # ================= Visuais Genéricos ======================
 
@@ -495,7 +465,7 @@ def render_sla_table(df_monthly_all: pd.DataFrame, projeto: str, ano_global: str
     titulo = f"OKR: {okr:.2f}% — Meta: {meta:.2f}%".replace(".", ",")
 
     show = dfm[["mes_str", "period_ts", "pct_dentro", "pct_fora"]].sort_values("period_ts")
-    show = show.rename(columns={"pct_dentro": "% Dentro SLA", "pct_fora": "pct_fora"})
+    show = show.rename(columns={"pct_dentro": "% Dentro SLA", "% Fora SLA": "pct_fora"})
     fig = px.bar(
         show,
         x="mes_str",
@@ -510,6 +480,8 @@ def render_sla_table(df_monthly_all: pd.DataFrame, projeto: str, ano_global: str
     fig.update_xaxes(categoryorder="array", categoryarray=show["mes_str"].tolist())
     show_plot(fig, "sla_legacy", projeto, ano_global, mes_global)
 
+
+# ================== SLA – gráfico + submenu "Chamados fora do SLA" ==================
 def render_sla_fora_detalhes(dfp, projeto: str, ano_global: str, mes_global: str):
     """
     Lista de tickets fora do SLA alinhada ao gráfico:
@@ -517,6 +489,7 @@ def render_sla_fora_detalhes(dfp, projeto: str, ano_global: str, mes_global: str
       - Fora do SLA = not(dentro_sla_from_raw(sla_raw)) com fillna(False)
       - Filtro por mês/ano aplicado sobre 'resolved'
       - ADIÇÃO: coluna 'assignee_nome'
+      - REMOÇÃO: não exibimos mais o card da mediana de horas
     """
     import numpy as np
     import pandas as pd
@@ -532,11 +505,12 @@ def render_sla_fora_detalhes(dfp, projeto: str, ano_global: str, mes_global: str
 
     base = df[df["resolved"].notna()].copy()
     base["_dentro_sla_calc"] = base["sla_raw"].apply(dentro_sla_from_raw)
-    base["_fora_sla"] = (~base["_dentro_sla_calc"].fillna(False).astype(bool))
+    base["_fora_sla"] = (~base["_dentro_sla_calc"].fillna(False).astype(bool))  # None => Fora
 
     base["mes_dt"] = base["resolved"].dt.to_period("M").dt.to_timestamp()
     base = aplicar_filtro_global(base, "mes_dt", ano_global, mes_global)
 
+    # area_nome
     if "area_nome" not in base.columns:
         def _get_area(x):
             if isinstance(x, dict):
@@ -547,6 +521,7 @@ def render_sla_fora_detalhes(dfp, projeto: str, ano_global: str, mes_global: str
         else:
             base["area_nome"] = np.nan
 
+    # assunto_nome
     if "assunto_nome" not in base.columns:
         if "assunto" in base.columns:
             base["assunto_nome"] = base["assunto"].apply(
@@ -555,12 +530,14 @@ def render_sla_fora_detalhes(dfp, projeto: str, ano_global: str, mes_global: str
         else:
             base["assunto_nome"] = np.nan
 
+    # 👉 assignee_nome (displayName → emailAddress → name → accountId)
     def _assignee_name(a):
         if isinstance(a, dict):
             return a.get("displayName") or a.get("emailAddress") or a.get("name") or a.get("accountId")
         return a
     base["assignee_nome"] = base.get("assignee").apply(_assignee_name) if "assignee" in base.columns else np.nan
 
+    # tempo em horas para ordenar/exibir
     if {"resolved", "created"}.issubset(base.columns):
         base["tempo_resolucao_horas"] = (
             (base["resolved"] - base["created"]).dt.total_seconds() / 3600.0
@@ -584,12 +561,15 @@ def render_sla_fora_detalhes(dfp, projeto: str, ano_global: str, mes_global: str
         base_fora = base_fora.sort_values("tempo_resolucao_horas", ascending=False)
         base_fora["tempo_resolucao_horas"] = base_fora["tempo_resolucao_horas"].astype(float).round(1)
 
+    # ✅ AQUI é a correção (Arrow): criamos um df "limpo" antes de passar pro st.dataframe
     show_df = base_fora[cols].copy()
 
+    # 1) datetime com timezone -> sem timezone (Arrow costuma quebrar com tz)
     for c in show_df.columns:
         if pd.api.types.is_datetime64tz_dtype(show_df[c]):
             show_df[c] = show_df[c].dt.tz_convert(TZ_BR).dt.tz_localize(None)
 
+    # 2) qualquer dict/list/objeto vira string (Arrow não aceita dict em célula)
     for c in show_df.columns:
         if show_df[c].dtype == "object":
             show_df[c] = show_df[c].apply(
@@ -646,6 +626,7 @@ def render_sla(dfp, df_monthly_all: pd.DataFrame, projeto: str, ano_global: str,
 
     with st.expander("🔎 Ver chamados fora do SLA (lista detalhada)", expanded=False):
         render_sla_fora_detalhes(dfp, projeto, ano_global, mes_global)
+# ==================/ SLA – gráfico + submenu ==================
 
 
 def render_assunto(dfp: pd.DataFrame, projeto: str, ano_global: str, mes_global: str):
@@ -691,10 +672,8 @@ def render_encaminhamentos(dfp: pd.DataFrame, ano_global: str, mes_global: str):
 
 
 # ================= Módulos específicos ====================
-
 def render_app_ne(dfp: pd.DataFrame, ano_global: str, mes_global: str):
     st.markdown("### 📱 APP NE")
-
     if dfp.empty:
         st.info("Sem dados para APP NE.")
         return
@@ -703,66 +682,58 @@ def render_app_ne(dfp: pd.DataFrame, ano_global: str, mes_global: str):
     s_ass = dfp["assunto_nome"].astype(str).str.strip()
     alvo = ASSUNTO_ALVO_APPNE.strip().casefold()
     mask_assunto = s_ass.str.casefold().eq(alvo)
-    
     if not mask_assunto.any():
         mask_assunto = s_ass.str.contains(r"app\s*ne", case=False, regex=True)
-      
-    df_app = dfp[mask_assunto].copy()
 
-    # 👉 CORREÇÃO: Mapeamento do Assunto Relacionado (Priorizando o campo 13621 indicado)
-    def _get_assunto_rel(row):
-        # 1) Tenta o campo customfield_13621 (Assunto Relacionado APP NE)
-        # 2) Fallback para campos TDS (13747 ou 13712)
-        v = row.get("assunto_app_ne_xml") or row.get("assunto_raw") or row.get("assunto_fallback")
-        if isinstance(v, list): v = next((x for x in reversed(v) if x), None)
-        if isinstance(v, dict):
-            key = v.get("id") or v.get("key")
-            if key and str(key) == "17335": return "Dúvida cotação frete - App EN"
-            return v.get("value") or v.get("name") or str(v)
-        return v if v not in (None, "") else None
-    
-    df_app["assunto_rel_nome"] = df_app.apply(_get_assunto_rel, axis=1)
+    df_app = dfp[mask_assunto].copy()
+    if df_app.empty:
+        st.info(f"Não há chamados para '{ASSUNTO_ALVO_APPNE}'.")
+        return
 
     df_app["origem_nome"] = df_app["origem"].apply(lambda x: safe_get_value(x, "value"))
     df_app["origem_cat"]  = df_app["origem_nome"].apply(normaliza_origem)
-    df_app["mes_dt"] = df_app["mes_created"].dt.to_period("M").dt.to_timestamp()
 
+    df_app["mes_dt"] = df_app["mes_created"].dt.to_period("M").dt.to_timestamp()
+    # ✅ Respeita DATA_INICIO no APP NE (comparando pelo created)
     _dt_inicio = pd.to_datetime(DATA_INICIO)
     df_app = df_app[df_app["mes_created"].notna() & (df_app["mes_created"] >= _dt_inicio)].copy()
     df_app = aplicar_filtro_global(df_app, "mes_dt", ano_global, mes_global)
-
     if df_app.empty:
         st.info("Sem dados para exibir com os filtros selecionados.")
         return
 
     total_app = int(len(df_app))
     contagem  = df_app["origem_cat"].value_counts()
-    m1, m2, m3 = st.columns(3)
+
+    m1,m2,m3 = st.columns(3)
     m1.metric("Total (APP NE/EN)", total_app)
     m2.metric("APP NE", int(contagem.get("APP NE", 0)))
     m3.metric("APP EN", int(contagem.get("APP EN", 0)))
 
-    serie = df_app.groupby(["mes_dt", "origem_cat"]).size().reset_index(name="Qtd").sort_values("mes_dt")
+    serie = (df_app.groupby(["mes_dt","origem_cat"]).size()
+             .reset_index(name="Qtd").sort_values("mes_dt"))
     serie["mes_str"] = serie["mes_dt"].dt.strftime("%b/%Y")
-    
+    cats = serie["mes_str"].dropna().unique().tolist()
+    serie["mes_str"] = pd.Categorical(serie["mes_str"], categories=cats, ordered=True)
+
     fig_app = px.bar(
         serie, x="mes_str", y="Qtd", color="origem_cat", barmode="group",
-        title="APP NE — Volumes por mês", height=460, text="Qtd",
-        color_discrete_map={"APP NE": "#2ca02c", "APP EN": "#1f77b4", "Outros/Não informado": "#9ca3af"}
+        title="APP NE — Volumes por mês e Origem do problema",
+        color_discrete_map={"APP NE":"#2ca02c","APP EN":"#1f77b4","Outros/Não informado":"#9ca3af"},
+        text="Qtd", height=460,
+        category_orders={"origem_cat": ["APP NE", "APP EN", "Outros/Não informado"]},
     )
-    fig_app.update_traces(textposition="outside", cliponaxis=False)
+    fig_app.update_traces(texttemplate="%{text}", textposition="outside", textfont_size=16, cliponaxis=False)
+    max_qtd = int(serie["Qtd"].max()) if not serie.empty else 0
+    if max_qtd > 0:
+        fig_app.update_yaxes(range=[0, max_qtd * 1.25])
+    fig_app.update_layout(yaxis_title="Qtd", xaxis_title="Mês",
+                          uniformtext_minsize=14, uniformtext_mode="show",
+                          bargap=0.15, margin=dict(t=70, r=20, b=60, l=50))
     show_plot(fig_app, "app_ne", "TDS", ano_global, mes_global)
+  
 
-    # ✅ CORREÇÃO: LISTA DE CLASSIFICAÇÃO COM CONTAGEM REAL (ASSUNTO vs QTD)
-    st.markdown("### 🧾 Assunto Relacionado")
-    with st.expander("📋 Ver lista completa de assuntos", expanded=False):
-        df_ass_final = df_app.copy()
-        df_ass_final["assunto_rel_nome"] = df_ass_final["assunto_rel_nome"].fillna("Não informado")
-        assunto_count = df_ass_final["assunto_rel_nome"].value_counts().reset_index()
-        assunto_count.columns = ["Assunto", "Qtd"]
-        st.dataframe(assunto_count, use_container_width=True, hide_index=True)
-
-  # ---- Onboarding (INT)
+# ---- Onboarding (INT)
 def render_onboarding(dfp: pd.DataFrame, ano_global: str, mes_global: str):
     st.markdown("### 🧭 Onboarding")
     if dfp.empty:
@@ -788,7 +759,7 @@ def render_onboarding(dfp: pd.DataFrame, ano_global: str, mes_global: str):
     df_onb = aplicar_filtro_global(dfp.copy(), "mes_created", ano_global, mes_global)
     # ✅ Respeita DATA_INICIO no Onboarding
     _dt_inicio = pd.to_datetime(DATA_INICIO)
-    # usa mes_created (já normalizado no pipeline) para evitar qualquer divergência
+    # usa mes_created (já normalizado no pipeline) para evitar qualquer divergência de timezone/string
     if "mes_created" in df_onb.columns:
         df_onb = df_onb[df_onb["mes_created"].notna() & (df_onb["mes_created"] >= _dt_inicio)].copy()
     else:
@@ -852,13 +823,13 @@ def render_onboarding(dfp: pd.DataFrame, ano_global: str, mes_global: str):
             fig_cli.update_layout(margin=dict(l=10, r=10, t=60, b=10))
             for _, r in serie.iterrows():
                 txt = r.get("annot") or ""
-                if not txt: continue
+                if not txt:
+                    continue
                 color = "blue" if (r.get("pct") or 0) >= 0 else "red"
                 fig_cli.add_annotation(
                     x=r["mes_str"], y=1.02, xref="x", yref="paper",
                     text=txt, showarrow=False, font=dict(size=12, color=color), yanchor="bottom"
                 )
-            show_plot(fig_cli, "onb_cli_novo", "INT", ano_global, mes_global)
 
     # 2) Tipo de Integração
     def _tipo_from_assunto(s: str) -> str:
@@ -878,14 +849,32 @@ def render_onboarding(dfp: pd.DataFrame, ano_global: str, mes_global: str):
 
     fig_tipo = px.bar(tipo_counts, x="Qtd", y="tipo", orientation="h", text="Qtd", title="Tipo de Integração", height=420)
     fig_tipo.update_traces(textposition="outside", cliponaxis=False)
+    fig_tipo.update_layout(margin=dict(l=10, r=90, t=45, b=10))
+    try:
+        _max_q = float(tipo_counts["Qtd"].max())
+        fig_tipo.update_xaxes(range=[0, _max_q * 1.12])
+    except Exception:
+        pass
+
+    if "fig_cli" in locals():
+        show_plot(fig_cli, "onb_cli_novo", "INT", ano_global, mes_global)
+    else:
+        st.info("Sem dados para 'Cliente novo' com os filtros atuais.")
     show_plot(fig_tipo, "onb_tipo_int", "INT", ano_global, mes_global)
 
     if not df_erros.empty:
         cont_erros = (df_erros["assunto_nome"].value_counts()
                       .reindex(ASSUNTOS_ERROS, fill_value=0).reset_index())
         cont_erros.columns = ["Categoria","Qtd"]
-        fig_onb = px.bar(cont_erros, x="Qtd", y="Categoria", orientation="h", text="Qtd", title="Erros Onboarding", height=420)
-        fig_onb.update_traces(textposition="outside", cliponaxis=False)
+
+        fig_onb = px.bar(cont_erros, x="Qtd", y="Categoria", orientation="h",
+                         text="Qtd", title="Erros Onboarding", height=420)
+        fig_onb.update_traces(texttemplate="%{text:.0f}", textposition="outside",
+                              textfont_size=16, cliponaxis=False)
+        max_q = int(cont_erros["Qtd"].max()) if not cont_erros.empty else 0
+        if max_q > 0:
+            fig_onb.update_xaxes(range=[0, max_q*1.25])
+        fig_onb.update_layout(margin=dict(t=50, r=20, b=30, l=10), bargap=0.25)
         show_plot(fig_onb, "onboarding", "INT", ano_global, mes_global)
 
     st.markdown("---")
@@ -898,7 +887,9 @@ def render_onboarding(dfp: pd.DataFrame, ano_global: str, mes_global: str):
                                     min_value=0, max_value=100000, step=500, value=20000,
                                     key="sim_receita_onb")
     dinheiro_perdido = float(possiveis_clientes) * float(receita_cliente)
-    st.markdown(f"### **R$ {dinheiro_perdido:,.2f}**", help="Cálculo: Clientes novos × Cenário Receita")
+    st.markdown(f"### **R$ {dinheiro_perdido:,.2f}**",
+                help="Cálculo: Clientes novos (simulação) × Cenário Receita por Cliente")
+
 
 # ---- Rotinas Manuais (TDS) — 100% por Jira
 def render_rotinas_manuais(dfp: pd.DataFrame, ano_global: str, mes_global: str):
@@ -1144,7 +1135,7 @@ def render_rotinas_manuais(dfp: pd.DataFrame, ano_global: str, mes_global: str):
         st.download_button("Baixar CSV", data=csv, file_name="rotinas_ops_tds_vs_manual_ts_extras_por_assunto.csv", mime="text/csv")
         st.dataframe(df_export.head(5000), use_container_width=True, hide_index=True)
 
-  # ================= Filtros Globais ========================
+# ================= Filtros Globais ========================
 
 st.markdown("### 🔍 Filtros Globais")
 ano_atual = date.today().year
@@ -1321,6 +1312,6 @@ for projeto, tab in zip(PROJETOS, tabs):
             if projeto == "INT":
                 with st.expander("🧭 Onboarding", expanded=False):
                     render_onboarding(dfp, ano_global, mes_global)
-
+          
 st.markdown("---")
 st.caption("💙 Desenvolvido por Thaís Franco.")
