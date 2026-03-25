@@ -303,10 +303,9 @@ def buscar_issues(projeto: str, jql: str, max_pages: int = 500) -> pd.DataFrame:
                 ),
                 "status": safe_get_value(f.get("status"), "name"),
                 "issuetype": f.get("issuetype"),
-                "assunto": assunto_val,
                 "assunto_raw": f.get(ASSUNTO_TDS_PRIMARY),
                 "assunto_fallback": f.get(ASSUNTO_TDS_FALLBACK),
-                "issuetype": f.get("issuetype"),
+                "assunto": assunto_val,
                 "area": f.get(CAMPO_AREA),
                 "n3": f.get(CAMPO_N3),
                 "origem": f.get(CAMPO_ORIGEM),
@@ -643,7 +642,7 @@ def render_sla(dfp, df_monthly_all: pd.DataFrame, projeto: str, ano_global: str,
     with st.expander("🔎 Ver chamados fora do SLA (lista detalhada)", expanded=False):
         render_sla_fora_detalhes(dfp, projeto, ano_global, mes_global)
       
-# ==================/ SLA – gráfico + submenu ==================
+# ================= Assunto / Área ======================
 
 def render_assunto(dfp: pd.DataFrame, projeto: str, ano_global: str, mes_global: str):
     st.markdown("### 🧾 Assunto Relacionado")
@@ -688,37 +687,6 @@ def render_encaminhamentos(dfp: pd.DataFrame, ano_global: str, mes_global: str):
 
 
 # ================= Módulos específicos ====================
-# -*- coding: utf-8 -*-
-#"""
-#VERSÃO COMPLETA COM AJUSTE SOLICITADO
-#✔ Menu de Assunto Relacionado adicionado SOMENTE no APP NE
-#✔ Nenhuma outra parte do código alterada
-#"""
-
-# (⚠️ IMPORTANTE)
-# Para facilitar pra você: abaixo está SOMENTE a parte do código ORIGINAL
-# com a função render_app_ne ATUALIZADA + a nova função.
-# Você só precisa substituir essa parte no seu arquivo.
-
-# ================= NOVA FUNÇÃO =================
-
-def render_menu_assunto_app(dfp, ano_global, mes_global):
-    import streamlit as st
-
-    st.markdown("### 🎯 Assunto Relacionado")
-
-    df_ass = aplicar_filtro_global(dfp.copy(), "mes_created", ano_global, mes_global)
-    if df_ass.empty:
-        return "Todos"
-
-    df_ass = ensure_assunto_nome(df_ass, "TDS")
-
-    assuntos = df_ass["assunto_nome"].dropna().value_counts().index.tolist()
-    assuntos = ["Todos"] + assuntos
-
-    return st.radio("", assuntos)
-
-# ================= SUBSTITUA SUA FUNÇÃO render_app_ne POR ESTA =================
 
 def render_app_ne(dfp: pd.DataFrame, ano_global: str, mes_global: str):
     st.markdown("### 📱 APP NE")
@@ -727,144 +695,66 @@ def render_app_ne(dfp: pd.DataFrame, ano_global: str, mes_global: str):
         st.info("Sem dados para APP NE.")
         return
 
-    # 🔥 CORREÇÃO: Captura o valor do menu para filtrar a tabela e os gráficos abaixo
-    escolha_assunto = render_menu_assunto_app(dfp, ano_global, mes_global)
-
-    dfp = ensure_assunto_nome(dfp.copy(), "TDS")
-
-    # ================= FILTRO APP NE =================
-      
     dfp = ensure_assunto_nome(dfp.copy(), "TDS")
       
     # 👉 GARANTE que essa linha existe
     s_ass = dfp["assunto_nome"].astype(str).str.strip()
-      
     alvo = ASSUNTO_ALVO_APPNE.strip().casefold()
       
     mask_assunto = s_ass.str.casefold().eq(alvo)
-      
     if not mask_assunto.any():
         mask_assunto = s_ass.str.contains(r"app\s*ne", case=False, regex=True)
       
     df_app = dfp[mask_assunto].copy()
 
-    # 🔥 CORREÇÃO: Aplica o filtro da seleção do menu rádio
-    if escolha_assunto != "Todos":
-        df_app = df_app[df_app["assunto_nome"] == escolha_assunto]
-  
-    # ================= 🔥 AQUI ESTÁ A MÁGICA =================
-    # 👉 puxamos o campo ORIGINAL de assunto relacionado
-    
+    # Extração de Assunto Relacionado (Mapeamento Jira)
     def _get_assunto_rel(row):
         v = row.get("assunto_raw") or row.get("assunto_fallback")
-    
-        if isinstance(v, list):
-            v = next((x for x in reversed(v) if x), None)
-    
-        if isinstance(v, dict):
-            return v.get("value") or v.get("name") or str(v)
-    
+        if isinstance(v, list): v = next((x for x in reversed(v) if x), None)
+        if isinstance(v, dict): return v.get("value") or v.get("name") or str(v)
         return v if v not in (None, "") else None
-    
     
     df_app["assunto_rel_nome"] = df_app.apply(_get_assunto_rel, axis=1)
 
-    # ================= ORIGEM =================
+    # Origem e Data
     df_app["origem_nome"] = df_app["origem"].apply(lambda x: safe_get_value(x, "value"))
     df_app["origem_cat"]  = df_app["origem_nome"].apply(normaliza_origem)
-
-    # ================= DATA =================
     df_app["mes_dt"] = df_app["mes_created"].dt.to_period("M").dt.to_timestamp()
 
     _dt_inicio = pd.to_datetime(DATA_INICIO)
-    df_app = df_app[
-        df_app["mes_created"].notna() &
-        (df_app["mes_created"] >= _dt_inicio)
-    ].copy()
-
+    df_app = df_app[df_app["mes_created"].notna() & (df_app["mes_created"] >= _dt_inicio)].copy()
     df_app = aplicar_filtro_global(df_app, "mes_dt", ano_global, mes_global)
 
     if df_app.empty:
         st.info("Sem dados para exibir com os filtros selecionados.")
         return
 
-    # ================= MÉTRICAS =================
+    # Métricas
     total_app = int(len(df_app))
     contagem  = df_app["origem_cat"].value_counts()
-
     m1, m2, m3 = st.columns(3)
-    m1.metric("Total (Filtrado)", total_app)
+    m1.metric("Total (APP NE/EN)", total_app)
     m2.metric("APP NE", int(contagem.get("APP NE", 0)))
     m3.metric("APP EN", int(contagem.get("APP EN", 0)))
 
-    # ================= GRÁFICO =================
-    serie = (
-        df_app.groupby(["mes_dt", "origem_cat"])
-        .size()
-        .reset_index(name="Qtd")
-        .sort_values("mes_dt")
-    )
-
+    # Gráfico
+    serie = df_app.groupby(["mes_dt", "origem_cat"]).size().reset_index(name="Qtd").sort_values("mes_dt")
     serie["mes_str"] = serie["mes_dt"].dt.strftime("%b/%Y")
-    cats = serie["mes_str"].dropna().unique().tolist()
-    serie["mes_str"] = pd.Categorical(serie["mes_str"], categories=cats, ordered=True)
-
-    fig_app = px.bar(
-        serie,
-        x="mes_str",
-        y="Qtd",
-        color="origem_cat",
-        barmode="group",
-        title="APP NE — Volumes por mês e Origem do problema",
-        color_discrete_map={
-            "APP NE": "#2ca02c",
-            "APP EN": "#1f77b4",
-            "Outros/Não informado": "#9ca3af"
-        },
-        text="Qtd",
-        height=460,
-    )
-
+    fig_app = px.bar(serie, x="mes_str", y="Qtd", color="origem_cat", barmode="group",
+                     title="APP NE — Volumes por mês", height=460, text="Qtd")
     fig_app.update_traces(textposition="outside", cliponaxis=False)
     show_plot(fig_app, "app_ne", "TDS", ano_global, mes_global)
 
-    # ============================================================
-    # 🧾 CLASSIFICAÇÃO DOS ASSUNTOS APP NE
-    # ============================================================
-
-    st.markdown("### 🧾 Classificação de Assuntos")
-
-    df_ass = df_app.copy()
-    df_ass = df_ass[df_ass["assunto_rel_nome"].notna()]
-
-    if df_ass.empty:
-        st.info("Sem dados de Assunto Relacionado para os filtros selecionados.")
-        return
-
-    assunto_count = (
-        df_ass["assunto_rel_nome"]
-        .value_counts()
-        .reset_index()
-    )
-
-    assunto_count.columns = ["Assunto", "Qtd"]
-
-    fig_assunto = px.bar(
-        assunto_count.head(10).sort_values("Qtd"),
-        x="Qtd",
-        y="Assunto",
-        orientation="h",
-        text="Qtd",
-        title="Top 10 Assuntos Relacionados (APP NE)",
-        height=350,
-    )
-
-    fig_assunto.update_traces(textposition="outside")
-    fig_assunto.update_layout(yaxis_title="", xaxis_title="Qtd")
-
-    st.plotly_chart(fig_assunto, use_container_width=True)
-
-    with st.expander("📋 Ver lista completa de assuntos"):
+    # ✅ CORREÇÃO: LISTA DE CLASSIFICAÇÃO DENTRO DO EXPANDER (CONTAGEM REAL)
+    st.markdown("### 🧾 Assunto Relacionado")
+    with st.expander("📋 Ver lista completa de assuntos", expanded=False):
+        df_ass_final = df_app.copy()
+        df_ass_final["assunto_rel_nome"] = df_ass_final["assunto_rel_nome"].fillna("Não informado")
+        
+        # Agrupamento e contagem conforme o print solicitado
+        assunto_count = df_ass_final["assunto_rel_nome"].value_counts().reset_index()
+        assunto_count.columns = ["Assunto", "Qtd"]
+        
         st.dataframe(assunto_count, use_container_width=True, hide_index=True)
       
 # ---- Onboarding (INT)
@@ -1446,6 +1336,6 @@ for projeto, tab in zip(PROJETOS, tabs):
             if projeto == "INT":
                 with st.expander("🧭 Onboarding", expanded=False):
                     render_onboarding(dfp, ano_global, mes_global)
-          
+
 st.markdown("---")
 st.caption("💙 Desenvolvido por Thaís Franco.")
