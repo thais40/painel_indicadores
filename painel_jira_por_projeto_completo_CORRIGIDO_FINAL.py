@@ -755,7 +755,17 @@ def render_app_ne(dfp: pd.DataFrame, ano_global: str, mes_global: str):
         return v
 
     def _get_assunto_rel(row):
-    v = row["assunto_raw"] or row["assunto_fallback"]
+    v = row.get("assunto_raw") or row.get("assunto_fallback")
+
+        if isinstance(v, list):
+            v = next((x for x in reversed(v) if x), None)
+
+        if isinstance(v, dict):
+            return v.get("value") or v.get("name") or str(v)
+
+    return None
+
+    df_app["assunto_rel_nome"] = df_app.apply(_get_assunto_rel, axis=1)
 
     if isinstance(v, list):
         v = next((x for x in reversed(v) if x), None)
