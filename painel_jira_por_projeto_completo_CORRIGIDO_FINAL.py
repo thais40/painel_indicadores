@@ -726,51 +726,46 @@ def render_app_ne(dfp: pd.DataFrame, ano_global: str, mes_global: str):
         st.info("Sem dados para APP NE.")
         return
 
+    # --- 1. CHAMADA DO NOVO MENU ---
+    # Chamamos a função que você criou e guardamos a escolha do usuário
+    escolha_assunto = render_menu_assunto_app(dfp, ano_global, mes_global)
+
     dfp = ensure_assunto_nome(dfp.copy(), "TDS")
 
     # ================= FILTRO APP NE =================
-      
-    dfp = ensure_assunto_nome(dfp.copy(), "TDS")
-      
-    # 👉 GARANTE que essa linha existe
     s_ass = dfp["assunto_nome"].astype(str).str.strip()
-      
     alvo = ASSUNTO_ALVO_APPNE.strip().casefold()
-      
+    
     mask_assunto = s_ass.str.casefold().eq(alvo)
-      
     if not mask_assunto.any():
         mask_assunto = s_ass.str.contains(r"app\s*ne", case=False, regex=True)
-      
-    df_app = dfp[mask_assunto].copy()
-  
-    # ================= 🔥 AQUI ESTÁ A MÁGICA =================
-    # 👉 puxamos o campo ORIGINAL de assunto relacionado
     
+    df_app = dfp[mask_assunto].copy()
+
+    # --- 2. APLICAÇÃO DO FILTRO DO MENU ---
+    # Se o usuário selecionou um assunto específico no radio button
+    if escolha_assunto and escolha_assunto != "Todos":
+        df_app = df_app[df_app["assunto_nome"] == escolha_assunto]
+
+    # ================= RESTO DA LÓGICA (MÁGICA) =================
     def _get_assunto_rel(row):
         v = row.get("assunto_raw") or row.get("assunto_fallback")
-    
         if isinstance(v, list):
             v = next((x for x in reversed(v) if x), None)
-    
         if isinstance(v, dict):
             return v.get("value") or v.get("name") or str(v)
-    
         return v if v not in (None, "") else None
-    
     
     df_app["assunto_rel_nome"] = df_app.apply(_get_assunto_rel, axis=1)
 
-    # ================= ORIGEM =================
+    # ================= ORIGEM E DATA =================
     df_app["origem_nome"] = df_app["origem"].apply(lambda x: safe_get_value(x, "value"))
     df_app["origem_cat"]  = df_app["origem_nome"].apply(normaliza_origem)
-
-    # ================= DATA =================
     df_app["mes_dt"] = df_app["mes_created"].dt.to_period("M").dt.to_timestamp()
 
     _dt_inicio = pd.to_datetime(DATA_INICIO)
     df_app = df_app[
-        df_app["mes_created"].notna() &
+        df_app["mes_created"].notna() & 
         (df_app["mes_created"] >= _dt_inicio)
     ].copy()
 
@@ -780,7 +775,7 @@ def render_app_ne(dfp: pd.DataFrame, ano_global: str, mes_global: str):
         st.info("Sem dados para exibir com os filtros selecionados.")
         return
 
-    # ================= MÉTRICAS =================
+    # ================= MÉTRICAS E GRÁFICOS =================
     total_app = int(len(df_app))
     contagem  = df_app["origem_cat"].value_counts()
 
@@ -789,36 +784,31 @@ def render_app_ne(dfp: pd.DataFrame, ano_global: str, mes_global: str):
     m2.metric("APP NE", int(contagem.get("APP NE", 0)))
     m3.metric("APP EN", int(contagem.get("APP EN", 0)))
 
-    # ================= GRÁFICO =================
+    # Gráfico de Volumes
     serie = (
         df_app.groupby(["mes_dt", "origem_cat"])
         .size()
         .reset_index(name="Qtd")
         .sort_values("mes_dt")
     )
-
     serie["mes_str"] = serie["mes_dt"].dt.strftime("%b/%Y")
-    cats = serie["mes_str"].dropna().unique().tolist()
-    serie["mes_str"] = pd.Categorical(serie["mes_str"], categories=cats, ordered=True)
-
+    
     fig_app = px.bar(
-        serie,
-        x="mes_str",
-        y="Qtd",
-        color="origem_cat",
-        barmode="group",
-        title="APP NE — Volumes por mês e Origem do problema",
-        color_discrete_map={
-            "APP NE": "#2ca02c",
-            "APP EN": "#1f77b4",
-            "Outros/Não informado": "#9ca3af"
-        },
-        text="Qtd",
-        height=460,
+        serie, x="mes_str", y="Qtd", color="origem_cat", barmode="group",
+        title="APP NE — Volumes por mês e Origem",
+        text="Qtd", height=460
     )
+    st.plotly_chart(fig_app, use_container_width=True)
 
-    fig_app.update_traces(textposition="outside", cliponaxis=False)
-    show_plot(fig_app, "app_ne", "TDS", ano_global, mes_global)
+    # Seção final de Assuntos
+    st.markdown("### 🧾 Detalhamento por Assunto Relacionado")
+    df_ass_rel = df_app[df_app["assunto_rel_nome"].notna()]
+    if not df_ass_rel.empty:
+        assunto_count = df_ass_rel["assunto_rel_nome"].value_counts().reset_index()
+        assunto_count.columns = ["Assunto", "Qtd"]
+        st.dataframe(assunto_count, use_container_width=True, hide_index=True)
+    else:
+        st.info("Sem detalhes de Assunto Relacionado para esta seleção.")
 
     # ============================================================
     # 🧾 ASSUNTO RELACIONADO (AGORA CORRETO 🔥)
