@@ -72,7 +72,7 @@ ASSUNTO_ALVO_APPNE = "Problemas no App NE - App EN"
 
 # 👉 ADIÇÃO: vamos buscar também o assignee
 JIRA_FIELDS_BASE = [
-    "key", "summary", "created", "updated", "resolutiondate", "resolved", "status", "issuetype",
+    "key", "summary", "created", "updated", "resolutiondate", "resolved", "statuscategorychangedate", "status", "issuetype",
     "assignee",  # <— NOVO
     CAMPO_AREA, CAMPO_N3, CAMPO_ORIGEM, CAMPO_QTD_ENCOMENDAS,
 ]
@@ -108,8 +108,11 @@ if "last_update" not in st.session_state:
 
 st.markdown('<div class="update-row">', unsafe_allow_html=True)
 if st.button("🔄 Atualizar dados"):
-    st.cache_data.clear()
     st.session_state["last_update"] = now_br_str()
+    # limpa cache em memória (session_state) para forçar nova busca no Jira
+    for k in ["df_TDS","df_INT","df_TINE","df_INTEL"]:
+        if k in st.session_state:
+            del st.session_state[k]
     st.rerun()
 st.markdown(
     f'<span class="update-caption">🕒 Última atualização: {st.session_state["last_update"]} (BRT)</span>',
@@ -189,7 +192,6 @@ def _canonical(s: str) -> str:
 
 def aplicar_filtro_global(df_in: pd.DataFrame, col_dt: str, ano: str, mes: str) -> pd.DataFrame:
     out = df_in.copy()
-    if out.empty: return out
     if ano != "Todos":
         out = out[out[col_dt].dt.year == int(ano)]
     if mes != "Todos":
@@ -240,7 +242,6 @@ def _jira_search_jql(jql: str, next_page_token: Optional[str] = None, max_result
     return resp.json()
 
 
-@st.cache_data(show_spinner="🔄 Buscando dados do Jira...", ttl=None)
 def buscar_issues(projeto: str, jql: str, max_pages: int = 500) -> pd.DataFrame:
     todos, last_error = [], None
     next_token, page = None, 0
@@ -270,6 +271,24 @@ def buscar_issues(projeto: str, jql: str, max_pages: int = 500) -> pd.DataFrame:
                 "updated": f.get("updated"),
                 "resolutiondate": f.get("resolutiondate"),
                 "resolved": f.get("resolved") or f.get("resolutiondate"),
+                # ✅ Data de "fechamento" (para volumes) mesmo quando não há resolutiondate:
+                # 1) resolutiondate/resolved (se existir)
+                # 2) statuscategorychangedate (quando entra em Done)
+                # 3) updated (somente se statusCategory = Done)
+                "closed_dt": (
+                    f.get("resolved")
+                    or f.get("resolutiondate")
+                    or f.get("statuscategorychangedate")
+                    or (
+                        f.get("updated")
+                        if (
+                            isinstance(f.get("status"), dict)
+                            and isinstance((f.get("status") or {}).get("statusCategory"), dict)
+                            and ((f.get("status") or {}).get("statusCategory") or {}).get("key") == "done"
+                        )
+                        else None
+                    )
+                ),
                 "status": safe_get_value(f.get("status"), "name"),
                 "issuetype": f.get("issuetype"),
                 "assunto": assunto_val,
@@ -292,12 +311,13 @@ def buscar_issues(projeto: str, jql: str, max_pages: int = 500) -> pd.DataFrame:
         return dfp
 
     if not dfp.empty:
-        for c in ("created", "resolved", "resolutiondate", "updated"):
+        for c in ("created", "resolved", "resolutiondate", "updated", "closed_dt"):
             dfp[c] = (
                 pd.to_datetime(dfp[c], errors="coerce", utc=True).dt.tz_convert(TZ_BR).dt.tz_localize(None)
             )
         dfp["mes_created"] = dfp["created"].dt.to_period("M").dt.to_timestamp()
         dfp["mes_resolved"] = dfp["resolved"].dt.to_period("M").dt.to_timestamp()
+        dfp["mes_closed"] = dfp["closed_dt"].dt.to_period("M").dt.to_timestamp()
     return dfp
 
 
@@ -310,10 +330,17 @@ def build_monthly_tables(df_all: pd.DataFrame) -> pd.DataFrame:
     base["per_created"] = base["created"].dt.to_period("M")
     base["per_resolved"] = base["resolved"].dt.to_period("M")
 
+    # ✅ Mantém o SLA como no arquivo original, mas respeita DATA_INICIO no recorte do painel:
+    # - "Criados": só a partir de DATA_INICIO
+    # - "Resolvidos"/SLA: só a partir de DATA_INICIO
+    _dt_inicio = pd.to_datetime(DATA_INICIO)
+    base_created = base[base["created"].notna() & (base["created"] >= _dt_inicio)].copy()
+    base_resolved = base[base["resolved"].notna() & (base["resolved"] >= _dt_inicio)].copy()
+
     created = (
-        base.groupby(["projeto", "per_created"]).size().reset_index(name="Criados").rename(columns={"per_created": "period"})
+        base_created.groupby(["projeto", "per_created"]).size().reset_index(name="Criados").rename(columns={"per_created": "period"})
     )
-    res = base[base["resolved"].notna()].copy()
+    res = base_resolved.copy()
     res["dentro_sla"] = res["sla_raw"].apply(dentro_sla_from_raw).fillna(False)
     resolved = (
         res.groupby(["projeto", "per_resolved"]).agg(Resolvidos=("key", "count"), Dentro=("dentro_sla", "sum")).reset_index().rename(columns={"per_resolved": "period"})
@@ -339,7 +366,7 @@ def render_criados_resolvidos(dfp: pd.DataFrame, projeto: str, ano_global: str, 
     """
     Tickets Criados vs Resolvidos — TODAS as áreas (para o projeto atual).
     - Criados: primeiro 'created' por key (mês de criação)
-    - Resolvidos: último 'resolved' por key (mês de resolução final)
+    - Resolvidos: último 'resolved' REAL por key (mês de resolução final)
     - Eixo mensal contínuo (não pula meses).
     """
     import pandas as pd
@@ -347,7 +374,11 @@ def render_criados_resolvidos(dfp: pd.DataFrame, projeto: str, ano_global: str, 
     import streamlit as st
 
     df = dfp.copy()
-    created  = pd.to_datetime(df.get("created"),  errors="coerce")
+
+    # 🔵 Criados
+    created = pd.to_datetime(df.get("created"), errors="coerce")
+
+    # 🟢 Resolvidos REAIS (resolutiondate)
     resolved = pd.to_datetime(df.get("resolved"), errors="coerce")
 
     cdf = (
@@ -374,6 +405,16 @@ def render_criados_resolvidos(dfp: pd.DataFrame, projeto: str, ano_global: str, 
         st.info("Sem dados de criação/resolução para montar a série.")
         return
 
+    # ✅ Respeita DATA_INICIO no eixo
+    _dt_inicio = pd.to_datetime(DATA_INICIO)
+    if not cdf.empty:
+        cdf = cdf[cdf["created"] >= _dt_inicio].copy()
+    if not rdf.empty:
+        rdf = rdf[rdf["resolved"] >= _dt_inicio].copy()
+    if cdf.empty and rdf.empty:
+        st.info("Sem dados a partir de DATA_INICIO para montar a série.")
+        return
+
     mins = [x["mes_dt"].min() for x in (cdf, rdf) if not x.empty]
     maxs = [x["mes_dt"].max() for x in (cdf, rdf) if not x.empty]
     idx = pd.date_range(min(mins), max(maxs), freq="MS")
@@ -398,7 +439,7 @@ def render_criados_resolvidos(dfp: pd.DataFrame, projeto: str, ano_global: str, 
         y=["Criados", "Resolvidos"],
         barmode="group",
         text_auto=True,
-        title=f"Tickets Criados vs Resolvidos",
+        title="Tickets Criados vs Resolvidos",
         height=420,
     )
     fig.update_traces(textangle=0, cliponaxis=False)
@@ -505,11 +546,9 @@ def render_sla_fora_detalhes(dfp, projeto: str, ano_global: str, mes_global: str
     base_fora = base[base["_fora_sla"]].copy()
 
     st.subheader("🔴 Chamados fora do SLA")
-    # Só mantemos o total (removida a mediana)
     total_fora = int(base_fora["key"].nunique() if "key" in base_fora.columns else len(base_fora))
     st.metric("Total fora do SLA (período filtrado)", total_fora)
 
-    # colunas preferidas (inclui assignee_nome)
     prefer = [
         "key", "created", "resolved", "summary",
         "assignee_nome", "area_nome", "assunto_nome", "tempo_resolucao_horas"
@@ -522,15 +561,30 @@ def render_sla_fora_detalhes(dfp, projeto: str, ano_global: str, mes_global: str
         base_fora = base_fora.sort_values("tempo_resolucao_horas", ascending=False)
         base_fora["tempo_resolucao_horas"] = base_fora["tempo_resolucao_horas"].astype(float).round(1)
 
-    st.dataframe(base_fora[cols], use_container_width=True, hide_index=True)
-    csv = base_fora[cols].to_csv(index=False).encode("utf-8-sig")
+    # ✅ AQUI é a correção (Arrow): criamos um df "limpo" antes de passar pro st.dataframe
+    show_df = base_fora[cols].copy()
+
+    # 1) datetime com timezone -> sem timezone (Arrow costuma quebrar com tz)
+    for c in show_df.columns:
+        if pd.api.types.is_datetime64tz_dtype(show_df[c]):
+            show_df[c] = show_df[c].dt.tz_convert(TZ_BR).dt.tz_localize(None)
+
+    # 2) qualquer dict/list/objeto vira string (Arrow não aceita dict em célula)
+    for c in show_df.columns:
+        if show_df[c].dtype == "object":
+            show_df[c] = show_df[c].apply(
+                lambda x: x if (x is None or isinstance(x, (str, int, float, bool))) else str(x)
+            )
+
+    st.dataframe(show_df, use_container_width=True, hide_index=True)
+
+    csv = show_df.to_csv(index=False).encode("utf-8-sig")
     st.download_button(
         "⬇️ Baixar CSV (fora SLA)",
         data=csv,
         file_name=f"{projeto.lower().replace(' ','_')}_fora_sla.csv",
         mime="text/csv",
     )
-
 
 def render_sla(dfp, df_monthly_all: pd.DataFrame, projeto: str, ano_global: str, mes_global: str):
     """Gráfico de SLA + submenu (expander) com lista fora do SLA."""
@@ -618,7 +672,6 @@ def render_encaminhamentos(dfp: pd.DataFrame, ano_global: str, mes_global: str):
 
 
 # ================= Módulos específicos ====================
-# ---- APP NE (TDS)
 def render_app_ne(dfp: pd.DataFrame, ano_global: str, mes_global: str):
     st.markdown("### 📱 APP NE")
     if dfp.empty:
@@ -641,6 +694,9 @@ def render_app_ne(dfp: pd.DataFrame, ano_global: str, mes_global: str):
     df_app["origem_cat"]  = df_app["origem_nome"].apply(normaliza_origem)
 
     df_app["mes_dt"] = df_app["mes_created"].dt.to_period("M").dt.to_timestamp()
+    # ✅ Respeita DATA_INICIO no APP NE (comparando pelo created)
+    _dt_inicio = pd.to_datetime(DATA_INICIO)
+    df_app = df_app[df_app["mes_created"].notna() & (df_app["mes_created"] >= _dt_inicio)].copy()
     df_app = aplicar_filtro_global(df_app, "mes_dt", ano_global, mes_global)
     if df_app.empty:
         st.info("Sem dados para exibir com os filtros selecionados.")
@@ -701,6 +757,13 @@ def render_onboarding(dfp: pd.DataFrame, ano_global: str, mes_global: str):
 
     dfp = ensure_assunto_nome(dfp.copy(), "INT")
     df_onb = aplicar_filtro_global(dfp.copy(), "mes_created", ano_global, mes_global)
+    # ✅ Respeita DATA_INICIO no Onboarding
+    _dt_inicio = pd.to_datetime(DATA_INICIO)
+    # usa mes_created (já normalizado no pipeline) para evitar qualquer divergência de timezone/string
+    if "mes_created" in df_onb.columns:
+        df_onb = df_onb[df_onb["mes_created"].notna() & (df_onb["mes_created"] >= _dt_inicio)].copy()
+    else:
+        df_onb = df_onb[df_onb["created"].notna() & (df_onb["created"] >= _dt_inicio)].copy()
 
     total_clientes_novos = int((df_onb["assunto_nome"] == ASSUNTO_CLIENTE_NOVO).sum())
     df_erros = df_onb[df_onb["assunto_nome"].isin(ASSUNTOS_ERROS)].copy()
@@ -726,7 +789,9 @@ def render_onboarding(dfp: pd.DataFrame, ano_global: str, mes_global: str):
             .reset_index()
         )
         if not serie.empty:
-            idx = pd.date_range(serie["created"].min(), serie["created"].max(), freq="MS")
+            _dt_inicio = pd.to_datetime(DATA_INICIO)
+            _min = max(serie["created"].min(), _dt_inicio)
+            idx = pd.date_range(_min, serie["created"].max(), freq="MS")
             serie = (
                 serie.set_index("created")
                      .reindex(idx)
@@ -841,10 +906,15 @@ def render_rotinas_manuais(dfp: pd.DataFrame, ano_global: str, mes_global: str):
         return " ".join(_unidecode(str(s or "")).lower().split())
 
     def _parse_dt_col(s):
-        x = pd.to_datetime(s, errors="coerce", utc=False, infer_datetime_format=True)
-        if x.notna().sum() == 0:
-            x = pd.to_datetime(s, errors="coerce", utc=False, dayfirst=True)
-        return x
+        if s is None:
+            return pd.Series(dtype="datetime64[ns]")
+
+        x = pd.to_datetime(s, errors="coerce", utc=True)
+
+        if isinstance(x, pd.Series):
+            return x.dt.tz_convert(TZ_BR).dt.tz_localize(None)
+
+        return x.tz_convert(TZ_BR).tz_localize(None) if pd.notna(x) else x
 
     def discover_tech_support_areas(df):
         if "area_nome" not in df.columns:
@@ -928,6 +998,9 @@ def render_rotinas_manuais(dfp: pd.DataFrame, ano_global: str, mes_global: str):
           .copy()
     )
 
+    # ✅ Respeita DATA_INICIO em Rotinas Manuais (pelo resolved)
+    _dt_inicio = pd.to_datetime(DATA_INICIO)
+    df = df[df["resolved"].notna() & (df["resolved"] >= _dt_inicio)].copy()
     df["mes_dt"] = df["resolved"].dt.to_period("M").dt.to_timestamp()
     df["assunto_nome"] = df["assunto_nome"].astype(str)
     df["assunto_canon"] = df["assunto_nome"].apply(_canon)
@@ -982,6 +1055,8 @@ def render_rotinas_manuais(dfp: pd.DataFrame, ano_global: str, mes_global: str):
         base_ops["mes_dt"] if not base_ops.empty else pd.Series(dtype="datetime64[ns]"),
         base_ts["mes_dt"]  if not base_ts.empty  else pd.Series(dtype="datetime64[ns]")
     ]).max()
+    _dt_inicio = pd.to_datetime(DATA_INICIO)
+    min_m = max(min_m, _dt_inicio)
     idx = pd.date_range(min_m, max_m, freq="MS")
 
     s_tds    = monthly_tds.reindex(idx, fill_value=0.0)
@@ -1077,35 +1152,60 @@ with colA:
 with colB:
     mes_global = st.selectbox("Mês (global)", opcoes_mes, index=0, key="mes_global")
 
-# ================= Coleta de dados (RESOLVE TUDO) ========================
+# ================= Coleta de dados (CORRIGIDO) ========================
 
 def jql_projeto(project_key: str, ano_sel: str, mes_sel: str) -> str:
-    # RECUPERADO: Lógica cirúrgica para garantir 2025 e manter submenus ativos
     base = f'project = "{project_key}"'
+
+    # ✅ Sempre respeita DATA_INICIO para o recorte do painel, mas sem perder tickets
+    # fechados depois (mesmo que criados antes).
     if ano_sel != "Todos" and mes_sel != "Todos":
-        data_foco = f"{ano_sel}-{int(mes_sel):02d}-01"
-        # Garante que ao filtrar o mês, buscamos exatamente os dados dele (evita sumiço de Manuais/Onboarding)
-        proximo_mes = int(mes_sel) + 1
-        ano_proximo = int(ano_sel)
-        if proximo_mes > 12:
-            proximo_mes = 1
-            ano_proximo += 1
-        data_fim_mes = f"{ano_proximo}-{proximo_mes:02d}-01"
-        base += f' AND created >= "{data_foco}" AND created < "{data_fim_mes}"'
+        a = int(ano_sel)
+        m = int(mes_sel)
+        ini = date(a, m, 1)
+        fim = date(a + 1, 1, 1) if m == 12 else date(a, m + 1, 1)
+        base += (
+            f' AND ('
+            f' (created >= "{ini:%Y-%m-%d}" AND created < "{fim:%Y-%m-%d}")'
+            f' OR ' 
+            f' (resolutiondate >= "{ini:%Y-%m-%d}" AND resolutiondate < "{fim:%Y-%m-%d}")'
+            f' OR ' 
+            f' (statusCategoryChangedDate >= "{ini:%Y-%m-%d}" AND statusCategoryChangedDate < "{fim:%Y-%m-%d}")'
+            f' OR ' 
+            f' (statusCategory = Done AND updated >= "{ini:%Y-%m-%d}" AND updated < "{fim:%Y-%m-%d}")'
+            f' )'
+        )
     else:
-        # Se estiver em "Todos", usa a data de início histórica
-        base += f' AND created >= "{DATA_INICIO}"'
-    # DESC garante que 2025 venha primeiro se a lista for muito longa
+        base += (
+            f' AND ('
+            f' created >= "{DATA_INICIO}"'
+            f' OR resolutiondate >= "{DATA_INICIO}"'
+            f' OR statusCategoryChangedDate >= "{DATA_INICIO}"'
+            f' OR (statusCategory = Done AND updated >= "{DATA_INICIO}")'
+            f' )'
+        )
+
     return base + " ORDER BY created DESC"
 
-with st.spinner("Carregando TDS..."):
-    df_tds = buscar_issues("TDS", jql_projeto("TDS", ano_global, mes_global))
-with st.spinner("Carregando INT..."):
-    df_int = buscar_issues("INT", jql_projeto("INT", ano_global, mes_global))
-with st.spinner("Carregando TINE..."):
-    df_tine = buscar_issues("TINE", jql_projeto("TINE", ano_global, mes_global))
-with st.spinner("Carregando INTEL..."):
-    df_intel = buscar_issues("INTEL", jql_projeto("INTEL", ano_global, mes_global))
+# Agora passamos os estados globais para a JQL para que a busca seja cirúrgica
+JQL_TDS = jql_projeto("TDS", ano_global, mes_global)
+JQL_INT = jql_projeto("INT", ano_global, mes_global)
+JQL_TINE = jql_projeto("TINE", ano_global, mes_global)
+JQL_INTEL = jql_projeto("INTEL", ano_global, mes_global)
+
+def _get_or_fetch(proj: str, jql: str):
+    key = f"df_{proj}"
+    if key in st.session_state and isinstance(st.session_state.get(key), pd.DataFrame):
+        return st.session_state[key]
+    with st.spinner(f"Carregando {proj}..."):
+        dfp = buscar_issues(proj, jql)
+    st.session_state[key] = dfp
+    return dfp
+
+df_tds   = _get_or_fetch("TDS",   JQL_TDS)
+df_int   = _get_or_fetch("INT",   JQL_INT)
+df_tine  = _get_or_fetch("TINE",  JQL_TINE)
+df_intel = _get_or_fetch("INTEL", JQL_INTEL)
 
 if all(d.empty for d in [df_tds, df_int, df_tine, df_intel]):
     st.warning("Sem dados do Jira em nenhum projeto (verifique credenciais e permissões).")
@@ -1158,52 +1258,65 @@ for projeto, tab in zip(PROJETOS, tabs):
 
         dfp["mes_created"] = pd.to_datetime(dfp["created"], errors="coerce")
         dfp["mes_resolved"] = pd.to_datetime(dfp["resolved"], errors="coerce")
+        if "closed_dt" in dfp.columns:
+            dfp["mes_closed"] = pd.to_datetime(dfp["closed_dt"], errors="coerce")
         dfp = ensure_assunto_nome(dfp, projeto)
 
         visao = st.selectbox("Visão", opcoes, key=f"visao_{projeto}")
 
         if visao == "Criados vs Resolvidos":
             render_criados_resolvidos(dfp, projeto, ano_global, mes_global)
+
         elif visao == "SLA":
             render_sla(dfp, _df_monthly_all, projeto, ano_global, mes_global)
+
         elif visao == "Assunto Relacionado":
             render_assunto(dfp, projeto, ano_global, mes_global)
+
         elif visao == "Área Solicitante":
             if projeto == "INTEL":
                 st.info("Este projeto não possui Área Solicitante.")
             else:
                 render_area(dfp, ano_global, mes_global)
+
         elif visao == "Onboarding":
             if projeto == "INT":
                 render_onboarding(dfp, ano_global, mes_global)
             else:
                 st.info("Onboarding disponível somente para Integrations.")
+
         elif visao == "APP NE":
             if projeto == "TDS":
                 render_app_ne(dfp, ano_global, mes_global)
             else:
                 st.info("APP NE disponível somente para Tech Support.")
+
         elif visao == "Rotinas Manuais":
             if projeto == "TDS":
                 render_rotinas_manuais(dfp, ano_global, mes_global)
             else:
                 st.info("Rotinas Manuais disponível somente para Tech Support.")
+
         else:
             # Geral
             render_criados_resolvidos(dfp, projeto, ano_global, mes_global)
             render_sla(dfp, _df_monthly_all, projeto, ano_global, mes_global)
             render_assunto(dfp, projeto, ano_global, mes_global)
+
             if projeto != "INTEL":
                 render_area(dfp, ano_global, mes_global)
+
             if projeto in ("TDS", "INT"):
                 render_encaminhamentos(dfp, ano_global, mes_global)
+
             if projeto == "TDS":
                 render_app_ne(dfp, ano_global, mes_global)
                 with st.expander("🛠️ Rotinas Manuais", expanded=False):
                     render_rotinas_manuais(dfp, ano_global, mes_global)
+
             if projeto == "INT":
                 with st.expander("🧭 Onboarding", expanded=False):
                     render_onboarding(dfp, ano_global, mes_global)
-
+          
 st.markdown("---")
 st.caption("💙 Desenvolvido por Thaís Franco.")
