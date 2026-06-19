@@ -10,6 +10,7 @@ Classificação de Rotinas Manuais (TDS) 100% por campos do Jira:
 
 Mantém cache de dados (st.cache_data) e botão de Atualizar — não refaz fetch a cada filtro.
 Necessário EMAIL e TOKEN em st.secrets.
+Autenticação Google OAuth: configure GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET e COOKIE_KEY em st.secrets.
 """
 
 from __future__ import annotations
@@ -26,9 +27,34 @@ import plotly.express as px
 import requests
 import streamlit as st
 from requests.auth import HTTPBasicAuth
+from streamlit_google_auth import Authenticate
 
 # ================= Config da página =======================
 st.set_page_config(page_title="Painel de Indicadores", page_icon="📊", layout="wide")
+
+# ================= Autenticação Google ========================
+_authenticator = Authenticate(
+    secret_credentials_path=None,
+    cookie_name="painel_jira_nuvemshop",
+    cookie_key=st.secrets.get("COOKIE_KEY", "cookie_secret_key"),
+    redirect_uri=st.secrets.get("REDIRECT_URI", "http://localhost:8501"),
+    client_id=st.secrets.get("GOOGLE_CLIENT_ID", ""),
+    client_secret=st.secrets.get("GOOGLE_CLIENT_SECRET", ""),
+)
+
+_authenticator.check_authentification()
+
+if not st.session_state.get("connected"):
+    st.title("📊 Painel de Indicadores — Nuvemshop")
+    st.markdown("Faça login com sua conta Google **@nuvemshop.com.br** para continuar.")
+    _authenticator.login()
+    st.stop()
+
+_user_email = (st.session_state.get("user_info") or {}).get("email", "")
+if not _user_email.endswith("@nuvemshop.com.br"):
+    st.error(f"⛔ Acesso negado. O e-mail **{_user_email}** não pertence ao domínio @nuvemshop.com.br.")
+    _authenticator.logout()
+    st.stop()
 
 # ================= Credenciais Jira ========================
 JIRA_URL = "https://tiendanube.atlassian.net"
@@ -119,6 +145,16 @@ st.markdown(
     unsafe_allow_html=True,
 )
 st.markdown("</div>", unsafe_allow_html=True)
+
+# Exibe usuário logado e botão de logout
+_col_user, _col_logout = st.columns([8, 1])
+with _col_user:
+    _display = (st.session_state.get("user_info") or {}).get("name") or _user_email
+    st.caption(f"👤 Logado como **{_display}** ({_user_email})")
+with _col_logout:
+    if st.button("Sair", key="logout_btn"):
+        _authenticator.logout()
+        st.rerun()
 
 # ================= Helpers ================================
 
