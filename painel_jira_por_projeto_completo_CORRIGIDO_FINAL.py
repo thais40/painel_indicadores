@@ -8,12 +8,14 @@ Classificação de Rotinas Manuais (TDS) 100% por campos do Jira:
   - Data base: mês de resolved
   - Manual x Encomendas TDS por "Assunto Relacionado" (customfield_13747; fallback 13712).
 
-Mantém cache de dados (st.cache_data) e botão de Atualizar — não refaz fetch a cada filtro.
-Necessário EMAIL e TOKEN em st.secrets.
+Cache de dados COMPARTILHADO entre todos os usuários (st.cache_data), renovado automaticamente
+todo dia às 08:00 (BRT). A página se recarrega sozinha para exibir os dados novos.
+Credenciais: variáveis de ambiente EMAIL e TOKEN (Render) ou st.secrets (local).
 """
 
 from __future__ import annotations
 
+import os
 import re
 import unicodedata
 from datetime import datetime, date
@@ -26,21 +28,39 @@ import plotly.express as px
 import requests
 import streamlit as st
 from requests.auth import HTTPBasicAuth
+from streamlit_autorefresh import st_autorefresh
 
 # ================= Config da página =======================
 st.set_page_config(page_title="Painel de Indicadores", page_icon="📊", layout="wide")
 
 # ================= Credenciais Jira ========================
 JIRA_URL = "https://tiendanube.atlassian.net"
-EMAIL = st.secrets.get("EMAIL", "")
-TOKEN = st.secrets.get("TOKEN", "")
+
+
+def _secret(nome: str) -> str:
+    """Lê de variável de ambiente (Render) ou de st.secrets (uso local)."""
+    val = os.getenv(nome, "")
+    if val:
+        return val
+    try:
+        return str(st.secrets.get(nome, ""))
+    except Exception:
+        return ""
+
+
+EMAIL = _secret("EMAIL")
+TOKEN = _secret("TOKEN")
 if not EMAIL or not TOKEN:
-    st.error("⚠️ Configure EMAIL e TOKEN em st.secrets para acessar o Jira.")
+    st.error("⚠️ Configure as variáveis EMAIL e TOKEN (Render → Environment) para acessar o Jira.")
     st.stop()
 
 auth = HTTPBasicAuth(EMAIL, TOKEN)
 TZ_BR = ZoneInfo("America/Sao_Paulo")
 DATA_INICIO = "2025-04-01"
+
+# ================= Auto-atualização agendada ================
+HORARIOS_ATUALIZACAO = [8]        # horas (BRT) em que os dados são renovados — ex.: [8, 13, 18]
+INTERVALO_RECARGA_MIN = 5         # a página aberta se recarrega sozinha a cada N minutos
 
 # ================= Campos / Constantes =====================
 SLA_CAMPOS = {
@@ -102,20 +122,39 @@ def now_br_str() -> str:
     return datetime.now(TZ_BR).strftime("%d/%m/%Y %H:%M:%S")
 
 
-_render_head()
-if "last_update" not in st.session_state:
-    st.session_state["last_update"] = now_br_str()
+def _slot_atual() -> str:
+    """Identifica o último horário agendado já atingido. Quando muda, o cache invalida."""
+    agora = datetime.now(TZ_BR)
+    passados = [h for h in HORARIOS_ATUALIZACAO if agora.hour >= h]
+    if passados:
+        return f"{agora.date()}-{max(passados):02d}h"
+    ontem = agora.date() - pd.Timedelta(days=1)
+    return f"{ontem}-{max(HORARIOS_ATUALIZACAO):02d}h"
 
+
+@st.cache_data(show_spinner=False, ttl=60 * 60 * 24)
+def _marca_atualizacao(slot: str) -> str:
+    """Horário em que o cache deste slot foi preenchido (igual para todos os usuários)."""
+    return now_br_str()
+
+
+@st.cache_data(show_spinner=False, ttl=60 * 60 * 24)
+def _fetch_cached(proj: str, jql: str, slot: str) -> pd.DataFrame:
+    return buscar_issues(proj, jql)
+
+
+# Recarrega a página automaticamente → detecta o novo horário sem ninguém clicar
+st_autorefresh(interval=INTERVALO_RECARGA_MIN * 60 * 1000, key="auto_refresh")
+
+_render_head()
 st.markdown('<div class="update-row">', unsafe_allow_html=True)
 if st.button("🔄 Atualizar dados"):
-    st.session_state["last_update"] = now_br_str()
-    # limpa cache em memória (session_state) para forçar nova busca no Jira
-    for k in ["df_TDS","df_INT","df_TINE","df_INTEL"]:
-        if k in st.session_state:
-            del st.session_state[k]
+    _fetch_cached.clear()
+    _marca_atualizacao.clear()
     st.rerun()
 st.markdown(
-    f'<span class="update-caption">🕒 Última atualização: {st.session_state["last_update"]} (BRT)</span>',
+    f'<span class="update-caption">🕒 Última atualização: {_marca_atualizacao(_slot_atual())} (BRT) '
+    f'· atualização automática diária às {", ".join(f"{h:02d}:00" for h in HORARIOS_ATUALIZACAO)}</span>',
     unsafe_allow_html=True,
 )
 st.markdown("</div>", unsafe_allow_html=True)
@@ -732,7 +771,7 @@ def render_app_ne(dfp: pd.DataFrame, ano_global: str, mes_global: str):
                           uniformtext_minsize=14, uniformtext_mode="show",
                           bargap=0.15, margin=dict(t=70, r=20, b=60, l=50))
     show_plot(fig_app, "app_ne", "TDS", ano_global, mes_global)
-  
+
 
 # ---- Onboarding (INT)
 def render_onboarding(dfp: pd.DataFrame, ano_global: str, mes_global: str):
@@ -919,11 +958,11 @@ def jql_projeto(project_key: str, ano_sel: str, mes_sel: str) -> str:
         base += (
             f' AND ('
             f' (created >= "{ini:%Y-%m-%d}" AND created < "{fim:%Y-%m-%d}")'
-            f' OR ' 
+            f' OR '
             f' (resolutiondate >= "{ini:%Y-%m-%d}" AND resolutiondate < "{fim:%Y-%m-%d}")'
-            f' OR ' 
+            f' OR '
             f' (statusCategoryChangedDate >= "{ini:%Y-%m-%d}" AND statusCategoryChangedDate < "{fim:%Y-%m-%d}")'
-            f' OR ' 
+            f' OR '
             f' (statusCategory = Done AND updated >= "{ini:%Y-%m-%d}" AND updated < "{fim:%Y-%m-%d}")'
             f' )'
         )
@@ -946,13 +985,9 @@ JQL_TINE = jql_projeto("TINE", ano_global, mes_global)
 JQL_INTEL = jql_projeto("INTEL", ano_global, mes_global)
 
 def _get_or_fetch(proj: str, jql: str):
-    key = f"df_{proj}"
-    if key in st.session_state and isinstance(st.session_state.get(key), pd.DataFrame):
-        return st.session_state[key]
+    """Usa o cache compartilhado; só consulta o Jira quando o horário agendado muda ou no botão."""
     with st.spinner(f"Carregando {proj}..."):
-        dfp = buscar_issues(proj, jql)
-    st.session_state[key] = dfp
-    return dfp
+        return _fetch_cached(proj, jql, _slot_atual())
 
 df_tds   = _get_or_fetch("TDS",   JQL_TDS)
 df_int   = _get_or_fetch("INT",   JQL_INT)
@@ -1061,6 +1096,6 @@ for projeto, tab in zip(PROJETOS, tabs):
             if projeto == "INT":
                 with st.expander("🧭 Onboarding", expanded=False):
                     render_onboarding(dfp, ano_global, mes_global)
-          
+
 st.markdown("---")
-st.caption("💙 Desenvolvido por Thaís Franco.")
+st.caption("Desenvolvido por Thaís Franco.")
