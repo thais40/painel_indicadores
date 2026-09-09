@@ -1,0 +1,35 @@
+# Blueprint do Render — cria o serviço automaticamente ao conectar o repositório.
+# EMAIL e TOKEN NÃO ficam aqui (sync: false = você digita no painel do Render, em segurança).
+services:
+  - type: web
+    name: painel-indicadores-jira
+    runtime: python
+    region: oregon
+    plan: starter          # "free" hiberna após 15 min e perde o cache; starter fica sempre ligado
+    buildCommand: pip install -r requirements.txt
+    startCommand: streamlit run app.py --server.port $PORT --server.address 0.0.0.0 --server.headless true
+    healthCheckPath: /_stcore/health
+    autoDeploy: true
+    envVars:
+      - key: PYTHON_VERSION
+        value: "3.12.7"
+      - key: TZ
+        value: America/Sao_Paulo
+      - key: EMAIL
+        sync: false        # preencher no painel: e-mail da conta Jira
+      - key: TOKEN
+        sync: false        # preencher no painel: API token do Jira (nunca commitar)
+
+  # OPCIONAL — visita o painel às 08:05 (BRT) para os dados já estarem prontos
+  # quando a primeira pessoa abrir. Pode apagar este bloco se não quiser.
+  - type: cron
+    name: painel-jira-warmup
+    runtime: python
+    region: oregon
+    plan: starter
+    schedule: "5 11 * * *"          # 08:05 BRT = 11:05 UTC (o Render usa UTC)
+    buildCommand: "true"
+    startCommand: 'curl -sf --max-time 120 "$PAINEL_URL/_stcore/health" >/dev/null && curl -sf --max-time 300 "$PAINEL_URL" >/dev/null'
+    envVars:
+      - key: PAINEL_URL
+        sync: false        # ex.: https://painel-indicadores-jira.onrender.com
