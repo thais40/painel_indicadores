@@ -143,9 +143,6 @@ def _fetch_cached(proj: str, jql: str, slot: str) -> pd.DataFrame:
     return buscar_issues(proj, jql)
 
 
-# Recarrega a página automaticamente → detecta o novo horário sem ninguém clicar
-st_autorefresh(interval=INTERVALO_RECARGA_MIN * 60 * 1000, key="auto_refresh")
-
 _render_head()
 st.markdown('<div class="update-row">', unsafe_allow_html=True)
 if st.button("🔄 Atualizar dados"):
@@ -282,6 +279,34 @@ def _jira_search_jql(jql: str, next_page_token: Optional[str] = None, max_result
     return resp.json()
 
 
+def _compact_sla(sla_raw) -> dict:
+    """Guarda só o necessário do SLA (breached/elapsed/goal do último ciclo) para economizar memória.
+    Mantém o formato esperado por dentro_sla_from_raw()."""
+    if not isinstance(sla_raw, dict):
+        return {}
+    cycles = sla_raw.get("completedCycles") or []
+    if not cycles:
+        return {}
+    last = cycles[-1] or {}
+    out: Dict[str, Any] = {}
+    if "breached" in last:
+        out["breached"] = bool(last["breached"])
+    el = (last.get("elapsedTime") or {}).get("millis")
+    go = (last.get("goalDuration") or {}).get("millis")
+    if el is not None:
+        out["elapsedTime"] = {"millis": el}
+    if go is not None:
+        out["goalDuration"] = {"millis": go}
+    return {"completedCycles": [out]} if out else {}
+
+
+def _flat(v, key: str = "value"):
+    """dict → só o texto relevante; qualquer outro valor passa direto."""
+    if isinstance(v, dict):
+        return v.get(key) or v.get("name") or v.get("displayName") or v.get("emailAddress") or v.get("accountId")
+    return v
+
+
 def buscar_issues(projeto: str, jql: str, max_pages: int = 500) -> pd.DataFrame:
     todos, last_error = [], None
     next_token, page = None, 0
@@ -330,14 +355,15 @@ def buscar_issues(projeto: str, jql: str, max_pages: int = 500) -> pd.DataFrame:
                     )
                 ),
                 "status": safe_get_value(f.get("status"), "name"),
-                "issuetype": f.get("issuetype"),
-                "assunto": assunto_val,
-                "area": f.get(CAMPO_AREA),
-                "n3": f.get(CAMPO_N3),
-                "origem": f.get(CAMPO_ORIGEM),
-                "assignee": f.get("assignee"),  # <— NOVO
+                # ✅ Valores "achatados" (só o texto) para caber na memória do servidor
+                "issuetype": _flat(f.get("issuetype"), "name"),
+                "assunto": _flat(assunto_val, "value"),
+                "area": _flat(f.get(CAMPO_AREA), "value"),
+                "n3": _flat(f.get(CAMPO_N3), "value"),
+                "origem": _flat(f.get(CAMPO_ORIGEM), "value"),
+                "assignee": _flat(f.get("assignee"), "displayName"),
                 CAMPO_QTD_ENCOMENDAS: f.get(CAMPO_QTD_ENCOMENDAS),
-                "sla_raw": f.get(SLA_CAMPOS[projeto], {}),
+                "sla_raw": _compact_sla(f.get(SLA_CAMPOS[projeto], {})),
             }
             todos.append(row)
         next_token = data.get("nextPageToken")
@@ -997,6 +1023,10 @@ df_intel = _get_or_fetch("INTEL", JQL_INTEL)
 if all(d.empty for d in [df_tds, df_int, df_tine, df_intel]):
     st.warning("Sem dados do Jira em nenhum projeto (verifique credenciais e permissões).")
     st.stop()
+
+# Recarga automática só é agendada DEPOIS que os dados carregaram — assim a primeira busca
+# no Jira (que pode ser longa) nunca é interrompida por um refresh no meio do caminho.
+st_autorefresh(interval=INTERVALO_RECARGA_MIN * 60 * 1000, key="auto_refresh")
 
 _df_monthly_all = pd.concat(
     [build_monthly_tables(d) for d in [df_tds, df_int, df_tine, df_intel] if not d.empty],
