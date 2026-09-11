@@ -33,6 +33,48 @@ from streamlit_autorefresh import st_autorefresh
 # ================= Config da página =======================
 st.set_page_config(page_title="Painel de Indicadores", page_icon="📊", layout="wide")
 
+# ================= Autenticação Google (corporativa) =======
+# Usa o login nativo do Streamlit (OIDC). Configuração fica em .streamlit/secrets.toml → [auth]
+# (no Render: Secret File). Só entra quem tiver e-mail de um dos domínios permitidos.
+#
+# INTERRUPTOR: a autenticação só é exigida quando a variável de ambiente AUTH_GOOGLE = "1"
+# (Render → Environment). Sem ela, o painel abre sem login (modo provisório).
+AUTH_ATIVA = os.getenv("AUTH_GOOGLE", "0").strip() == "1"
+DOMINIOS_PERMITIDOS = ("nuvemshop.com.br", "tiendanube.com")
+
+
+def _exigir_login() -> str:
+    """Bloqueia a página até o usuário autenticar com conta Google corporativa. Retorna o e-mail."""
+    try:
+        logado = bool(st.user.is_logged_in)
+    except Exception:
+        st.error("⚠️ Autenticação não configurada. Adicione a seção [auth] em .streamlit/secrets.toml.")
+        st.stop()
+
+    if not logado:
+        st.title("📊 Painel de Indicadores")
+        st.info("Acesso restrito a colaboradores. Entre com sua conta Google corporativa.")
+        if st.button("🔐 Entrar com Google", type="primary"):
+            st.login()
+        st.stop()
+
+    email = str(getattr(st.user, "email", "") or "").strip().lower()
+    dominio = email.rsplit("@", 1)[-1] if "@" in email else ""
+    if dominio not in DOMINIOS_PERMITIDOS:
+        st.error("🚫 Acesso negado: use uma conta Google corporativa.")
+        if st.button("Sair e tentar com outra conta"):
+            st.logout()
+        st.stop()
+
+    with st.sidebar:
+        st.caption(f"👤 {email}")
+        if st.button("Sair"):
+            st.logout()
+    return email
+
+
+USUARIO_EMAIL = _exigir_login() if AUTH_ATIVA else ""
+
 # ================= Credenciais Jira ========================
 JIRA_URL = "https://tiendanube.atlassian.net"
 
@@ -301,10 +343,17 @@ def _compact_sla(sla_raw) -> dict:
 
 
 def _flat(v, key: str = "value"):
-    """dict → só o texto relevante; qualquer outro valor passa direto."""
+    """dict/list → só o texto relevante (sempre str ou None) para evitar tipos misturados nas tabelas."""
+    if v is None:
+        return None
     if isinstance(v, dict):
-        return v.get(key) or v.get("name") or v.get("displayName") or v.get("emailAddress") or v.get("accountId")
-    return v
+        v = v.get(key) or v.get("name") or v.get("displayName") or v.get("emailAddress") or v.get("accountId")
+        return None if v is None else str(v)
+    if isinstance(v, (list, tuple)):
+        partes = [_flat(x, key) for x in v]
+        partes = [p for p in partes if p]
+        return ", ".join(partes) if partes else None
+    return str(v)
 
 
 def buscar_issues(projeto: str, jql: str, max_pages: int = 500) -> pd.DataFrame:
@@ -705,8 +754,9 @@ def render_assunto(dfp: pd.DataFrame, projeto: str, ano_global: str, mes_global:
         df_ass["assunto_nome"] = df_ass["issuetype"].apply(lambda x: safe_get_value(x, "name"))
     else:
         df_ass["assunto_nome"] = df_ass["assunto"].apply(lambda x: safe_get_value(x, "value"))
-    assunto_count = df_ass["assunto_nome"].value_counts().reset_index()
+    assunto_count = df_ass["assunto_nome"].fillna("—").astype(str).value_counts().reset_index()
     assunto_count.columns = ["Assunto", "Qtd"]
+    assunto_count["Qtd"] = assunto_count["Qtd"].astype(int)
     st.dataframe(assunto_count, use_container_width=True, hide_index=True)
 
 
@@ -717,8 +767,9 @@ def render_area(dfp: pd.DataFrame, ano_global: str, mes_global: str):
         st.info("Sem dados para Área Solicitante nos filtros atuais.")
         return
     df_area["area_nome"] = df_area["area"].apply(lambda x: safe_get_value(x, "value"))
-    area_count = df_area["area_nome"].value_counts().reset_index()
+    area_count = df_area["area_nome"].fillna("—").astype(str).value_counts().reset_index()
     area_count.columns = ["Área", "Qtd"]
+    area_count["Qtd"] = area_count["Qtd"].astype(int)
     st.dataframe(area_count, use_container_width=True, hide_index=True)
 
 
