@@ -98,7 +98,7 @@ if not EMAIL or not TOKEN:
 
 auth = HTTPBasicAuth(EMAIL, TOKEN)
 TZ_BR = ZoneInfo("America/Sao_Paulo")
-DATA_INICIO = "2025-04-01"
+DATA_INICIO = "2025-05-01"
 
 # ================= Auto-atualização agendada ================
 HORARIOS_ATUALIZACAO = [8]        # horas (BRT) em que os dados são renovados — ex.: [8, 13, 18]
